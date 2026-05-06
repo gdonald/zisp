@@ -35,7 +35,7 @@ git submodule update --remote vendor/ansi-test
 ```sh
 zig build              # build the zisp binary into zig-out/bin/
 zig build run          # build and run the REPL
-zig build test         # run unit tests
+zig build tests        # run unit tests
 zig build coverage     # run unit tests under kcov; report in ./coverage/
 zig build ansi-test    # run the ANSI compliance suite (Phase 1+)
 ```

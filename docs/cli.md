@@ -35,6 +35,6 @@ zisp [OPTIONS] [FILE [ARGS...]]
 zisp --version
 zisp --help
 zisp --eval '(+ 1 2)'              # Phase 2
-zisp --load init.lsp --batch        # Phase 2
-zisp script.lsp arg1 arg2           # Phase 2
+zisp --load init.lisp --batch       # Phase 2
+zisp script.lisp arg1 arg2          # Phase 2
 ```

@@ -13,9 +13,9 @@ Phase 0: Foundations
 Establish the project skeleton and the lowest-level data representation everything else will be built on. No Lisp code runs yet.
 
 - [x] 0.1. Build system
-  - [x] 0.1.1. `build.zig` with `zig build`, `zig build test`, `zig build run`
+  - [x] 0.1.1. `build.zig` with `zig build`, `zig build tests`, `zig build run`
   - [x] 0.1.2. Module layout: `src/runtime/`, `src/reader/`, `src/eval/`, `src/builtins/`, `src/repl/`
-  - [x] 0.1.3. Test runner wired into `zig build test`
+  - [x] 0.1.3. Test runner wired into `zig build tests`
   - [x] 0.1.4. CI configuration (GitHub Actions) running tests on Linux. Local development on macOS catches Darwin issues; redundant macOS CI not needed. Windows out of scope (see Non-Goals)
   - [x] 0.1.5. `zig fmt` enforced in CI
   - [x] 0.1.6. Build options: `-Doptimize`, `-Dansi-tests=true`, `-Dprofile`, `-Dfreestanding` (Phase 10 placeholder)
@@ -82,7 +82,7 @@ A round-trippable reader/printer is the first externally visible milestone.
   - [x] 1.1.3. Block comments (`#| ... |#`) with proper nesting
   - [x] 1.1.4. Integer literals (decimal, with optional sign)
   - [x] 1.1.5. Radix prefixes: `#b`, `#o`, `#x`, `#nnR`
-  - [ ] 1.1.6. Float literals (`1.0`, `1e10`, `1.5d0`). Acceptance: 100-value corpus in `tests/float-literal-corpus.lsp` covering normal floats, subnormals, smallest/largest representable, precision-edge cases (e.g. `1.0000001`), exponent variants (`e`, `s`, `f`, `d`, `l`); each parses to the bitwise-exact `f32`/`f64` SBCL produces. Tokenizer recognizes the lexeme; numeric value parsing waits for this bullet's corpus gate.
+  - [x] 1.1.6. Float literals (`1.0`, `1e10`, `1.5d0`). Acceptance: 100-value corpus in `tests/lisp/float-literal-corpus.lisp` covering normal floats, subnormals, smallest/largest representable, precision-edge cases (e.g. `1.0000001`), exponent variants (`e`, `s`, `f`, `d`, `l`); each parses to the bitwise-exact `f32`/`f64` SBCL produces. Tokenizer recognizes the lexeme; numeric value parsing waits for this bullet's corpus gate.
   - [x] 1.1.7. Ratio literals (`1/2`) — unevaluated until Phase 4
   - [x] 1.1.8. String literals with `\"` and `\\` escapes
   - [x] 1.1.9. Character literals: `#\a`, `#\Space`, `#\Newline`, `#\Tab`, `#\U+XXXX`
@@ -98,7 +98,7 @@ A round-trippable reader/printer is the first externally visible milestone.
   - [ ] 1.2.7. `,@x` → `(unquote-splicing x)`
   - [ ] 1.2.8. `#'fn` → `(function fn)`
   - [ ] 1.2.9. `#(...)` → vector literal (stub vector type)
-  - [ ] 1.2.10. `#+feature` / `#-feature` conditional reading including compound expressions: `(or sbcl ccl)`, `(and unix (not aix))`, `(not (or windows darwin))`, arbitrarily nested. Acceptance: 30 forms in `tests/feature-expr-corpus.lsp` evaluate identically to SBCL given matching `*features*`. At least 10 forms must be nested ≥4 levels deep; at least 5 must mix `and`/`or`/`not`
+  - [ ] 1.2.10. `#+feature` / `#-feature` conditional reading including compound expressions: `(or sbcl ccl)`, `(and unix (not aix))`, `(not (or windows darwin))`, arbitrarily nested. Acceptance: 30 forms in `tests/lisp/feature-expr-corpus.lisp` evaluate identically to SBCL given matching `*features*`. At least 10 forms must be nested ≥4 levels deep; at least 5 must mix `and`/`or`/`not`
   - [ ] 1.2.11. Reader macro dispatch table (so users can extend later)
   - [ ] 1.2.12. Source position tracking on every cons (for error reporting)
   - [ ] 1.2.13. Error type hierarchy: `EndOfInput`, `UnbalancedParens`, `BadToken`
@@ -112,9 +112,9 @@ A round-trippable reader/printer is the first externally visible milestone.
 - [ ] 1.4. Source position tracking
   - [ ] 1.4.1. `(file, line, column)` recorded per cons during read
   - [ ] 1.4.2. Reader errors include source position
-  - [ ] 1.4.3. Position info survives macroexpansion. Acceptance: `tests/source-pos-corpus.lsp` contains 10 NON-TRIVIAL macros (each synthesizes new forms, wraps user code in additional structure, or nests another macro expansion — pass-through identity macros disqualified) where errors originate at known positions inside expansions. For each: the runtime error reports the user's call-site source position (not the macro's), and macro-introduced forms carry the macro definition's position. NOT bail-able to "best-effort" or to trivial macros that work by accident
+  - [ ] 1.4.3. Position info survives macroexpansion. Acceptance: `tests/lisp/source-pos-corpus.lisp` contains 10 NON-TRIVIAL macros (each synthesizes new forms, wraps user code in additional structure, or nests another macro expansion — pass-through identity macros disqualified) where errors originate at known positions inside expansions. For each: the runtime error reports the user's call-site source position (not the macro's), and macro-introduced forms carry the macro definition's position. NOT bail-able to "best-effort" or to trivial macros that work by accident
 - [ ] 1.5. Test harness
-  - [ ] 1.5.1. Golden-file tests: read a `.lsp` file, print it, diff against expected
+  - [ ] 1.5.1. Golden-file tests: read a `.lisp` fixture file, print it, diff against expected
   - [ ] 1.5.2. Property test: `read(print(x)) == x` for randomly generated values
   - [ ] 1.5.3. Reader-only mode in `tests/run-ansi.sh`: parse every file in `vendor/ansi-test/reader/` without evaluating, count parse failures
   - [ ] 1.5.4. Fuzzing target: `zig build fuzz-reader` driven by stdlib fuzz infrastructure
@@ -153,18 +153,18 @@ A tree-walking evaluator sufficient to run hand-written Lisp.
   - [ ] 2.3.7. `lambda` (returns closure)
   - [ ] 2.3.8. `function` (looks up function namespace)
   - [ ] 2.3.9. `block` and `return-from`
-  - [ ] 2.3.10. `tagbody` and `go` including: backward jumps (loop construction), forward jumps, jumps out of nested `tagbody` (target tag in outer scope), `go` from inside an `unwind-protect` cleanup (cleanup runs, jump completes), `go` to a tag in dynamically-distant scope (must error if tag is no longer in scope). Acceptance: 8 cases in `tests/tagbody-corpus.lsp` diffed against SBCL
-  - [ ] 2.3.11. `catch` and `throw` including: throw past 5+ frames, throw to a tag established by an outer caller, throw from inside an `unwind-protect` (cleanup runs first, throw completes), throw to non-existent tag (signals `control-error`), interaction with multiple values (thrown values match `multiple-value-list` semantics). Acceptance: 6 cases in `tests/catch-throw-corpus.lsp`
+  - [ ] 2.3.10. `tagbody` and `go` including: backward jumps (loop construction), forward jumps, jumps out of nested `tagbody` (target tag in outer scope), `go` from inside an `unwind-protect` cleanup (cleanup runs, jump completes), `go` to a tag in dynamically-distant scope (must error if tag is no longer in scope). Acceptance: 8 cases in `tests/lisp/tagbody-corpus.lisp` diffed against SBCL
+  - [ ] 2.3.11. `catch` and `throw` including: throw past 5+ frames, throw to a tag established by an outer caller, throw from inside an `unwind-protect` (cleanup runs first, throw completes), throw to non-existent tag (signals `control-error`), interaction with multiple values (thrown values match `multiple-value-list` semantics). Acceptance: 6 cases in `tests/lisp/catch-throw-corpus.lisp`
   - [ ] 2.3.12. `unwind-protect` (full version waits for Phase 6, stub now)
   - [ ] 2.3.13. `the` (type declaration — accept and ignore for now)
   - [ ] 2.3.14. `declare` parsing (accept and ignore most)
-  - [ ] 2.3.15. `multiple-value-bind`, `multiple-value-call`, `values`, `values-list`, `multiple-value-prog1`, `multiple-value-list`. `multiple-value-call` MUST handle multiple producers correctly: `(multiple-value-call #'list (values 1 2) (values 3 4))` returns `(1 2 3 4)`. Acceptance: 8 cases in `tests/multiple-values-corpus.lsp` covering 0-value producers, 1-value producers, many-value producers, and mixing producers with regular forms in the same call
+  - [ ] 2.3.15. `multiple-value-bind`, `multiple-value-call`, `values`, `values-list`, `multiple-value-prog1`, `multiple-value-list`. `multiple-value-call` MUST handle multiple producers correctly: `(multiple-value-call #'list (values 1 2) (values 3 4))` returns `(1 2 3 4)`. Acceptance: 8 cases in `tests/lisp/multiple-values-corpus.lisp` covering 0-value producers, 1-value producers, many-value producers, and mixing producers with regular forms in the same call
   - [ ] 2.3.16. `eval-when` (Phase 3 makes this load-bearing)
 - [ ] 2.4. Function calls and lambda lists
   - [ ] 2.4.1. Required parameters
   - [ ] 2.4.2. `&optional` with default forms and supplied-p flags
   - [ ] 2.4.3. `&rest`
-  - [ ] 2.4.4. `&key` with default forms and supplied-p. Includes: `&allow-other-keys` in lambda list, `:allow-other-keys t` from caller side overriding lambda-list strictness, duplicate keys (first wins per CLHS 3.4.1.4.1), odd-argument-count errors at call site, interaction with `&rest` (rest list contains the keyword/value pairs). Acceptance: 25 cases in `tests/key-args-corpus.lsp` covering each behavior independently; cross-tested against SBCL
+  - [ ] 2.4.4. `&key` with default forms and supplied-p. Includes: `&allow-other-keys` in lambda list, `:allow-other-keys t` from caller side overriding lambda-list strictness, duplicate keys (first wins per CLHS 3.4.1.4.1), odd-argument-count errors at call site, interaction with `&rest` (rest list contains the keyword/value pairs). Acceptance: 25 cases in `tests/lisp/key-args-corpus.lisp` covering each behavior independently; cross-tested against SBCL
   - [ ] 2.4.5. `&aux`
   - [ ] 2.4.6. Argument-count checking with proper error messages
   - [ ] 2.4.7. Closures capturing lexical environment
@@ -220,13 +220,13 @@ Macros are what make the rest of Common Lisp implementable *in Lisp*.
 - [ ] 3.1. `defmacro` machinery
   - [ ] 3.1.1. `defmacro` special form / top-level definer
   - [ ] 3.1.2. Macro lambda lists with full destructuring. Split per feature:
-    - [ ] 3.1.2a. Single-level destructuring: required params, `&optional`, `&rest`, `&key`. 6 cases in `tests/destructuring/basic.lsp`
+    - [ ] 3.1.2a. Single-level destructuring: required params, `&optional`, `&rest`, `&key`. 6 cases in `tests/lisp/destructuring/basic.lisp`
     - [ ] 3.1.2b. `&body` with declare/docstring extraction at body position. 4 cases
     - [ ] 3.1.2c. `&whole` captures the full unparsed form. 3 cases
     - [ ] 3.1.2d. `&environment` captures the macroexpansion env (verified by nested `macroexpand` inside the macro body). 3 cases
     - [ ] 3.1.2e. Nested destructuring patterns (one level deep). 5 cases
     - [ ] 3.1.2f. Nested patterns to arbitrary depth + recursive `&optional`/`&rest`/`&key` inside nested patterns. 5 cases
-    - [ ] 3.1.2g. Integration: `vendor/ansi-test/data-and-control-flow/destructuring-bind*.lsp` ≥ 95% pass rate; 30-form `tests/macro-destructuring-corpus.lsp` expands `equal` to SBCL
+    - [ ] 3.1.2g. Integration: `vendor/ansi-test/data-and-control-flow/destructuring-bind*.lsp` ≥ 95% pass rate; 30-form `tests/lisp/macro-destructuring-corpus.lisp` expands `equal` to SBCL
   - [ ] 3.1.3. Macro expansion happens before evaluation in `eval`
   - [ ] 3.1.4. `macroexpand-1` and `macroexpand` built-ins
   - [ ] 3.1.5. `*macroexpand-hook*`
@@ -235,7 +235,7 @@ Macros are what make the rest of Common Lisp implementable *in Lisp*.
   - [ ] 3.2.2. Quasiquote expander producing equivalent `cons`/`list`/`append` calls
   - [ ] 3.2.3. `,@` splicing — `(equal (eval ``(a ,@'(b c) d)) '(a b c d))` and 20 similar cases pass
   - [ ] 3.2.4. Nested backquote. Split into 4 milestones:
-    - [ ] 3.2.4a. Implement basic backquote algorithm at depth 1 (`'`, `,`, `,@`). 10 simple forms in `tests/backquote-basic.lsp` expand correctly
+    - [ ] 3.2.4a. Implement basic backquote algorithm at depth 1 (`'`, `,`, `,@`). 10 simple forms in `tests/lisp/backquote-basic.lisp` expand correctly
     - [ ] 3.2.4b. Implement nesting (depth 2+): each backquote increments a depth counter, each unquote decrements; only depth-0 unquotes evaluate. 10 nested forms expand correctly
     - [ ] 3.2.4c. CLtL2 Appendix C examples — every form in sections C.1–C.4 (~12 forms, the Steele test cases — historically tricky) expands `equal` to SBCL's expansion
     - [ ] 3.2.4d. Extended corpus — 38 additional forms with nesting depth ≥3 mixing `,`/`,@` at multiple levels, all `equal` to SBCL
@@ -251,7 +251,7 @@ Macros are what make the rest of Common Lisp implementable *in Lisp*.
     - [ ] 3.4.1c. `eval-when` nested inside `progn` at top level — same 7 subsets (7 cases)
     - [ ] 3.4.1d. `eval-when` in non-top-level position behaves per CLHS rules (situations other than `:execute` ignored). 4 cases
     - [ ] 3.4.1e. Deprecated situation keywords (`compile`/`load`/`eval`) accepted with warning. 3 cases
-    - [ ] 3.4.1f. Full state-table coverage: 21 cases in `tests/eval-when-corpus.lsp` (one per cell of 3-situation × 7-position table); each produces exactly SBCL's output. Diff is empty
+    - [ ] 3.4.1f. Full state-table coverage: 21 cases in `tests/lisp/eval-when-corpus.lisp` (one per cell of 3-situation × 7-position table); each produces exactly SBCL's output. Diff is empty
   - [ ] 3.4.2. Top-level form processing distinguishes file-compile from REPL (required for 3.4.1 to be testable). `*compile-file-pathname*`, `*compile-file-truename*`, `*load-pathname*`, `*load-truename*` populated correctly during their respective operations
 - [ ] 3.5. Standard macros implementable now in Lisp (each is one session — implement, test, commit)
   - [ ] 3.5.1a. `when`, `unless`
@@ -273,7 +273,7 @@ Macros are what make the rest of Common Lisp implementable *in Lisp*.
     - [ ] 3.6.2e. `(setf symbol-value)`, `(setf symbol-function)`, `(setf symbol-plist)`
     - [ ] 3.6.2f. `(setf get)` (property list)
   - [ ] 3.6.3. `defsetf` short form, then `defsetf` long form. Long form is NOT skippable: a `defsetf` for `(my-getter obj k)` with side-effecting subforms must call each subform exactly once
-  - [ ] 3.6.4. `define-setf-expander` (long form). Acceptance: `tests/setf-expander-corpus.lsp` contains 5 expanders covering: side-effect ordering (each subform evaluated once, left-to-right), multiple store-variables (e.g. for `gethash` returning two values), environment capture, getting and setting share computed temporary, and a generic-function-style place
+  - [ ] 3.6.4. `define-setf-expander` (long form). Acceptance: `tests/lisp/setf-expander-corpus.lisp` contains 5 expanders covering: side-effect ordering (each subform evaluated once, left-to-right), multiple store-variables (e.g. for `gethash` returning two values), environment capture, getting and setting share computed temporary, and a generic-function-style place
   - [ ] 3.6.5. `get-setf-expansion` returns the 5-value protocol (temps, vals, store-vars, store-form, access-form) per CLHS 5.1.1.2
 - [ ] 3.7. ansi-test framework boots
   - [ ] 3.7.1. `vendor/ansi-test/rt-package.lsp` loads without error
@@ -311,11 +311,11 @@ Fill out the type system so real CL programs can load.
   - [ ] 4.2.4. `find`, `find-if`, `find-if-not`, `position`, `position-if`
   - [ ] 4.2.5. `remove`, `remove-if`, `delete`, `delete-if` (and `-not` variants)
   - [ ] 4.2.6. `substitute`, `nsubstitute`
-  - [ ] 4.2.7. `sort`, `stable-sort`, `merge`. `sort` is destructive, not required to be stable; `stable-sort` IS stable. Acceptance: `tests/stable-sort.lsp` sorts 1000 `(key index)` pairs by key — for every pair of equal-key elements, the index ordering is preserved (stability gate). `:key` and `:test` honored on all three; `merge` preserves stability when both inputs are sorted
+  - [ ] 4.2.7. `sort`, `stable-sort`, `merge`. `sort` is destructive, not required to be stable; `stable-sort` IS stable. Acceptance: `tests/lisp/stable-sort.lisp` sorts 1000 `(key index)` pairs by key — for every pair of equal-key elements, the index ordering is preserved (stability gate). `:key` and `:test` honored on all three; `merge` preserves stability when both inputs are sorted
   - [ ] 4.2.8. `concatenate`, `reverse`, `nreverse`
 - [ ] 4.3. Vectors and arrays
   - [ ] 4.3.1. One-dimensional vectors with element-type and fill-pointer support
-  - [ ] 4.3.2. `make-array` with `:element-type`, `:initial-element`, `:initial-contents`, `:adjustable`, `:fill-pointer`, `:displaced-to`. Acceptance: `tests/array-options-corpus.lsp` covers the (displaced/adjustable/fill-pointer) × (general/specialized element-type) interaction matrix — at least 12 cases — including: displaced-to an adjustable array, adjusting a displaced array, fill-pointer on a displaced array, displaced-to with an offset, and the spec-required errors for invalid combinations
+  - [ ] 4.3.2. `make-array` with `:element-type`, `:initial-element`, `:initial-contents`, `:adjustable`, `:fill-pointer`, `:displaced-to`. Acceptance: `tests/lisp/array-options-corpus.lisp` covers the (displaced/adjustable/fill-pointer) × (general/specialized element-type) interaction matrix — at least 12 cases — including: displaced-to an adjustable array, adjusting a displaced array, fill-pointer on a displaced array, displaced-to with an offset, and the spec-required errors for invalid combinations
   - [ ] 4.3.3. Multi-dimensional arrays (row-major layout)
   - [ ] 4.3.4. `aref`, `(setf aref)`, `row-major-aref`
   - [ ] 4.3.5. `array-rank`, `array-dimensions`, `array-total-size`
@@ -353,7 +353,7 @@ Fill out the type system so real CL programs can load.
   - [ ] 4.6.1. Character object distinct from fixnum
   - [ ] 4.6.2. `char-code`, `code-char`, `char-name`, `name-char`
   - [ ] 4.6.3. `alpha-char-p`, `alphanumericp`, `digit-char-p`, `upper-case-p`, `lower-case-p`
-  - [ ] 4.6.4. Full Unicode case mapping. Acceptance: 50 cases in `tests/unicode-cases.lsp` pass, MUST include: Turkish locale i/I/ı/İ pair behavior, German ß ↔ SS round-trip, Greek final sigma context (ς in word-final, σ elsewhere), ligatures (ﬃ → FFI), combining marks (composed vs decomposed equivalence), surrogate pair edge cases at the BMP boundary, and at least 5 cases from `SpecialCasing.txt` that Zig's stdlib doesn't handle (forces manual port of those rows). NOT bail-able to "ASCII + BMP" — the Turkish and ligature cases are explicit gates
+  - [ ] 4.6.4. Full Unicode case mapping. Acceptance: 50 cases in `tests/lisp/unicode-cases.lisp` pass, MUST include: Turkish locale i/I/ı/İ pair behavior, German ß ↔ SS round-trip, Greek final sigma context (ς in word-final, σ elsewhere), ligatures (ﬃ → FFI), combining marks (composed vs decomposed equivalence), surrogate pair edge cases at the BMP boundary, and at least 5 cases from `SpecialCasing.txt` that Zig's stdlib doesn't handle (forces manual port of those rows). NOT bail-able to "ASCII + BMP" — the Turkish and ligature cases are explicit gates
 - [ ] 4.7. Pathnames and streams
   - [ ] 4.7.1. `pathname` type with all six components (host/device/directory/name/type/version). Physical pathnames only at this phase — logical pathnames explicitly stubbed with a `feature-not-implemented` error and tracked as 4.7.9 below. NOT bail-able to "skip version" — the version component (`:newest`, `:wild`, integer) must round-trip through `make-pathname`/`pathname-version`
   - [ ] 4.7.2. `make-pathname`, `merge-pathnames`, `namestring`, `parse-namestring`. `merge-pathnames` follows the "missing component" rules from CLHS 19.2.2.4 exactly. Acceptance: `vendor/ansi-test/pathnames/` pass rate ≥ 85% on the non-logical-pathname subset; specifically, all 18 `merge-pathnames*.lsp` test cases pass
@@ -383,7 +383,7 @@ Fill out the type system so real CL programs can load.
     - [ ] 4.8.5f. `shadow` — creates new internal symbol if none exists, marks existing symbol as shadowing
     - [ ] 4.8.5g. `shadowing-import` — resolves conflicts silently by replacing the inherited symbol
     - [ ] 4.8.5h. Use-package conflict at `use-package` time — two packages exporting same name signals `package-error`. 3 cases
-    - [ ] 4.8.5i. Integration: 15-case `tests/package-conflict-corpus.lsp` covering all the above interactions; cross-tested against SBCL
+    - [ ] 4.8.5i. Integration: 15-case `tests/lisp/package-conflict-corpus.lisp` covering all the above interactions; cross-tested against SBCL
   - [ ] 4.8.6. `use-package`, `unuse-package`
   - [ ] 4.8.7. Symbol resolution: internal vs external, `pkg:sym` vs `pkg::sym`
   - [ ] 4.8.8. `find-symbol`, `intern`, `find-package`
@@ -406,7 +406,7 @@ Fill out the type system so real CL programs can load.
 - [ ] 4.10. Pretty printer
   - [ ] 4.10.1. `pprint` writes to `*standard-output*` with `*print-pretty*` honored
   - [ ] 4.10.2. `pprint-logical-block`, `pprint-newline`, `pprint-indent`, `pprint-fill`, `pprint-tab`
-  - [ ] 4.10.3. `*print-right-margin*` honored. Acceptance: 20-input corpus in `tests/pprint-corpus.lsp` MUST include: deeply-nested lists (depth ≥10), atoms wider than the right margin, mixed cons/vector/string in one form, recursive structures via `*print-circle*`, miser-mode triggers (forms too wide for right margin causing all-clauses-on-own-line). Output diffed against SBCL byte-for-byte
+  - [ ] 4.10.3. `*print-right-margin*` honored. Acceptance: 20-input corpus in `tests/lisp/pprint-corpus.lisp` MUST include: deeply-nested lists (depth ≥10), atoms wider than the right margin, mixed cons/vector/string in one form, recursive structures via `*print-circle*`, miser-mode triggers (forms too wide for right margin causing all-clauses-on-own-line). Output diffed against SBCL byte-for-byte
   - [ ] 4.10.4. Pretty-print dispatch tables: `set-pprint-dispatch`, `copy-pprint-dispatch`
 
 Exit criteria: numeric tower behaves correctly across type boundaries; symbols resolve through packages; can read and write text files.
@@ -423,7 +423,7 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
   - [ ] 5.1.1. Mark bit added to `HeapObject` header (1 bit reserved in flags)
   - [ ] 5.1.2. Free list. Split:
     - [ ] 5.1.2a. Single global free list (simplest). Allocation pops from head; deallocation pushes to head
-    - [ ] 5.1.2b. Free-list integrity test: 10000 alloc/free cycles, assert no double-free, no corruption (`tests/freelist-stress.lsp`)
+    - [ ] 5.1.2b. Free-list integrity test: 10000 alloc/free cycles, assert no double-free, no corruption (`tests/lisp/freelist-stress.lisp`)
     - [ ] 5.1.2c. Free list per size class (4 classes: 16/32/64/128 bytes). Larger requests go to a generic block allocator
     - [ ] 5.1.2d. Per-size-class fragmentation test: 1000 allocs of each class, free half, allocs of same class succeed without growing heap
   - [ ] 5.1.3. Mark phase. Split:
@@ -431,7 +431,7 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
     - [ ] 5.1.3b. Recursive mark for cons cells (car + cdr). Test: mark root of 100-cell list, verify all cells marked
     - [ ] 5.1.3c. Type-dispatch in mark: extend to symbol (value/function/plist), string (no children), vector (each element), hash-table (each k/v)
     - [ ] 5.1.3d. Convert recursive mark to worklist (avoid Zig stack overflow on deep structures). Test: mark a 1M-cell list without crash
-  - [ ] 5.1.4. Sweep phase: reclaim unmarked AND coalesce adjacent free blocks. Acceptance: `tests/gc-fragmentation.lsp` allocates 10000 cells of varying sizes, frees alternate cells (creating worst-case fragmentation), runs GC. After GC, `(room)` reports free-block count ≤ `(/ allocated-count 100)` — i.e. ≥99% of adjacent free blocks merged. NOT bail-able to "size classes hide fragmentation"
+  - [ ] 5.1.4. Sweep phase: reclaim unmarked AND coalesce adjacent free blocks. Acceptance: `tests/lisp/gc-fragmentation.lisp` allocates 10000 cells of varying sizes, frees alternate cells (creating worst-case fragmentation), runs GC. After GC, `(room)` reports free-block count ≤ `(/ allocated-count 100)` — i.e. ≥99% of adjacent free blocks merged. NOT bail-able to "size classes hide fragmentation"
   - [ ] 5.1.5. Trigger heuristic: GC when allocated bytes since last GC > threshold
 - [ ] 5.2. Root scanning
   - [ ] 5.2.1. Symbol table (every interned symbol's value/function cells)
@@ -451,7 +451,7 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
   - [ ] 5.5.1. Two generations: nursery + tenured
   - [ ] 5.5.2. Bump-pointer allocation in the nursery — verified via `(loop repeat 1000000 do (cons nil nil))` showing nursery growth in `(room)` with no tenured promotion until first GC
   - [ ] 5.5.3. Minor GC: copy survivors to tenured. Split into 4 milestones:
-    - [ ] 5.5.3a-i. Copy phase for cons cells only: scan roots, copy reachable nursery cons to tenured, install forwarding pointer in old location. `tests/gc-copy-cons.lsp` — allocate 100 cons in nursery, force minor GC, all 100 accessible and now in tenured
+    - [ ] 5.5.3a-i. Copy phase for cons cells only: scan roots, copy reachable nursery cons to tenured, install forwarding pointer in old location. `tests/lisp/gc-copy-cons.lisp` — allocate 100 cons in nursery, force minor GC, all 100 accessible and now in tenured
     - [ ] 5.5.3a-ii. Forwarding-pointer follow during copy: a cons whose `car` points to an already-copied object uses the forwarding pointer (not a stale nursery address). Test: build a graph with shared substructure, copy, assert sharing preserved
     - [ ] 5.5.3a-iii. Extend copy to all heap types (symbol, string, vector, hash-table, function). One sub-test per type
     - [ ] 5.5.3a-iv. Update all roots after copy (symbol table, env frames, REPL state) to point at new locations. Test: a global variable bound to a nursery cons points to the tenured copy after GC
@@ -460,7 +460,7 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
     - [ ] 5.5.3d. Pause-time gate: minor GC pause ≤ 5% of total mutator time over a 60-second run on the CI Linux runner (specs in `docs/perf-baseline.md`)
   - [ ] 5.5.4. Card table populated by the write barrier. Split into 4 milestones:
     - [ ] 5.5.4a. Write-barrier wired through 5.4.1's centralized mutation points: every `setCar`/`setCdr`/`setSlot` that creates an old→young pointer marks the corresponding card. NOT bail-able to "barrier off in production"
-    - [ ] 5.5.4b. Card scan: minor GC scans dirty cards in tenured BEFORE scanning roots. `tests/card-scan.lsp` manually creates an old→young pointer, forces minor GC, verifies the young object survives (would be lost without card scan)
+    - [ ] 5.5.4b. Card scan: minor GC scans dirty cards in tenured BEFORE scanning roots. `tests/lisp/card-scan.lisp` manually creates an old→young pointer, forces minor GC, verifies the young object survives (would be lost without card scan)
     - [ ] 5.5.4c. Fuzz verification: 100k random mutations seeded such that ≥10% create cross-generation pointers (fuzz harness asserts this via counter — if not, fuzzer bug). Full-scan of tenured then asserts every cross-gen pointer's card is marked
     - [ ] 5.5.4d. Performance gate: cl-bench `boyer` regression ≤ 5% vs. non-generational baseline (numbers committed to `docs/perf-baseline.md`)
   - [ ] 5.5.5. Major GC fallback (mark-sweep over tenured) — triggered when tenured exceeds 4× post-major size; verified by forcing repeated minor GCs and observing eventual major
@@ -469,10 +469,10 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
   - [ ] 5.6.2. `(gc)` to force a collection
   - [ ] 5.6.3. `*gc-verbose*`, `*gc-trigger*`
   - [ ] 5.6.4. Stats: bytes allocated, GC time, pause histogram
-  - [ ] 5.6.5. `ext:weak-pointer` per CMUCL convention. `(make-weak-pointer obj)` returns a weak-pointer; `(weak-pointer-value wp)` returns `(values obj t)` if `obj` is still live, `(values nil nil)` if collected. Acceptance: `tests/weak-pointer.lsp` — create weak-pointer to a fresh cons, drop strong references, force GC, `weak-pointer-value` returns `(nil nil)`; with strong reference retained, value persists across 10 forced GC cycles
+  - [ ] 5.6.5. `ext:weak-pointer` per CMUCL convention. `(make-weak-pointer obj)` returns a weak-pointer; `(weak-pointer-value wp)` returns `(values obj t)` if `obj` is still live, `(values nil nil)` if collected. Acceptance: `tests/lisp/weak-pointer.lisp` — create weak-pointer to a fresh cons, drop strong references, force GC, `weak-pointer-value` returns `(nil nil)`; with strong reference retained, value persists across 10 forced GC cycles
 - [ ] 5.7. Finalization
   - [ ] 5.7.1. Finalizer registration on heap objects
-  - [ ] 5.7.2. Finalizers run after GC completes, in a state where allocation is permitted (i.e. on the mutator thread, not inside the collector). Re-entrancy: a finalizer that allocates and triggers another GC must not re-enter the finalizer queue for entries currently being processed; pending finalizers from the inner GC are added to the back of the queue and run after the current pass completes. Acceptance: `tests/finalizer-recursion.lsp` runs 1000 cycles of allocate-with-finalizer-that-allocates without crash, deadlock, or skipped finalizers; finalizer count exactly matches expected
+  - [ ] 5.7.2. Finalizers run after GC completes, in a state where allocation is permitted (i.e. on the mutator thread, not inside the collector). Re-entrancy: a finalizer that allocates and triggers another GC must not re-enter the finalizer queue for entries currently being processed; pending finalizers from the inner GC are added to the back of the queue and run after the current pass completes. Acceptance: `tests/lisp/finalizer-recursion.lisp` runs 1000 cycles of allocate-with-finalizer-that-allocates without crash, deadlock, or skipped finalizers; finalizer count exactly matches expected
 
 Exit criteria: ansi-test suite runs to completion without OOM; `cl-bench` runs and produces numbers.
 
@@ -496,7 +496,7 @@ Common Lisp's condition system is more powerful than exceptions in most language
   - [ ] 6.3.1. `handler-case` (unwinding)
   - [ ] 6.3.2. `handler-bind` (non-unwinding)
   - [ ] 6.3.3. `ignore-errors`
-  - [ ] 6.3.4. Handler search walks dynamically-bound handler stack: most-recently-bound matching handler fires first; `handler-bind` handlers can decline (return normally) and search continues to outer handlers; `handler-case` handlers always unwind. Acceptance: 10 cases in `tests/handler-search.lsp` covering: nested `handler-bind` with mixed condition types, `handler-bind` declining and falling through to outer handler, mixed `handler-bind`/`handler-case` nesting, handler that signals a different condition (must search from where it was bound, not from the original signal site)
+  - [ ] 6.3.4. Handler search walks dynamically-bound handler stack: most-recently-bound matching handler fires first; `handler-bind` handlers can decline (return normally) and search continues to outer handlers; `handler-case` handlers always unwind. Acceptance: 10 cases in `tests/lisp/handler-search.lisp` covering: nested `handler-bind` with mixed condition types, `handler-bind` declining and falling through to outer handler, mixed `handler-bind`/`handler-case` nesting, handler that signals a different condition (must search from where it was bound, not from the original signal site)
 - [ ] 6.4. Restarts (split per facility)
   - [ ] 6.4.1a. `restart-bind` (non-unwinding) — establishes named restarts available via `find-restart`/`invoke-restart`. 3 cases
   - [ ] 6.4.1b. `restart-case` (unwinding) — clauses with bodies; `invoke-restart` unwinds to the matching clause and runs its body. 4 cases
@@ -508,20 +508,20 @@ Common Lisp's condition system is more powerful than exceptions in most language
   - [ ] 6.4.4b. Standard restart `continue` — `cerror` establishes; `(continue)` is the convenience function
   - [ ] 6.4.4c. Standard restart `muffle-warning` — `warn` establishes; suppresses the warning print
   - [ ] 6.4.4d. Standard restarts `store-value`, `use-value` — establishment by `signal`/`error`; differ in whether the value is stored back at the source or just used
-  - [ ] 6.4.5. `with-condition-restarts` associates a restart set with a specific condition object so `compute-restarts` can filter by condition. Acceptance: 5 cases in `tests/with-condition-restarts.lsp` — establish 3 restarts under `with-condition-restarts` for condition A, signal A and B; `compute-restarts` for A returns the associated subset; for B returns only the unassociated restarts; restarts established outside `with-condition-restarts` are visible to all conditions
+  - [ ] 6.4.5. `with-condition-restarts` associates a restart set with a specific condition object so `compute-restarts` can filter by condition. Acceptance: 5 cases in `tests/lisp/with-condition-restarts.lisp` — establish 3 restarts under `with-condition-restarts` for condition A, signal A and B; `compute-restarts` for A returns the associated subset; for B returns only the unassociated restarts; restarts established outside `with-condition-restarts` are visible to all conditions
 - [ ] 6.5. Debugger
   - [ ] 6.5.1. `*debugger-hook*`
   - [ ] 6.5.2. Default debugger. Split into 6 milestones:
-    - [ ] 6.5.2a. Debugger entry banner: prints condition report (via `format`; `print-object` once 7.5.1 lands), lists numbered restarts with their reports, prompts `Debug>`. `tests/debugger-banner.lsp` asserts exact output for 3 conditions
+    - [ ] 6.5.2a. Debugger entry banner: prints condition report (via `format`; `print-object` once 7.5.1 lands), lists numbered restarts with their reports, prompts `Debug>`. `tests/lisp/debugger-banner.lisp` asserts exact output for 3 conditions
     - [ ] 6.5.2b. Integer input selects restart by index. 1 scripted session
     - [ ] 6.5.2c. Lisp-form input is evaluated in the broken environment (lexical bindings of error site available). 2 scripted sessions including form that references a let-bound variable from the error site
     - [ ] 6.5.2d. Nested debugger entry: form evaluation that triggers another error opens an inner debugger; `abort` returns to outer. 1 scripted session
     - [ ] 6.5.2e. `:r NAME` selects restart by name match; `invoke-restart-interactively` prompts for arguments. 2 scripted sessions
     - [ ] 6.5.2f. Edge cases: condition with no restarts allows only form evaluation; `abort` at top-level returns to REPL or exits per CLI flags. 2 scripted sessions
-  - [ ] 6.5.3. Backtrace produces every active Lisp frame (function name + source position from 1.4.3, plus argument values). Native code frames are added in Phase 9; the backtrace protocol is wired now and Phase 9 fills in additional information without changing the contract. Acceptance: `tests/backtrace-corpus.lsp` has 10 cases — each provokes an error N levels deep into a recursion (N from 1 to 10), captures `(*debugger-hook*)` invocation, asserts the backtrace lists exactly N frames with correct names and source positions. NOT bail-able to "current frame only" — the depth-N test is the gate
+  - [ ] 6.5.3. Backtrace produces every active Lisp frame (function name + source position from 1.4.3, plus argument values). Native code frames are added in Phase 9; the backtrace protocol is wired now and Phase 9 fills in additional information without changing the contract. Acceptance: `tests/lisp/backtrace-corpus.lisp` has 10 cases — each provokes an error N levels deep into a recursion (N from 1 to 10), captures `(*debugger-hook*)` invocation, asserts the backtrace lists exactly N frames with correct names and source positions. NOT bail-able to "current frame only" — the depth-N test is the gate
   - [ ] 6.5.4. `(break "msg" args)` enters the debugger with a continuable `simple-condition` of type `break`; the `continue` restart returns from the call. Acceptance: `(let ((x 0)) (break "test") x)` enters debugger, on `continue` returns `0`; `break` from inside a `handler-bind` for `condition` does NOT invoke the handler (break conditions explicitly bypass condition handlers per CLHS 25.1.7)
 - [ ] 6.6. Unwinding
-  - [ ] 6.6.1. `unwind-protect` runs cleanup on every non-local exit. Split into 5 milestones (each adds cases to `tests/unwind-protect-corpus.lsp`):
+  - [ ] 6.6.1. `unwind-protect` runs cleanup on every non-local exit. Split into 5 milestones (each adds cases to `tests/lisp/unwind-protect-corpus.lisp`):
     - [ ] 6.6.1a. Normal exit + signaled error — cleanup runs in both. 4 cases
     - [ ] 6.6.1b. `throw` past 3+ frames; `return-from` past nested unwind-protects; `go` to outer `tagbody`. 6 cases
     - [ ] 6.6.1c. `abort` restart through nested handlers. 3 cases
@@ -550,15 +550,15 @@ The Common Lisp Object System. Large, but mostly implementable in Lisp once the 
     - [ ] 7.1.2f. `:type` — slot writes assert type at `(safety > 0)`
     - [ ] 7.1.2g. `:documentation` — string accessible via `documentation`
     - [ ] 7.1.2h. Slot inheritance: combined slot definition merges options from each class in the MRO per AMOP. 4 cases
-  - [ ] 7.1.3. `make-instance`, `initialize-instance`, `shared-initialize`, `reinitialize-instance`. Protocol ordering (per AMOP): `make-instance` → `allocate-instance` → `initialize-instance` (which in standard method calls `shared-initialize` with `t` for slot-names). `:before`/`:after` methods on `initialize-instance` and `shared-initialize` interleave correctly across the inheritance chain (most-specific `:before` first, least-specific `:after` last, around the primary chain). Acceptance: `tests/init-protocol.lsp` has 12 cases — each defines a class hierarchy with `:before`/`:after` methods on both `initialize-instance` and `shared-initialize` that record the call sequence into a list; asserted call sequence is `equal` to SBCL's
+  - [ ] 7.1.3. `make-instance`, `initialize-instance`, `shared-initialize`, `reinitialize-instance`. Protocol ordering (per AMOP): `make-instance` → `allocate-instance` → `initialize-instance` (which in standard method calls `shared-initialize` with `t` for slot-names). `:before`/`:after` methods on `initialize-instance` and `shared-initialize` interleave correctly across the inheritance chain (most-specific `:before` first, least-specific `:after` last, around the primary chain). Acceptance: `tests/lisp/init-protocol.lisp` has 12 cases — each defines a class hierarchy with `:before`/`:after` methods on both `initialize-instance` and `shared-initialize` that record the call sequence into a list; asserted call sequence is `equal` to SBCL's
   - [ ] 7.1.4. `slot-value`, `(setf slot-value)`, `slot-boundp`, `slot-makunbound`
   - [ ] 7.1.5. `with-slots`, `with-accessors`
   - [ ] 7.1.6. Class redefinition with `update-instance-for-redefined-class`. Split into 4 milestones:
-    - [ ] 7.1.6a. Lazy detection: redefining a class via `defclass` marks existing instances obsolete WITHOUT touching them. Next slot access triggers `update-instance-for-redefined-class`. `tests/class-redef-lazy.lsp` — redefine, sleep 100ms, access slot, verify protocol fires
+    - [ ] 7.1.6a. Lazy detection: redefining a class via `defclass` marks existing instances obsolete WITHOUT touching them. Next slot access triggers `update-instance-for-redefined-class`. `tests/lisp/class-redef-lazy.lisp` — redefine, sleep 100ms, access slot, verify protocol fires
     - [ ] 7.1.6b. Slot migrations — add slot (initform fires), remove slot (value passed to user method), retain slot (value preserved). 3 cases
     - [ ] 7.1.6c. User method using removed-slot values to populate new slots (migration pattern). 2 cases including a rename
     - [ ] 7.1.6d. Edge cases: change slot type (existing value violates new type → initform), redefine superclass list, multiple successive redefinitions on the same instance, redefine-then-`change-class` interaction. 4 cases
-  - [ ] 7.1.7. `change-class` and `update-instance-for-different-class` — lazy migration: redefining a class doesn't touch existing instances until next access; `change-class` migrates slots correctly. Acceptance: 10 specific test cases in `tests/clos-redef.lsp` pass, including: shared-slot retention, slot-type widening, slot deletion
+  - [ ] 7.1.7. `change-class` and `update-instance-for-different-class` — lazy migration: redefining a class doesn't touch existing instances until next access; `change-class` migrates slots correctly. Acceptance: 10 specific test cases in `tests/lisp/clos-redef.lisp` pass, including: shared-slot retention, slot-type widening, slot deletion
 - [ ] 7.2. Generic functions and methods
   - [ ] 7.2.1. `defgeneric`
   - [ ] 7.2.2. `defmethod` with required and `&optional`/`&rest`/`&key` parameters
@@ -567,14 +567,14 @@ The Common Lisp Object System. Large, but mostly implementable in Lisp once the 
   - [ ] 7.2.5. Built-in method combinations: `+`, `and`, `or`, `list`, `append`, `nconc`, `min`, `max`, `progn`, `standard`. Acceptance: each combination has a 3-method test that asserts the combined return value
   - [ ] 7.2.6. `define-method-combination` short form — `(define-method-combination my-and :identity-with-one-argument t)` works with 4+ methods
   - [ ] 7.2.7. `define-method-combination` long form. Split into 4 milestones (this is THE bullet historically stopped at — no excuses, no "would you like to work on something else?"):
-    - [ ] 7.2.7a. Parse the long-form syntax `(define-method-combination name lambda-list method-group-spec* options* body)`. `tests/dmc-parse.lsp` has 5 cases asserting the parsed AST matches expected
+    - [ ] 7.2.7a. Parse the long-form syntax `(define-method-combination name lambda-list method-group-spec* options* body)`. `tests/lisp/dmc-parse.lisp` has 5 cases asserting the parsed AST matches expected
     - [ ] 7.2.7b. Method qualification matching: given a list of methods and a method-group-spec `(group-name pattern* options)`, correctly assign each method to a group OR signal `invalid-method-error`. 5 test cases including: simple qualifier match, predicate match, `*` wildcard, multi-qualifier match, no-match-error
     - [ ] 7.2.7c. Effective method body synthesis: substitute `call-method`/`make-method` bindings into the body and produce the effective method form. 4 test cases including a method combination that calls each group in non-default order
     - [ ] 7.2.7d. Full integration: `vendor/ansi-test/objects/define-method-combination*.lsp` ≥ 95% pass rate
   - [ ] 7.2.8. `call-next-method`, `next-method-p` — including `call-next-method` with new arguments
 - [ ] 7.3. Class precedence
   - [ ] 7.3.1. Multiple inheritance
-  - [ ] 7.3.2. C3 linearization for class precedence list. Inconsistent hierarchies (no valid linearization exists) MUST signal `error` at `defclass` time — silently producing a wrong order is the failure mode to prevent. Acceptance: 5 cases in `tests/c3-corpus.lsp` covering: diamond inheritance, multiple-inheritance ordering preservation, the canonical inconsistent hierarchy from the C3 paper (must error), depth-first-but-monotonic edge case, MRO across 5+ levels
+  - [ ] 7.3.2. C3 linearization for class precedence list. Inconsistent hierarchies (no valid linearization exists) MUST signal `error` at `defclass` time — silently producing a wrong order is the failure mode to prevent. Acceptance: 5 cases in `tests/lisp/c3-corpus.lisp` covering: diamond inheritance, multiple-inheritance ordering preservation, the canonical inconsistent hierarchy from the C3 paper (must error), depth-first-but-monotonic edge case, MRO across 5+ levels
   - [ ] 7.3.3. `class-precedence-list` reflection
 - [ ] 7.4. Metaobject Protocol (AMOP subset)
   - [ ] 7.4.1. `class-of`, `find-class`, `(setf find-class)`
@@ -585,11 +585,11 @@ The Common Lisp Object System. Large, but mostly implementable in Lisp once the 
     - [ ] 7.4.3c. `eql` specializers participate in matching and are most-specific. 3 cases
     - [ ] 7.4.3d. Verified with user-defined `:method-class` returning a custom subclass (proves the mechanism is overridable, not hard-coded). 1 case
   - [ ] 7.4.4. `compute-effective-method` — verified by a user-defined method combination producing correct effective methods for 3+ method definitions. The `:around` method MUST transform the inner result (e.g. wrap in `(list :around-result ...)`) — a no-op `:around` would pass a sloppy implementation, so the transformation is the assertion
-  - [ ] 7.4.5. `slot-definition` introspection per AMOP. MUST expose: `slot-definition-name`, `slot-definition-type`, `slot-definition-allocation`, `slot-definition-initargs`, `slot-definition-initform`, `slot-definition-initfunction`, `slot-definition-readers`, `slot-definition-writers`. `class-slots` returns effective slot definitions; `class-direct-slots` returns direct (per-class) ones. Acceptance: 6 cases in `tests/slot-introspection.lsp` defining classes that exercise each accessor with non-default values; introspection results match the source declaration
-  - [ ] 7.4.6. `validate-superclass` controls valid metaclass combinations. Default: `standard-class` permits only `standard-class`/`standard-object` superclasses. Acceptance: 3 cases in `tests/validate-superclass.lsp`: (a) defining a class with a metaclass-incompatible superclass signals `error` at `defclass` time, (b) a user metaclass with an explicit `validate-superclass` method allows the combination, (c) the error message names which superclass failed validation
+  - [ ] 7.4.5. `slot-definition` introspection per AMOP. MUST expose: `slot-definition-name`, `slot-definition-type`, `slot-definition-allocation`, `slot-definition-initargs`, `slot-definition-initform`, `slot-definition-initfunction`, `slot-definition-readers`, `slot-definition-writers`. `class-slots` returns effective slot definitions; `class-direct-slots` returns direct (per-class) ones. Acceptance: 6 cases in `tests/lisp/slot-introspection.lisp` defining classes that exercise each accessor with non-default values; introspection results match the source declaration
+  - [ ] 7.4.6. `validate-superclass` controls valid metaclass combinations. Default: `standard-class` permits only `standard-class`/`standard-object` superclasses. Acceptance: 3 cases in `tests/lisp/validate-superclass.lisp`: (a) defining a class with a metaclass-incompatible superclass signals `error` at `defclass` time, (b) a user metaclass with an explicit `validate-superclass` method allows the combination, (c) the error message names which superclass failed validation
   - [ ] 7.4.7. Phase 6's hand-rolled condition class system is **deleted** here; conditions are real CLOS instances. Acceptance: `grep -r "minimal-condition-class" src/` returns nothing; all `conditions/` ansi-test still passes
 - [ ] 7.5. `print-object`, `describe-object`
-  - [ ] 7.5.1. `print-object` as the universal printer hook. The Phase 1 printer is rewritten to dispatch through `print-object` for ALL recursive printing — top-level, nested in lists, nested in vectors, nested as slot values of other instances, inside `format` `~A`/`~S` directives. Acceptance: defining `(defmethod print-object ((x my-class) stream) (format stream "<MY ~A>" (slot-value x 'name)))` causes that method to fire in all 5 contexts; `tests/print-object-dispatch.lsp` asserts the literal output for each. NOT bail-able to "top-level dispatch only" — the recursive contexts are the test
+  - [ ] 7.5.1. `print-object` as the universal printer hook. The Phase 1 printer is rewritten to dispatch through `print-object` for ALL recursive printing — top-level, nested in lists, nested in vectors, nested as slot values of other instances, inside `format` `~A`/`~S` directives. Acceptance: defining `(defmethod print-object ((x my-class) stream) (format stream "<MY ~A>" (slot-value x 'name)))` causes that method to fire in all 5 contexts; `tests/lisp/print-object-dispatch.lisp` asserts the literal output for each. NOT bail-able to "top-level dispatch only" — the recursive contexts are the test
   - [ ] 7.5.2. `describe`, `describe-object`
 
 Exit criteria: can load a non-trivial CLOS-using library from Quicklisp (e.g. `alexandria`).
@@ -602,7 +602,7 @@ Phase 8: LOOP and Heavy Iteration
 
 `LOOP` is its own sub-language and gets its own phase.
 
-- [ ] 8.1. Loop facility — done means: `vendor/ansi-test/iteration/loop*.lsp` pass rate ≥ 95% AND a 200-form corpus from "Practical Common Lisp" + CLHS section 6 expands identically to SBCL (`tests/loop-corpus.lsp`)
+- [ ] 8.1. Loop facility — done means: `vendor/ansi-test/iteration/loop*.lsp` pass rate ≥ 95% AND a 200-form corpus from "Practical Common Lisp" + CLHS section 6 expands identically to SBCL (`tests/lisp/loop-corpus.lisp`)
   - [ ] 8.1.1. `loop` macro — simple form (body repeated forever)
   - [ ] 8.1.2. Iteration clauses — one session each:
     - [ ] 8.1.2a. `for ... in` (list elements) and `for ... on` (cdr-walk)
@@ -628,7 +628,7 @@ Phase 8: LOOP and Heavy Iteration
   - [ ] 8.1.9. `named` loops with `return-from`
   - [ ] 8.1.10. Type declarations: `for x fixnum ...` actually inform compilation (Phase 9)
 - [ ] 8.2. Other iteration
-  - [ ] 8.2.1. `do`, `do*` with multiple stepped variables, end-test, result form, body. `do` evaluates step forms in PARALLEL (all step forms reference the old values); `do*` evaluates SEQUENTIALLY (each step form sees prior steps' new values). Acceptance: 8 cases in `tests/do-corpus.lsp` distinguishing parallel-vs-sequential semantics — including `(do ((a 1) (b a)) ...)` failing in `do` (unbound `a` in `b`'s init context per spec) but working in `do*`
+  - [ ] 8.2.1. `do`, `do*` with multiple stepped variables, end-test, result form, body. `do` evaluates step forms in PARALLEL (all step forms reference the old values); `do*` evaluates SEQUENTIALLY (each step form sees prior steps' new values). Acceptance: 8 cases in `tests/lisp/do-corpus.lisp` distinguishing parallel-vs-sequential semantics — including `(do ((a 1) (b a)) ...)` failing in `do` (unbound `a` in `b`'s init context per spec) but working in `do*`
   - [ ] 8.2.2. `dolist`, `dotimes` — including optional result form, `return`/`return-from` to exit early, the variable being bound to NIL after normal completion (per spec). Acceptance: `vendor/ansi-test/iteration/do*.lsp` and `dolist*.lsp` pass rate ≥ 95%
   - [ ] 8.2.3. `dohash` helper (zisp extension, wraps `maphash` with the `dolist`-style binding form)
 - [ ] 8.3. Loop testing
@@ -663,21 +663,21 @@ Move beyond tree-walking. This is where Zig's strengths really show.
     - [ ] 9.1.3c. Main dispatch loop with all ops from 9.1.2 implemented
     - [ ] 9.1.3d. Exception unwinding integrated with `throw`/`return-from`/`go`
     - [ ] 9.1.3e. Interpreter benchmark vs. Phase 2 tree-walker: ≥ 3× faster on `(loop for i from 0 to 1000000 sum i)`
-  - [ ] 9.1.4. Constant pool PER COMPILED FUNCTION (not shared across functions or across files — enables function-level unloading). Constants deduplicated WITHIN a function (`'(1 2 3)` appearing twice in one function references one pool entry); NOT deduplicated across functions. Acceptance: `(disassemble #'fn)` output includes a `Constants:` section listing pool entries; `tests/const-pool.lsp` defines two functions both using `'(1 2 3)`, verifies via the `disassemble` output that each function carries its own pool entry (not a shared reference) — comparing object identity of the listed constants
+  - [ ] 9.1.4. Constant pool PER COMPILED FUNCTION (not shared across functions or across files — enables function-level unloading). Constants deduplicated WITHIN a function (`'(1 2 3)` appearing twice in one function references one pool entry); NOT deduplicated across functions. Acceptance: `(disassemble #'fn)` output includes a `Constants:` section listing pool entries; `tests/lisp/const-pool.lisp` defines two functions both using `'(1 2 3)`, verifies via the `disassemble` output that each function carries its own pool entry (not a shared reference) — comparing object identity of the listed constants
   - [ ] 9.1.5. Closure representation in bytecode. Closed-over bindings are MUTABLE (`(setq x ...)` inside a closure modifies the captured cell, visible to other closures over the same binding). Captured bindings outlive their lexical scope (heap-allocated when captured). Acceptance: `(let ((x 0)) (defun get-x () x) (defun inc-x () (incf x)))` then `(inc-x) (inc-x) (get-x)` returns `2`; same test re-run after `compile-file` still returns `2`; nested closures sharing a binding all see updates
-  - [ ] 9.1.6. Inline caches for global function lookup with three states: monomorphic (single target), polymorphic (up to 4 targets), megamorphic (fall back to global hash table). Cache invalidated on `(setf (symbol-function ...))` and on `fmakunbound`. Acceptance: (a) monomorphic counter — 1M-call hot loop with one target shows ≥99% mono-hit rate; (b) polymorphic counter — `tests/inline-cache.lsp` exercises a 3-target call site, the polymorphic-dispatch counter increments exactly N times for an N-iteration loop (proves each call took the polymorphic path, not megamorphic fallback); (c) megamorphic transition — a 5-target call site causes the cache to transition into megamorphic state on the 5th distinct target (verified by state-transition counter); (d) `(redefine-fn-then-call)` invalidates correctly. NOT bail-able to "monomorphic only" — the polymorphic AND megamorphic counters are explicit gates
+  - [ ] 9.1.6. Inline caches for global function lookup with three states: monomorphic (single target), polymorphic (up to 4 targets), megamorphic (fall back to global hash table). Cache invalidated on `(setf (symbol-function ...))` and on `fmakunbound`. Acceptance: (a) monomorphic counter — 1M-call hot loop with one target shows ≥99% mono-hit rate; (b) polymorphic counter — `tests/lisp/inline-cache.lisp` exercises a 3-target call site, the polymorphic-dispatch counter increments exactly N times for an N-iteration loop (proves each call took the polymorphic path, not megamorphic fallback); (c) megamorphic transition — a 5-target call site causes the cache to transition into megamorphic state on the 5th distinct target (verified by state-transition counter); (d) `(redefine-fn-then-call)` invalidates correctly. NOT bail-able to "monomorphic only" — the polymorphic AND megamorphic counters are explicit gates
   - [ ] 9.1.7. Dispatch loop. First implement plain `switch`. Then: benchmark switch vs. inline-threaded vs. tail-call-threaded on `cl-bench` interpreter loops. Acceptance: chosen technique documented in `docs/bytecode.md` with measured numbers; if switch wins under `ReleaseFast`, this bullet's "computed-goto" framing is removed (don't pretend Zig has GCC-style labels-as-values when it doesn't)
 - [ ] 9.2. Native codegen
   - [ ] 9.2.1. Backend decision: `docs/codegen-backend.md` written BEFORE any code. Doc compares LLVM-via-`zig cc` / Cranelift / hand-rolled on five axes (implementation effort, output quality on cl-bench arithmetic, dependency cost, debug-info support, build-time impact). Recommendation made with explicit tradeoffs. User signs off (initial-here checkbox in the doc). NOT bail-able: "let the user decide" without first producing the comparison is the historic stall here
   - [ ] 9.2.2. IR design — SSA over Lisp values, documented in `docs/codegen-ir.md`. Doc MUST cover: every IR op listed with operand/result types; value representation (boxed vs unboxed, when types are tracked); control-flow representation (basic blocks, phi nodes); the IR-to-bytecode lowering pass with one section per IR op showing target bytecode; one example function compiled end-to-end from Lisp source through IR through bytecode through native code. NOT bail-able to "high-level overview"
-  - [ ] 9.2.3. Type inference. Acceptance: 6 cases in `tests/type-inference.lsp` showing unboxed code in `disassemble` for: (a) `(the fixnum (+ x 1))`, (b) `(declare (type single-float x))` then float math, (c) `(let ((y (+ x 1))) ...)` inferring `y`'s type from `x`, (d) `if`-typing — a variable's type narrows in the then/else branches based on a `typep` test, (e) inference through one function call (callee return type informs caller), (f) negative test — a value with no type info uses boxed dispatch (regression guard so I can't accidentally claim "always unboxed")
-  - [ ] 9.2.4. Unboxing of fixnums and floats in hot loops. Acceptance: 4 benchmarks in `tests/unboxing-bench.lsp` each ≥ 10× faster than Phase 8 tree-walker: (a) fixnum sum loop `(loop for i fixnum from 0 to 1000000 sum i)`, (b) float dot-product over a 1M-element array, (c) integer factorial via `do`, (d) Mandelbrot pixel-test inner loop. NOT bail-able to "pattern-matched the one example" — the four benchmarks span different control structures
-  - [ ] 9.2.5. Inlining of small functions. `(declare (inline foo))` inlines at every call site in scope; `(declaim (inline foo))` inlines globally. Acceptance: 5 cases in `tests/inline.lsp`: (a) basic — no `call` instruction in `disassemble`, (b) transitive — inline function calls another inline function, both inline, (c) cross-compilation-unit — inline `declaim` in fileA, call in fileB compiled separately, both inlined, (d) recursive inline limited to 3 levels then bottoms out to a real call (no infinite expansion), (e) `(declare (notinline foo))` overrides global `(declaim (inline foo))`
+  - [ ] 9.2.3. Type inference. Acceptance: 6 cases in `tests/lisp/type-inference.lisp` showing unboxed code in `disassemble` for: (a) `(the fixnum (+ x 1))`, (b) `(declare (type single-float x))` then float math, (c) `(let ((y (+ x 1))) ...)` inferring `y`'s type from `x`, (d) `if`-typing — a variable's type narrows in the then/else branches based on a `typep` test, (e) inference through one function call (callee return type informs caller), (f) negative test — a value with no type info uses boxed dispatch (regression guard so I can't accidentally claim "always unboxed")
+  - [ ] 9.2.4. Unboxing of fixnums and floats in hot loops. Acceptance: 4 benchmarks in `tests/lisp/unboxing-bench.lisp` each ≥ 10× faster than Phase 8 tree-walker: (a) fixnum sum loop `(loop for i fixnum from 0 to 1000000 sum i)`, (b) float dot-product over a 1M-element array, (c) integer factorial via `do`, (d) Mandelbrot pixel-test inner loop. NOT bail-able to "pattern-matched the one example" — the four benchmarks span different control structures
+  - [ ] 9.2.5. Inlining of small functions. `(declare (inline foo))` inlines at every call site in scope; `(declaim (inline foo))` inlines globally. Acceptance: 5 cases in `tests/lisp/inline.lisp`: (a) basic — no `call` instruction in `disassemble`, (b) transitive — inline function calls another inline function, both inline, (c) cross-compilation-unit — inline `declaim` in fileA, call in fileB compiled separately, both inlined, (d) recursive inline limited to 3 levels then bottoms out to a real call (no infinite expansion), (e) `(declare (notinline foo))` overrides global `(declaim (inline foo))`
   - [ ] 9.2.6. Tail-call optimization. Split into 4 milestones:
     - [ ] 9.2.6a. Direct self-call TCO. `(defun loop-forever () (loop-forever))` runs 60 seconds without stack growth (RSS / stack pointer monitored, no growth beyond startup baseline)
     - [ ] 9.2.6b. Mutual recursion TCO. `even-p`/`odd-p` on `(expt 10 7)` (10M-deep alternating call chain) completes without stack overflow
     - [ ] 9.2.6c. TCO through control forms — each of `if`/`progn`/`let`/`cond`/`when`/`unless`/`block` (when the call is in tail position) has a self-recursive test running 60 seconds with no stack growth
-    - [ ] 9.2.6d. Frame-counting instrumentation: `*tco-frame-counter*` counts active Zig frames during execution; `tests/tco-frame-count.lsp` runs a tail-recursive 1M-iteration call, asserts counter remains constant (proves no stack growth, not just "didn't crash")
+    - [ ] 9.2.6d. Frame-counting instrumentation: `*tco-frame-counter*` counts active Zig frames during execution; `tests/lisp/tco-frame-count.lisp` runs a tail-recursive 1M-iteration call, asserts counter remains constant (proves no stack growth, not just "didn't crash")
 - [ ] 9.3. `compile`, `compile-file`, FASLs
   - [ ] 9.3.1. `(compile name function-form)` produces a compiled function — `(compiled-function-p result)` returns `t` (distinguishable from interpreted). Compiled function executes ≥2× faster than interpreted on a 1M-iteration tight loop (bytecode VM minimum; native if 9.2 done). NOT bail-able to "calls `eval` and returns the result"
   - [ ] 9.3.2. `compile-file` for batch compilation to FASL
@@ -685,15 +685,15 @@ Move beyond tree-walking. This is where Zig's strengths really show.
   - [ ] 9.3.4. `load` handles both source and FASL
   - [ ] 9.3.5. Recompilation on source-newer-than-FASL
 - [ ] 9.4. Optimization declarations
-  - [ ] 9.4.1. `(declare (optimize (speed N) (safety N) (debug N) (space N)))` with specific behaviors per level documented in `docs/optimize-levels.md`. At minimum: `(safety 0)` elides argument-count and type checks; `(safety 3)` runs all type assertions; `(speed 3)` enables aggressive inlining; `(debug 3)` preserves source positions and local-variable names through compilation. Acceptance: 12 cases in `tests/optimize-levels.lsp` spanning all four quality dimensions (≥3 cases per dimension), each asserting generated code differs measurably — `(safety 0)` strictly smaller than `(safety 3)` (byte-count via `disassemble`); `(speed 3)` ≥2× faster than `(speed 0)` on the bench loop (timing); `(debug 3)` preserves names visible in `disassemble`; `(space 3)` smaller code than `(space 0)`. NOT bail-able to "parsed and ignored" or to "speed-only optimization"
+  - [ ] 9.4.1. `(declare (optimize (speed N) (safety N) (debug N) (space N)))` with specific behaviors per level documented in `docs/optimize-levels.md`. At minimum: `(safety 0)` elides argument-count and type checks; `(safety 3)` runs all type assertions; `(speed 3)` enables aggressive inlining; `(debug 3)` preserves source positions and local-variable names through compilation. Acceptance: 12 cases in `tests/lisp/optimize-levels.lisp` spanning all four quality dimensions (≥3 cases per dimension), each asserting generated code differs measurably — `(safety 0)` strictly smaller than `(safety 3)` (byte-count via `disassemble`); `(speed 3)` ≥2× faster than `(speed 0)` on the bench loop (timing); `(debug 3)` preserves names visible in `disassemble`; `(space 3)` smaller code than `(space 0)`. NOT bail-able to "parsed and ignored" or to "speed-only optimization"
   - [ ] 9.4.2. `(declare (type ...))` actually informs codegen (verified via `disassemble`: a function with `(declare (type fixnum x))` and `(+ x 1)` generates an unboxed integer add, not a generic dispatch)
   - [ ] 9.4.3. `(declare (inline foo))`, `(declare (notinline foo))` — inline declaration causes the named function to inline at every call site in the declaration's scope (verified via `disassemble`)
   - [ ] 9.4.4. `disassemble` output: one line per bytecode op (or native instruction post-9.2) with offset, opcode, operands, and source line where derivable from `(debug N)`. Acceptance: `(disassemble #'my-fn)` for a 10-line function produces output diffed against a golden file in `tests/disassemble-golden/`
 - [ ] 9.5. Image dump and load. Split into 5 milestones:
   - [ ] 9.5.1. Format design: `docs/image-format.md` written BEFORE implementation. Covers magic, version, endianness, mmap layout, code-pointer fixup table, forward-compat plan
-  - [ ] 9.5.2. Heap walker reuses the GC marker to enumerate every reachable object. `tests/image-walk.lsp` allocates a known graph of 100 objects, walker visits exactly those (no over-count, no skips)
+  - [ ] 9.5.2. Heap walker reuses the GC marker to enumerate every reachable object. `tests/lisp/image-walk.lisp` allocates a known graph of 100 objects, walker visits exactly those (no over-count, no skips)
   - [ ] 9.5.3. Per-type serializers — one for each heap object type (cons, symbol, string, vector, hash-table, function, package, etc.). Round-trip test per type: serialize then deserialize, asserted `equal`. 8+ types covered
-  - [ ] 9.5.4. Pointer fixup on load: image stores object IDs; loader allocates fresh objects, builds an ID→pointer table, fixes up all references in a second pass. `tests/image-roundtrip.lsp` saves a graph with shared substructure and cycles, loads, asserts `eq` identity preserved where original had `eq` identity
+  - [ ] 9.5.4. Pointer fixup on load: image stores object IDs; loader allocates fresh objects, builds an ID→pointer table, fixes up all references in a second pass. `tests/lisp/image-roundtrip.lisp` saves a graph with shared substructure and cycles, loads, asserts `eq` identity preserved where original had `eq` identity
   - [ ] 9.5.5. Cold-start gate: `(save-image "demo.zimg")` followed by `zisp --image demo.zimg --eval '(my-fn)'` runs in ≤ 50ms cold-start on CI Linux runner. Image is byte-reproducible from the same source. NOT bail-able to "source-only loading" — the cold-start number is the gate
 
 Exit criteria: `cl-bench` numbers within an order of magnitude of SBCL on arithmetic and list benchmarks; cold start under 50ms for a saved image.

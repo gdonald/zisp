@@ -87,7 +87,7 @@ pub fn build(b: *std.Build) void {
     });
     const tests = b.addTest(.{ .root_module = test_module });
     const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("tests", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
     // `zig build coverage` runs the test binary under kcov. Output goes to
@@ -95,7 +95,7 @@ pub fn build(b: *std.Build) void {
     // `apt install kcov` on Debian/Ubuntu or `brew install kcov` on macOS.
     //
     // We run kcov directly against the test artifact rather than going through
-    // `zig build test`'s IPC path — kcov needs a plain process to instrument,
+    // `zig build tests`'s IPC path — kcov needs a plain process to instrument,
     // and the IPC --listen=- flag would confuse it.
     const cov_run = b.addSystemCommand(&.{
         "kcov",

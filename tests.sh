@@ -6,15 +6,19 @@ set -euo pipefail
 
 echo "==> zig fmt --check"
 zig fmt --check src tests build.zig build.zig.zon
+echo
 
 echo "==> zig build"
 zig build
+echo
 
-echo "==> zig build test"
-zig build test --summary all "$@"
+echo "==> zig build tests"
+zig build tests --summary all "$@"
+echo
 
 echo "==> zig build coverage"
 zig build coverage
+echo
 
 # kcov writes a coverage.json next to the per-file HTML. Pull the headline
 # numbers out without depending on jq (CI runners shouldn't need extra tools).

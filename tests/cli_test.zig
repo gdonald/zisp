@@ -29,7 +29,7 @@ test "unknown option returns user_error" {
 }
 
 test "non-option arg = repl (will become script in Phase 2)" {
-    const args = [_][]const u8{"file.lsp"};
+    const args = [_][]const u8{"file.lisp"};
     try std.testing.expect(cli.parseArgs(&args) == .repl);
 }
 
