@@ -2,10 +2,10 @@ const std = @import("std");
 const zisp = @import("zisp");
 const cli = @import("cli");
 
-// Phase 0 main: POSIX-only argument parsing. Windows support comes when
-// CI lands (0.1.4) — uses a different `initAllocator` path on that platform.
-pub fn main(init: std.process.Init.Minimal) !u8 {
-    var iter = std.process.Args.Iterator.init(init.args);
+pub fn main(init: std.process.Init) !u8 {
+    var iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
+    defer iter.deinit();
+
     _ = iter.next(); // program name
 
     var buf: [64][]const u8 = undefined;

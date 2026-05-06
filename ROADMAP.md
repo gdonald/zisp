@@ -16,7 +16,7 @@ Establish the project skeleton and the lowest-level data representation everythi
   - [ ] 0.1.1. `build.zig` with `zig build`, `zig build test`, `zig build run`
   - [ ] 0.1.2. Module layout: `src/runtime/`, `src/reader/`, `src/eval/`, `src/builtins/`, `src/repl/`
   - [ ] 0.1.3. Test runner wired into `zig build test`
-  - [ ] 0.1.4. CI configuration (GitHub Actions) running tests on Linux, macOS, Windows. Windows-specific failures must be fixed, not skipped — temporary disablement requires a tracked GitHub issue with a deadline; CI fails if the issue is past its deadline
+  - [ ] 0.1.4. CI configuration (GitHub Actions) running tests on Linux and macOS. Windows is explicitly out of scope (see Non-Goals)
   - [ ] 0.1.5. `zig fmt` enforced in CI
   - [ ] 0.1.6. Build options: `-Doptimize`, `-Dansi-tests=true`, `-Dprofile`, `-Dfreestanding` (Phase 10 placeholder)
   - [ ] 0.1.7. `zig build ansi-test` step that invokes `tests/run-ansi.sh`
@@ -682,7 +682,7 @@ Move beyond tree-walking. This is where Zig's strengths really show.
 - [ ] 9.3. `compile`, `compile-file`, FASLs
   - [ ] 9.3.1. `(compile name function-form)` produces a compiled function — `(compiled-function-p result)` returns `t` (distinguishable from interpreted). Compiled function executes ≥2× faster than interpreted on a 1M-iteration tight loop (bytecode VM minimum; native if 9.2 done). NOT bail-able to "calls `eval` and returns the result"
   - [ ] 9.3.2. `compile-file` for batch compilation to FASL
-  - [ ] 9.3.3. FASL format documented in `docs/fasl-format.md` BEFORE implementation: magic bytes, version word, host endianness handling (FASL files declare endianness; loader byte-swaps if mismatched), mmap-friendly layout (no fixups required for code/data alignment), forward-compatibility plan. Acceptance: a FASL produced on `x86_64-linux` loads correctly on `aarch64-darwin` and vice versa (CI runs cross-arch FASL test). Loading a future-version FASL on an older zisp signals `fasl-version-error` cleanly
+  - [ ] 9.3.3. FASL format documented in `docs/fasl-format.md` BEFORE implementation: magic bytes, version word, host endianness handling (FASL files declare endianness; loader byte-swaps if mismatched), mmap-friendly layout (no fixups required for code/data alignment), forward-compatibility plan. Acceptance: a FASL produced on `x86_64-linux` loads correctly on `aarch64-darwin` and vice versa (CI runs cross-arch FASL test). Loading a future-version FASL on an older zisp signals `fasl-version-error` cleanly. Windows targets out of scope
   - [ ] 9.3.4. `load` handles both source and FASL
   - [ ] 9.3.5. Recompilation on source-newer-than-FASL
 - [ ] 9.4. Optimization declarations
@@ -729,9 +729,9 @@ Things no other CL implementation can easily do, because they don't have Zig und
     - [ ] 10.4.1c. Argument marshalling (Lisp value → C ABI representation per type)
     - [ ] 10.4.1d. Return-value unmarshalling (C return → Lisp value per type)
     - [ ] 10.4.1e. Library lookup: `defcfun` resolves the symbol via `dlopen`/`dlsym` (or platform equivalent)
-    - [ ] 10.4.1f. Integration test: call `strlen` on a Lisp string, get back correct length on Linux/macOS/Windows
+    - [ ] 10.4.1f. Integration test: call `strlen` on a Lisp string, get back correct length on Linux and macOS
   - [ ] 10.4.2. Direct C-ABI struct generation from Lisp `defstruct`
-  - [ ] 10.4.3. Callbacks (Lisp function → C function pointer). Implementation choice (libffi vs hand-rolled per-arch trampolines) documented in `docs/ffi-callbacks.md` BEFORE implementation. Acceptance: a Lisp function passed as comparator to `qsort(3)` correctly sorts a 100-element array on `x86_64-linux`, `aarch64-darwin`, and `x86_64-windows` (CI runs all three). Variadic callbacks are explicitly out of scope — but documenting that they're out of scope is a sub-bullet, not silence
+  - [ ] 10.4.3. Callbacks (Lisp function → C function pointer). Implementation choice (libffi vs hand-rolled per-arch trampolines) documented in `docs/ffi-callbacks.md` BEFORE implementation. Acceptance: a Lisp function passed as comparator to `qsort(3)` correctly sorts a 100-element array on `x86_64-linux` and `aarch64-darwin` (CI runs both). Variadic callbacks are explicitly out of scope — but documenting that they're out of scope is a sub-bullet, not silence
   - [ ] 10.4.4. `with-foreign-object`, `foreign-alloc`, `foreign-free`
 - [ ] 10.5. Allocator extensibility
   - [ ] 10.5.1. Expose Zig's allocator interface at the Lisp level
@@ -775,3 +775,4 @@ Non-Goals
 - Not a Scheme. Lisp-1, hygienic macros, and continuations are not on this roadmap.
 - Not self-hosted (yet). The implementation stays in Zig. A self-hosted compiler is a possible future, not a goal.
 - Not a research vehicle. Novel GC algorithms or type systems aren't the point — proven techniques applied carefully are.
+- Not Windows. Linux and macOS only. Code may happen to work on Windows, but it's not tested, supported, or accepted as a constraint on design decisions.
