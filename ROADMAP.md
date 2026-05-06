@@ -16,7 +16,7 @@ Establish the project skeleton and the lowest-level data representation everythi
   - [ ] 0.1.1. `build.zig` with `zig build`, `zig build test`, `zig build run`
   - [ ] 0.1.2. Module layout: `src/runtime/`, `src/reader/`, `src/eval/`, `src/builtins/`, `src/repl/`
   - [ ] 0.1.3. Test runner wired into `zig build test`
-  - [ ] 0.1.4. CI configuration (GitHub Actions) running tests on Linux and macOS. Windows is explicitly out of scope (see Non-Goals)
+  - [ ] 0.1.4. CI configuration (GitHub Actions) running tests on Linux. Local development on macOS catches Darwin issues; redundant macOS CI not needed. Windows out of scope (see Non-Goals)
   - [ ] 0.1.5. `zig fmt` enforced in CI
   - [ ] 0.1.6. Build options: `-Doptimize`, `-Dansi-tests=true`, `-Dprofile`, `-Dfreestanding` (Phase 10 placeholder)
   - [ ] 0.1.7. `zig build ansi-test` step that invokes `tests/run-ansi.sh`
