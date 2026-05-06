@@ -9,5 +9,6 @@ comptime {
     _ = @import("runtime/log_test.zig");
     _ = @import("reader/tokenizer_test.zig");
     _ = @import("reader/float_parse_test.zig");
+    _ = @import("reader/reader_test.zig");
     _ = @import("cli_test.zig");
 }

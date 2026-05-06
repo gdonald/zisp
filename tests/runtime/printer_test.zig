@@ -209,16 +209,26 @@ test "print emits #<deep> when nesting exceeds MAX_DEPTH" {
     try std.testing.expect(std.mem.indexOf(u8, s, "#<deep>") != null);
 }
 
-test "print heap-tagged value emits #<heap-object ...>" {
+test "print string heap object" {
     const a = std.testing.allocator;
-    // The printer doesn't dereference the heap pointer for Phase 0 — it just
-    // formats the address. Any 8-byte-aligned dummy works.
-    var dummy: u64 align(8) = 0;
-    const v = Value.fromHeapAddr(@intFromPtr(&dummy));
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var h = heap.Heap.init(arena.allocator());
+    const v = try h.allocString("hi");
     const s = try fmtValue(a, v);
     defer a.free(s);
-    try std.testing.expect(std.mem.startsWith(u8, s, "#<heap-object "));
-    try std.testing.expect(std.mem.endsWith(u8, s, ">"));
+    try std.testing.expectEqualStrings("\"hi\"", s);
+}
+
+test "print vector heap object" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var h = heap.Heap.init(arena.allocator());
+    const v = try h.allocVector(&[_]Value{ Value.fromFixnum(1), Value.fromFixnum(2) });
+    const s = try fmtValue(a, v);
+    defer a.free(s);
+    try std.testing.expectEqualStrings("#(1 2)", s);
 }
 
 test "print character tab" {

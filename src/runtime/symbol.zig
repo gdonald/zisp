@@ -85,6 +85,9 @@ pub fn initStandardSymbols(interner: *Interner) !void {
     // Lambda-list keywords and core special forms
     inline for (&[_][]const u8{
         "QUOTE",
+        "QUASIQUOTE",
+        "UNQUOTE",
+        "UNQUOTE-SPLICING",
         "LAMBDA",
         "FUNCTION",
         "IF",

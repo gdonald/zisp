@@ -40,10 +40,46 @@ fn printValue(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         .fixnum => try ctx.writer.print("{d}", .{v.toFixnum()}),
         .cons => try printCons(ctx, v, depth),
         .symbol => try ctx.writer.writeAll(symbol.name(v)),
-        .heap => try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()}),
+        .heap => try printHeap(ctx, v, depth),
         .char => try printChar(ctx, v.toChar()),
         .special => try printSpecial(ctx, v),
         else => try ctx.writer.writeAll("#<?>"),
+    }
+}
+
+fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
+    switch (heap.heapType(v)) {
+        .string => {
+            try ctx.writer.writeByte('"');
+            const s = heap.asString(v).constSlice();
+            for (s) |c| {
+                if (c == '"' or c == '\\') try ctx.writer.writeByte('\\');
+                try ctx.writer.writeByte(c);
+            }
+            try ctx.writer.writeByte('"');
+        },
+        .single_float => {
+            const x = heap.asSingleFloat(v).value;
+            try ctx.writer.print("{e}", .{x});
+        },
+        .double_float => {
+            const x = heap.asDoubleFloat(v).value;
+            try ctx.writer.print("{e}d0", .{x});
+        },
+        .ratio => {
+            const r = heap.asRatio(v);
+            try ctx.writer.print("{d}/{d}", .{ r.numerator, r.denominator });
+        },
+        .vector => {
+            try ctx.writer.writeAll("#(");
+            const items = heap.asVector(v).constSlice();
+            for (items, 0..) |elem, i| {
+                if (i != 0) try ctx.writer.writeByte(' ');
+                try printValue(ctx, elem, depth + 1);
+            }
+            try ctx.writer.writeByte(')');
+        },
+        else => try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()}),
     }
 }
 

@@ -76,7 +76,7 @@ Phase 1: The Reader and Printer
 
 A round-trippable reader/printer is the first externally visible milestone.
 
-- [ ] 1.1. Tokenizer
+- [x] 1.1. Tokenizer
   - [x] 1.1.1. Whitespace: space, tab, newline, CR, page
   - [x] 1.1.2. Line comments (`;` to end of line)
   - [x] 1.1.3. Block comments (`#| ... |#`) with proper nesting
@@ -89,19 +89,19 @@ A round-trippable reader/printer is the first externally visible milestone.
   - [x] 1.1.10. Keywords (`:foo` → symbol in `KEYWORD` package, stubbed until Phase 4)
   - [x] 1.1.11. Symbol parsing including `|escaped pipes|` and backslash escapes
 - [ ] 1.2. Reader
-  - [ ] 1.2.1. Recursive-descent parser returning `Value`
-  - [ ] 1.2.2. Lists with proper handling of `.` for dotted pairs
-  - [ ] 1.2.3. Empty list reads as `NIL`
-  - [ ] 1.2.4. `'x` → `(quote x)`
-  - [ ] 1.2.5. `` `x `` → `(quasiquote x)`
-  - [ ] 1.2.6. `,x` → `(unquote x)`
-  - [ ] 1.2.7. `,@x` → `(unquote-splicing x)`
-  - [ ] 1.2.8. `#'fn` → `(function fn)`
-  - [ ] 1.2.9. `#(...)` → vector literal (stub vector type)
+  - [x] 1.2.1. Recursive-descent parser returning `Value`
+  - [x] 1.2.2. Lists with proper handling of `.` for dotted pairs
+  - [x] 1.2.3. Empty list reads as `NIL`
+  - [x] 1.2.4. `'x` → `(quote x)`
+  - [x] 1.2.5. `` `x `` → `(quasiquote x)`
+  - [x] 1.2.6. `,x` → `(unquote x)`
+  - [x] 1.2.7. `,@x` → `(unquote-splicing x)`
+  - [x] 1.2.8. `#'fn` → `(function fn)`
+  - [x] 1.2.9. `#(...)` → vector literal (stub vector type)
   - [ ] 1.2.10. `#+feature` / `#-feature` conditional reading including compound expressions: `(or sbcl ccl)`, `(and unix (not aix))`, `(not (or windows darwin))`, arbitrarily nested. Acceptance: 30 forms in `tests/lisp/feature-expr-corpus.lisp` evaluate identically to SBCL given matching `*features*`. At least 10 forms must be nested ≥4 levels deep; at least 5 must mix `and`/`or`/`not`
   - [ ] 1.2.11. Reader macro dispatch table (so users can extend later)
   - [ ] 1.2.12. Source position tracking on every cons (for error reporting)
-  - [ ] 1.2.13. Error type hierarchy: `EndOfInput`, `UnbalancedParens`, `BadToken`
+  - [x] 1.2.13. Error type hierarchy: `EndOfInput`, `UnbalancedParens`, `BadToken`
 - [ ] 1.3. Printer
   - [ ] 1.3.1. `prin1` (readable, with escapes)
   - [ ] 1.3.2. `princ` (human, no escapes)
