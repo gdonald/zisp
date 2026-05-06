@@ -8,8 +8,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Force Node 24 for JS-based actions whose upstream still ships
+      # Node 20 (e.g. mlugg/setup-zig as of v2.2.1). Drop this when every
+      # action below runs on Node 24 natively. GitHub deadline: 2026-06-02.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
