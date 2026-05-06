@@ -77,17 +77,17 @@ Phase 1: The Reader and Printer
 A round-trippable reader/printer is the first externally visible milestone.
 
 - [ ] 1.1. Tokenizer
-  - [ ] 1.1.1. Whitespace: space, tab, newline, CR, page
-  - [ ] 1.1.2. Line comments (`;` to end of line)
-  - [ ] 1.1.3. Block comments (`#| ... |#`) with proper nesting
-  - [ ] 1.1.4. Integer literals (decimal, with optional sign)
-  - [ ] 1.1.5. Radix prefixes: `#b`, `#o`, `#x`, `#nnR`
-  - [ ] 1.1.6. Float literals (`1.0`, `1e10`, `1.5d0`). Acceptance: 100-value corpus in `tests/float-literal-corpus.lsp` covering normal floats, subnormals, smallest/largest representable, precision-edge cases (e.g. `1.0000001`), exponent variants (`e`, `s`, `f`, `d`, `l`); each parses to the bitwise-exact `f32`/`f64` SBCL produces
-  - [ ] 1.1.7. Ratio literals (`1/2`) — unevaluated until Phase 4
-  - [ ] 1.1.8. String literals with `\"` and `\\` escapes
-  - [ ] 1.1.9. Character literals: `#\a`, `#\Space`, `#\Newline`, `#\Tab`, `#\U+XXXX`
-  - [ ] 1.1.10. Keywords (`:foo` → symbol in `KEYWORD` package, stubbed until Phase 4)
-  - [ ] 1.1.11. Symbol parsing including `|escaped pipes|` and backslash escapes
+  - [x] 1.1.1. Whitespace: space, tab, newline, CR, page
+  - [x] 1.1.2. Line comments (`;` to end of line)
+  - [x] 1.1.3. Block comments (`#| ... |#`) with proper nesting
+  - [x] 1.1.4. Integer literals (decimal, with optional sign)
+  - [x] 1.1.5. Radix prefixes: `#b`, `#o`, `#x`, `#nnR`
+  - [ ] 1.1.6. Float literals (`1.0`, `1e10`, `1.5d0`). Acceptance: 100-value corpus in `tests/float-literal-corpus.lsp` covering normal floats, subnormals, smallest/largest representable, precision-edge cases (e.g. `1.0000001`), exponent variants (`e`, `s`, `f`, `d`, `l`); each parses to the bitwise-exact `f32`/`f64` SBCL produces. Tokenizer recognizes the lexeme; numeric value parsing waits for this bullet's corpus gate.
+  - [x] 1.1.7. Ratio literals (`1/2`) — unevaluated until Phase 4
+  - [x] 1.1.8. String literals with `\"` and `\\` escapes
+  - [x] 1.1.9. Character literals: `#\a`, `#\Space`, `#\Newline`, `#\Tab`, `#\U+XXXX`
+  - [x] 1.1.10. Keywords (`:foo` → symbol in `KEYWORD` package, stubbed until Phase 4)
+  - [x] 1.1.11. Symbol parsing including `|escaped pipes|` and backslash escapes
 - [ ] 1.2. Reader
   - [ ] 1.2.1. Recursive-descent parser returning `Value`
   - [ ] 1.2.2. Lists with proper handling of `.` for dotted pairs

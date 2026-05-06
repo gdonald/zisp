@@ -7,5 +7,6 @@ comptime {
     _ = @import("runtime/symbol_test.zig");
     _ = @import("runtime/printer_test.zig");
     _ = @import("runtime/log_test.zig");
+    _ = @import("reader/tokenizer_test.zig");
     _ = @import("cli_test.zig");
 }
