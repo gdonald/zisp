@@ -12,62 +12,61 @@ Phase 0: Foundations
 
 Establish the project skeleton and the lowest-level data representation everything else will be built on. No Lisp code runs yet.
 
-- [ ] 0.1. Build system
-  - [ ] 0.1.1. `build.zig` with `zig build`, `zig build test`, `zig build run`
-  - [ ] 0.1.2. Module layout: `src/runtime/`, `src/reader/`, `src/eval/`, `src/builtins/`, `src/repl/`
-  - [ ] 0.1.3. Test runner wired into `zig build test`
-  - [ ] 0.1.4. CI configuration (GitHub Actions) running tests on Linux. Local development on macOS catches Darwin issues; redundant macOS CI not needed. Windows out of scope (see Non-Goals)
-  - [ ] 0.1.5. `zig fmt` enforced in CI
-  - [ ] 0.1.6. Build options: `-Doptimize`, `-Dansi-tests=true`, `-Dprofile`, `-Dfreestanding` (Phase 10 placeholder)
-  - [ ] 0.1.7. `zig build ansi-test` step that invokes `tests/run-ansi.sh`
-- [ ] 0.2. Value representation
-  - [ ] 0.2.1. Decide tagging scheme (recommend low-3-bit pointer tagging on 64-bit)
-    - [ ] 0.2.1.1. Tag layout document committed to repo (`docs/tagging.md`)
-    - [ ] 0.2.1.2. `000` — fixnum (61-bit signed)
-    - [ ] 0.2.1.3. `001` — cons pointer
-    - [ ] 0.2.1.4. `010` — symbol pointer
-    - [ ] 0.2.1.5. `011` — heap object pointer (string, vector, etc.) with secondary type byte
-    - [ ] 0.2.1.6. `100`–`111` — reserved for immediates (characters, booleans, single-float, special markers)
-  - [ ] 0.2.2. `Value` type as a `packed struct` or `u64` newtype with helper accessors
-  - [ ] 0.2.3. Constructors: `fixnum(i61)`, `cons(*Cons)`, `sym(*Symbol)`, etc.
-  - [ ] 0.2.4. Type predicates: `isFixnum`, `isCons`, `isSymbol`, `isAtom`, `isNil`, `isTrue`
-  - [ ] 0.2.5. Untagging helpers with `comptime` type checks
-  - [ ] 0.2.6. `NIL` and `T` as compile-time constants
-  - [ ] 0.2.7. Unit tests for round-tripping every immediate type
-- [ ] 0.3. Heap layout
-  - [ ] 0.3.1. `Cons` struct (`car: Value`, `cdr: Value`) — exactly 16 bytes
-  - [ ] 0.3.2. Generic `HeapObject` header (type tag, size, GC flags) — sized for future mark bits
-  - [ ] 0.3.3. Allocator interface plumbing — runtime accepts any `std.mem.Allocator`
-  - [ ] 0.3.4. Bump/arena allocator as the Phase 0 default (GC arrives in Phase 5)
-  - [ ] 0.3.5. `cons(car, cdr)` and `car(v)` / `cdr(v)` / `setCar` / `setCdr`
-  - [ ] 0.3.6. Stress test: allocate and traverse a 1M-cell list
-- [ ] 0.4. Symbols and interning
-  - [ ] 0.4.1. `Symbol` struct: name, value cell, function cell, plist, package pointer (Phase 4)
-  - [ ] 0.4.2. Global intern table (hash map keyed by name)
-  - [ ] 0.4.3. `intern(name)` returns canonical symbol pointer
-  - [ ] 0.4.4. Pre-intern at startup: `NIL`, `T`, `QUOTE`, `LAMBDA`, `&REST`, `&OPTIONAL`, `&KEY`, `&BODY`, `&AUX`, `&WHOLE`, `&ENVIRONMENT`, `&ALLOW-OTHER-KEYS`
-  - [ ] 0.4.5. Case folding policy (default: upcase on read)
-- [ ] 0.5. Debug printer
-  - [ ] 0.5.1. Minimal `print(value)` — enough to inspect from Zig tests, not yet ANSI-compliant
-  - [ ] 0.5.2. Cycle-safe (uses a small `seen` set)
-- [ ] 0.6. Driver / CLI surface (minimum viable)
-  - [ ] 0.6.1. `zisp --version` prints version and exits 0
-  - [ ] 0.6.2. `zisp --help` prints usage and exits 0
-  - [ ] 0.6.3. Argument parser scaffold (will grow `--eval`, `--load`, `--batch` in Phase 2)
-  - [ ] 0.6.4. Exit-code conventions documented (`docs/cli.md`): 0 success, 1 user error, 2 internal error, 3 test failures
-- [ ] 0.7. ansi-test infrastructure
-  - [ ] 0.7.1. `vendor/ansi-test/` submodule added (GPL — kept separate, not redistributed inside our tree)
-  - [ ] 0.7.2. `tests/run-ansi.sh` harness stub committed (categories enumerated, prerequisite checks, TODO markers for invocation)
-  - [ ] 0.7.3. `docs/ansi-test.md` explaining how to run, how categories map to phases, where the rt framework lives
-  - [ ] 0.7.4. Submodule clone / update instructions in README
-- [ ] 0.8. Logging and tracing
-  - [ ] 0.8.1. Categorical logger: `gc`, `reader`, `eval`, `compile`, `cli`
-  - [ ] 0.8.2. Compile-out at `ReleaseFast`, full at `Debug`, selectable at `ReleaseSafe` via env var
-  - [ ] 0.8.3. `*trace-output*` placeholder (real version Phase 4 once streams exist)
-- [ ] 0.9. Documentation scaffold
-  - [ ] 0.9.1. `docs/` directory with `tagging.md`, `cli.md`, `ansi-test.md` stubs
-  - [ ] 0.9.2. README updated with build / test / run instructions
-  - [ ] 0.9.3. CONTRIBUTING.md skeleton
+- [x] 0.1. Build system
+  - [x] 0.1.1. `build.zig` with `zig build`, `zig build test`, `zig build run`
+  - [x] 0.1.2. Module layout: `src/runtime/`, `src/reader/`, `src/eval/`, `src/builtins/`, `src/repl/`
+  - [x] 0.1.3. Test runner wired into `zig build test`
+  - [x] 0.1.4. CI configuration (GitHub Actions) running tests on Linux. Local development on macOS catches Darwin issues; redundant macOS CI not needed. Windows out of scope (see Non-Goals)
+  - [x] 0.1.5. `zig fmt` enforced in CI
+  - [x] 0.1.6. Build options: `-Doptimize`, `-Dansi-tests=true`, `-Dprofile`, `-Dfreestanding` (Phase 10 placeholder)
+  - [x] 0.1.7. `zig build ansi-test` step that invokes `tests/run-ansi.sh`
+- [x] 0.2. Value representation
+  - [x] 0.2.1. Decide tagging scheme (recommend low-3-bit pointer tagging on 64-bit)
+    - [x] 0.2.1.1. Tag layout document committed to repo (`docs/tagging.md`)
+    - [x] 0.2.1.2. `000` — fixnum (61-bit signed)
+    - [x] 0.2.1.3. `001` — cons pointer
+    - [x] 0.2.1.4. `010` — symbol pointer
+    - [x] 0.2.1.5. `011` — heap object pointer (string, vector, etc.) with secondary type byte
+    - [x] 0.2.1.6. `100`–`111` — reserved for immediates (characters, booleans, single-float, special markers)
+  - [x] 0.2.2. `Value` type as a `packed struct` or `u64` newtype with helper accessors
+  - [x] 0.2.3. Constructors: `fixnum(i61)`, `cons(*Cons)`, `sym(*Symbol)`, etc.
+  - [x] 0.2.4. Type predicates: `isFixnum`, `isCons`, `isSymbol`, `isAtom`, `isNil`, `isTrue`
+  - [x] 0.2.5. Untagging helpers with `comptime` type checks
+  - [x] 0.2.6. `NIL` and `T` as compile-time constants — currently `pub var` populated by `initStandardSymbols` since they need real symbol-table addresses; revisit if compile-time interning becomes possible
+  - [x] 0.2.7. Unit tests for round-tripping every immediate type
+- [x] 0.3. Heap layout
+  - [x] 0.3.1. `Cons` struct (`car: Value`, `cdr: Value`) — exactly 16 bytes
+  - [x] 0.3.2. Generic `HeapObject` header (type tag, size, GC flags) — sized for future mark bits
+  - [x] 0.3.3. Allocator interface plumbing — runtime accepts any `std.mem.Allocator`
+  - [x] 0.3.4. Bump/arena allocator as the Phase 0 default (GC arrives in Phase 5)
+  - [x] 0.3.5. `cons(car, cdr)` and `car(v)` / `cdr(v)` / `setCar` / `setCdr`
+  - [x] 0.3.6. Stress test: allocate and traverse a 1M-cell list
+- [x] 0.4. Symbols and interning
+  - [x] 0.4.1. `Symbol` struct: name, value cell, function cell, plist, package pointer (Phase 4)
+  - [x] 0.4.2. Global intern table (hash map keyed by name)
+  - [x] 0.4.3. `intern(name)` returns canonical symbol pointer
+  - [x] 0.4.4. Pre-intern at startup: `NIL`, `T`, `QUOTE`, `LAMBDA`, `&REST`, `&OPTIONAL`, `&KEY`, `&BODY`, `&AUX`, `&WHOLE`, `&ENVIRONMENT`, `&ALLOW-OTHER-KEYS`
+  - [x] 0.4.5. Case folding policy (default: upcase on read) — interner is case-sensitive; case folding lives in the Phase 1 reader (1.1.11)
+- [x] 0.5. Debug printer
+  - [x] 0.5.1. Minimal `print(value)` — enough to inspect from Zig tests, not yet ANSI-compliant
+  - [x] 0.5.2. Cycle-safe (uses a small `seen` set)
+- [x] 0.6. Driver / CLI surface (minimum viable)
+  - [x] 0.6.1. `zisp --version` prints version and exits 0
+  - [x] 0.6.2. `zisp --help` prints usage and exits 0
+  - [x] 0.6.3. Argument parser scaffold (will grow `--eval`, `--load`, `--batch` in Phase 2)
+  - [x] 0.6.4. Exit-code conventions documented (`docs/cli.md`): 0 success, 1 user error, 2 internal error, 3 test failures
+- [x] 0.7. ansi-test infrastructure
+  - [x] 0.7.1. `vendor/ansi-test/` submodule added (GPL — kept separate, not redistributed inside our tree)
+  - [x] 0.7.2. `tests/run-ansi.sh` harness stub committed (categories enumerated, prerequisite checks, TODO markers for invocation)
+  - [x] 0.7.3. `docs/ansi-test.md` explaining how to run, how categories map to phases, where the rt framework lives
+  - [x] 0.7.4. Submodule clone / update instructions in README
+- [x] 0.8. Logging and tracing
+  - [x] 0.8.1. Categorical logger: `gc`, `reader`, `eval`, `compile`, `cli`
+  - [x] 0.8.2. Compile-out at `ReleaseFast`, full at `Debug`, selectable at `ReleaseSafe` via env var
+  - [x] 0.8.3. `*trace-output*` placeholder (real version Phase 4 once streams exist)
+- [x] 0.9. Documentation scaffold
+  - [x] 0.9.1. `docs/` directory with `tagging.md`, `cli.md`, `ansi-test.md` stubs
+  - [x] 0.9.2. README updated with build / test / run instructions
 
 Exit criteria: can construct, traverse, mutate, and print arbitrary cons trees from Zig. All Phase 0 unit tests green. `tests/run-ansi.sh` runs and reports `STUB:` lines for every category (proves submodule + binary plumbing work end-to-end).
 
@@ -744,18 +743,18 @@ Compliance Tracking
 
 The ansi-test suite is roughly 720 `.lsp` files across 22 category directories. Per-phase targets, grounded in which categories are expected to pass:
 
-| Milestone | Categories landed (cumulative) | Files in scope | Target file pass rate |
-|-----------|--------------------------------|---------------:|----------------------:|
-| End of Phase 1 | `reader/` parses (no eval) | 17 | ~3% |
-| End of Phase 2 | + `cons/`, `eval-and-compile/`, `data-and-control-flow/` (subset) | ~190 | ~15% |
-| End of Phase 3 | + macros, `setf`, `printer/`, full `symbols/` | ~250 | ~30% |
-| End of Phase 4 | + strings, arrays, sequences, hash-tables, numbers, characters, packages, pathnames, streams, structures, types-and-classes | ~600 | ~75% |
-| End of Phase 5 | (no new categories — but suite now runs without OOM) | ~600 | ~80% |
-| End of Phase 6 | + `conditions/` | ~625 | ~85% |
-| End of Phase 7 | + `objects/` | ~680 | ~92% |
-| End of Phase 8 | + `iteration/` | ~700 | ~95% |
-| End of Phase 9 | (compilation — no new categories, optimization-related fixes) | ~720 | ~97% |
-| Stretch | edge cases, deep MOP, format directives | ~720 | 100% |
+| Milestone      | Categories landed (cumulative)                                                                                              | Files in scope | Target file pass rate |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------: | --------------------: |
+| End of Phase 1 | `reader/` parses (no eval)                                                                                                  |             17 |                   ~3% |
+| End of Phase 2 | + `cons/`, `eval-and-compile/`, `data-and-control-flow/` (subset)                                                           |           ~190 |                  ~15% |
+| End of Phase 3 | + macros, `setf`, `printer/`, full `symbols/`                                                                               |           ~250 |                  ~30% |
+| End of Phase 4 | + strings, arrays, sequences, hash-tables, numbers, characters, packages, pathnames, streams, structures, types-and-classes |           ~600 |                  ~75% |
+| End of Phase 5 | (no new categories — but suite now runs without OOM)                                                                        |           ~600 |                  ~80% |
+| End of Phase 6 | + `conditions/`                                                                                                             |           ~625 |                  ~85% |
+| End of Phase 7 | + `objects/`                                                                                                                |           ~680 |                  ~92% |
+| End of Phase 8 | + `iteration/`                                                                                                              |           ~700 |                  ~95% |
+| End of Phase 9 | (compilation — no new categories, optimization-related fixes)                                                               |           ~720 |                  ~97% |
+| Stretch        | edge cases, deep MOP, format directives                                                                                     |           ~720 |                  100% |
 
 File-pass-rate is a coarse proxy — each file contains many `(deftest)` calls, and partial failures inside a file count as failures. Real test-count percentages will track somewhat lower than file percentages. 90–95% test-count compliance is what most implementation authors consider success.
 

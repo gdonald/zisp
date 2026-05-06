@@ -6,5 +6,6 @@ comptime {
     _ = @import("runtime/heap_test.zig");
     _ = @import("runtime/symbol_test.zig");
     _ = @import("runtime/printer_test.zig");
+    _ = @import("runtime/log_test.zig");
     _ = @import("cli_test.zig");
 }
