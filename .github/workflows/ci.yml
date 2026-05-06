@@ -23,5 +23,5 @@ jobs:
       - name: zig build
         run: zig build
 
-      - name: zig build test
-        run: zig build test --summary all
+      - name: zig build tests
+        run: zig build tests --summary all
