@@ -44,12 +44,18 @@ pub const Tokenizer = struct {
     line: u32 = 1,
     /// 1-based column for the next character to read.
     col: u32 = 1,
+    /// Start position of the most recent `next()` token, captured after
+    /// skipping leading trivia. The reader uses this to point error
+    /// messages at the start of a malformed token (1.4.2) rather than
+    /// at the leading whitespace or the in-progress token-recognition
+    /// state at the moment the tokenizer raised.
+    last_token_start: Position = .{},
 
     pub fn init(src: []const u8) Tokenizer {
         return .{ .src = src };
     }
 
-    fn pos(self: *const Tokenizer) Position {
+    pub fn pos(self: *const Tokenizer) Position {
         return .{
             .line = self.line,
             .column = self.col,
@@ -142,6 +148,7 @@ pub const Tokenizer = struct {
     pub fn next(self: *Tokenizer) Error!Token {
         try self.skipTrivia();
         const start_pos = self.pos();
+        self.last_token_start = start_pos;
         const start_idx = self.idx;
         const c = self.peek() orelse return .{
             .kind = .eof,
@@ -366,11 +373,16 @@ pub const Tokenizer = struct {
         const name_start = self.idx;
         const first = self.peek() orelse return Error.UnexpectedEndOfInput;
         self.advance();
-        // If the character after #\ is alphanumeric and another alphanumeric
-        // follows, we're consuming a name (Space, Newline, U+XXXX, etc.).
-        // Otherwise we stop after exactly one source character so `#\(`,
-        // `#\ `, `#\\` all read as single-character literals.
-        if (isCharNameStart(first)) {
+        if ((first & 0x80) != 0) {
+            // Multi-byte UTF-8 single character: consume the continuation
+            // bytes so the captured `text` is the whole codepoint.
+            const len = std.unicode.utf8ByteSequenceLength(first) catch 1;
+            var k: usize = 1;
+            while (k < len and self.peek() != null) : (k += 1) self.advance();
+        } else if (isCharNameStart(first)) {
+            // ASCII character name (Space, Newline, U+XXXX, etc.) — extend
+            // until a terminator. `#\(`, `#\ `, `#\\` already stopped after
+            // one character because their first char isn't a name start.
             while (self.peek()) |c| {
                 if (isTerminator(c)) break;
                 self.advance();

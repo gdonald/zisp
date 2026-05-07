@@ -45,3 +45,16 @@ test "exit codes are stable integers" {
     try std.testing.expectEqual(@as(u8, 2), @intFromEnum(cli.ExitCode.internal_error));
     try std.testing.expectEqual(@as(u8, 3), @intFromEnum(cli.ExitCode.test_failure));
 }
+
+test "--read-only requires a path" {
+    const args = [_][]const u8{"--read-only"};
+    const action = cli.parseArgs(&args);
+    try std.testing.expect(action == .user_error);
+}
+
+test "--read-only PATH returns read_only action" {
+    const args = [_][]const u8{ "--read-only", "vendor/ansi-test/reader/read.lsp" };
+    const action = cli.parseArgs(&args);
+    try std.testing.expect(action == .read_only);
+    try std.testing.expectEqualStrings("vendor/ansi-test/reader/read.lsp", action.read_only);
+}

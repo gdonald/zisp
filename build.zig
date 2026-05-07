@@ -107,6 +107,26 @@ pub fn build(b: *std.Build) void {
     const cov_step = b.step("coverage", "Run unit tests under kcov; report in ./coverage/");
     cov_step.dependOn(&cov_run.step);
 
+    // `zig build fuzz-reader` runs a reader-only test binary. The test
+    // routes through `std.testing.fuzz` so a future `-ffuzz` build can
+    // engage Zig's mutation loop, and also drives a deterministic
+    // PRNG-based loop that runs each invocation regardless of fuzz
+    // mode — the property check (no panic / no leak / typed errors
+    // only) holds for both. Phase 1.5.4 acceptance.
+    const fuzz_reader_module = b.createModule(.{
+        .root_source_file = b.path("tests/reader/fuzz_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zisp", .module = zisp_module },
+        },
+    });
+    const fuzz_reader_tests = b.addTest(.{ .root_module = fuzz_reader_module });
+    const run_fuzz_reader = b.addRunArtifact(fuzz_reader_tests);
+    if (b.args) |args| run_fuzz_reader.addArgs(args);
+    const fuzz_reader_step = b.step("fuzz-reader", "Run the reader fuzzer");
+    fuzz_reader_step.dependOn(&run_fuzz_reader.step);
+
     // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh.
     // The harness needs the binary built first; depend on the install step
     // and pass ZISP=... so the script doesn't have to guess the path.

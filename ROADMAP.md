@@ -98,26 +98,26 @@ A round-trippable reader/printer is the first externally visible milestone.
   - [x] 1.2.7. `,@x` → `(unquote-splicing x)`
   - [x] 1.2.8. `#'fn` → `(function fn)`
   - [x] 1.2.9. `#(...)` → vector literal (stub vector type)
-  - [ ] 1.2.10. `#+feature` / `#-feature` conditional reading including compound expressions: `(or sbcl ccl)`, `(and unix (not aix))`, `(not (or windows darwin))`, arbitrarily nested. Acceptance: 30 forms in `tests/lisp/feature-expr-corpus.lisp` evaluate identically to SBCL given matching `*features*`. At least 10 forms must be nested ≥4 levels deep; at least 5 must mix `and`/`or`/`not`
-  - [ ] 1.2.11. Reader macro dispatch table (so users can extend later)
-  - [ ] 1.2.12. Source position tracking on every cons (for error reporting)
+  - [x] 1.2.10. `#+feature` / `#-feature` conditional reading including compound expressions: `(or sbcl ccl)`, `(and unix (not aix))`, `(not (or windows darwin))`, arbitrarily nested. Acceptance: 30 forms in `tests/lisp/feature-expr-corpus.lisp` evaluate identically to SBCL given matching `*features*`. At least 10 forms must be nested ≥4 levels deep; at least 5 must mix `and`/`or`/`not`
+  - [x] 1.2.11. Reader macro dispatch table (so users can extend later)
+  - [x] 1.2.12. Source position tracking on every cons (for error reporting)
   - [x] 1.2.13. Error type hierarchy: `EndOfInput`, `UnbalancedParens`, `BadToken`
 - [ ] 1.3. Printer
-  - [ ] 1.3.1. `prin1` (readable, with escapes)
-  - [ ] 1.3.2. `princ` (human, no escapes)
-  - [ ] 1.3.3. `print` (newline + prin1 + space)
-  - [ ] 1.3.4. Variables: `*print-readably*`, `*print-escape*`, `*print-base*`, `*print-radix*`
-  - [ ] 1.3.5. Cycle detection (`*print-circle*`) — at least the safe-from-infinite-loop minimum
+  - [x] 1.3.1. `prin1` (readable, with escapes)
+  - [x] 1.3.2. `princ` (human, no escapes)
+  - [x] 1.3.3. `print` (newline + prin1 + space)
+  - [x] 1.3.4. Variables: `*print-readably*`, `*print-escape*`, `*print-base*`, `*print-radix*`
+  - [x] 1.3.5. Cycle detection (`*print-circle*`) — at least the safe-from-infinite-loop minimum
   - [ ] 1.3.6. Pretty printer scheduled for Phase 4.10 (NOT "later" — has an explicit phase)
 - [ ] 1.4. Source position tracking
-  - [ ] 1.4.1. `(file, line, column)` recorded per cons during read
-  - [ ] 1.4.2. Reader errors include source position
+  - [x] 1.4.1. `(file, line, column)` recorded per cons during read
+  - [x] 1.4.2. Reader errors include source position
   - [ ] 1.4.3. Position info survives macroexpansion. Acceptance: `tests/lisp/source-pos-corpus.lisp` contains 10 NON-TRIVIAL macros (each synthesizes new forms, wraps user code in additional structure, or nests another macro expansion — pass-through identity macros disqualified) where errors originate at known positions inside expansions. For each: the runtime error reports the user's call-site source position (not the macro's), and macro-introduced forms carry the macro definition's position. NOT bail-able to "best-effort" or to trivial macros that work by accident
 - [ ] 1.5. Test harness
-  - [ ] 1.5.1. Golden-file tests: read a `.lisp` fixture file, print it, diff against expected
-  - [ ] 1.5.2. Property test: `read(print(x)) == x` for randomly generated values
-  - [ ] 1.5.3. Reader-only mode in `tests/run-ansi.sh`: parse every file in `vendor/ansi-test/reader/` without evaluating, count parse failures
-  - [ ] 1.5.4. Fuzzing target: `zig build fuzz-reader` driven by stdlib fuzz infrastructure
+  - [x] 1.5.1. Golden-file tests: read a `.lisp` fixture file, print it, diff against expected
+  - [x] 1.5.2. Property test: `read(print(x)) == x` for randomly generated values
+  - [x] 1.5.3. Reader-only mode in `tests/run-ansi.sh`: parse every file in `vendor/ansi-test/reader/` without evaluating, count parse failures
+  - [x] 1.5.4. Fuzzing target: `zig build fuzz-reader` driven by stdlib fuzz infrastructure
 
 Exit criteria: reader/printer round-trips every form in the ansi-test reader category.
 

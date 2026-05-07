@@ -2,16 +2,21 @@
 #
 # Run the ANSI Common Lisp test suite against zisp.
 #
-# STUB: this script is wired up but cannot run yet. It needs:
-#   1. vendor/ansi-test/ submodule initialized
-#   2. zig-out/bin/zisp built and able to (load ...) a file
-#      (Phase 2 of ROADMAP.md at the earliest)
+# Two modes:
+#   1. Reader-only (Phase 1.5.3): parse every .lsp without evaluating,
+#      report per-category PASS/FAIL counts. Drives the parse-rate
+#      compliance milestone before the evaluator exists.
+#         tests/run-ansi.sh --read-only            # all categories
+#         tests/run-ansi.sh --read-only reader     # one category
 #
-# Usage:
-#   tests/run-ansi.sh                # run all categories
-#   tests/run-ansi.sh cons numbers   # run only listed categories
-#   VERBOSE=1 tests/run-ansi.sh      # show every test, not just summary
-#   ZISP=/path/to/zisp tests/run-ansi.sh   # override binary path
+#   2. Full eval (Phase 2+): load every .lsp and run (do-tests). STUB
+#      until the evaluator + load + (do-tests) are wired.
+#         tests/run-ansi.sh                        # all categories
+#         tests/run-ansi.sh cons numbers           # selected categories
+#
+# Common options:
+#   VERBOSE=1 tests/run-ansi.sh ...               # show per-file lines
+#   ZISP=/path/to/zisp tests/run-ansi.sh ...      # override binary path
 #
 # Output:
 #   Per-category pass/fail counts plus an overall percentage. The percentage
@@ -23,6 +28,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZISP="${ZISP:-$ROOT/zig-out/bin/zisp}"
 SUITE="$ROOT/vendor/ansi-test"
 VERBOSE="${VERBOSE:-0}"
+
+READ_ONLY=0
+if [[ "${1:-}" == "--read-only" ]]; then
+  READ_ONLY=1
+  shift
+fi
 
 # Categories are subdirectories of vendor/ansi-test. Each contains many .lsp
 # files; running a category means loading all of them and then (do-tests).
@@ -87,14 +98,53 @@ run_category() {
   echo "STUB: would run $cat ($count .lsp files)"
 }
 
+# Reader-only run: each .lsp gets a single zisp --read-only invocation. The
+# binary prints `OK ... forms=N` on success and `FAIL ... line:col` on the
+# first parse error. Aggregated counts feed the compliance number tracked
+# in ROADMAP.md (Phase 1 milestone: ~3% of total .lsp files parse).
+run_category_read_only() {
+  local cat="$1"
+  local dir="$SUITE/$cat"
+  [[ -d "$dir" ]] || { echo "skip $cat (no $dir)"; return; }
+
+  local pass=0 fail=0
+  while IFS= read -r f; do
+    if "$ZISP" --read-only "$f" >/tmp/zisp-readonly.$$.out 2>&1; then
+      pass=$((pass + 1))
+      [[ "$VERBOSE" == "1" ]] && cat /tmp/zisp-readonly.$$.out
+    else
+      fail=$((fail + 1))
+      cat /tmp/zisp-readonly.$$.out
+    fi
+  done < <(find "$dir" -maxdepth 1 -name '*.lsp' | sort)
+  rm -f /tmp/zisp-readonly.$$.out
+  printf "%-26s PASS=%d FAIL=%d\n" "$cat" "$pass" "$fail"
+  total_pass=$((total_pass + pass))
+  total_fail=$((total_fail + fail))
+}
+
 total_pass=0
 total_fail=0
 
-for cat in "${selected[@]}"; do
-  run_category "$cat"
-  # TODO: parse output, accumulate into total_pass / total_fail.
-done
-
-# TODO: print summary table once parsing is in place.
-echo
-echo "Summary (stub): $total_pass passed, $total_fail failed"
+if (( READ_ONLY )); then
+  for cat in "${selected[@]}"; do
+    run_category_read_only "$cat"
+  done
+  echo
+  total=$((total_pass + total_fail))
+  if (( total > 0 )); then
+    pct=$(awk -v p="$total_pass" -v t="$total" 'BEGIN{printf "%.1f", 100*p/t}')
+    echo "Reader-only summary: $total_pass / $total ($pct%) parsed"
+  else
+    echo "Reader-only summary: no files matched"
+  fi
+  (( total_fail == 0 )) || exit 1
+else
+  for cat in "${selected[@]}"; do
+    run_category "$cat"
+    # TODO: parse output, accumulate into total_pass / total_fail.
+  done
+  # TODO: print summary table once parsing is in place.
+  echo
+  echo "Summary (stub): $total_pass passed, $total_fail failed"
+fi

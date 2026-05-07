@@ -360,3 +360,427 @@ test "print( read('quote-form) ) round-trips structurally" {
     const v = try readOne(s, "'foo");
     try expectPrints(s.allocator, v, "(QUOTE FOO)");
 }
+
+// --- 1.2.11 / readtable dispatch ----------------------------------------
+
+const Readtable = zisp.reader.Readtable;
+const TokenKind = zisp.reader.TokenKind;
+const PositionTable = zisp.source_pos.PositionTable;
+
+/// Stub handler used by the override test. Returns a fresh symbol so the
+/// test can detect that the override fired instead of the built-in.
+fn overrideQuoteHandler(ctx: *anyopaque) zisp.reader.readtable.HandlerError!zisp.reader.readtable.ReadStep {
+    const Reader2 = zisp.reader.Reader;
+    const r: *Reader2 = @ptrCast(@alignCast(ctx));
+    // Consume the next form so the stream stays balanced, then return a
+    // sentinel symbol the test can identify.
+    _ = r.read() catch null;
+    const sym = try r.interner.intern("OVERRIDDEN-QUOTE");
+    return .{ .value = sym };
+}
+
+test "1.2.11 dispatch goes through the readtable" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var rt = Readtable.initStandard(.{
+        .quote = overrideQuoteHandler,
+        .backquote = overrideQuoteHandler,
+        .comma = overrideQuoteHandler,
+        .comma_at = overrideQuoteHandler,
+        .hash_quote = overrideQuoteHandler,
+        .hash_lparen = overrideQuoteHandler,
+        .hash_plus = overrideQuoteHandler,
+        .hash_minus = overrideQuoteHandler,
+    });
+    var tk = Tokenizer.init("'foo");
+    var rd = zisp.reader.Reader.initFull(&tk, &s.h, &s.interner, &rt, null, "");
+    const v = (try rd.read()).?;
+    try std.testing.expect(v.isSymbol());
+    try std.testing.expectEqualStrings("OVERRIDDEN-QUOTE", symbol.name(v));
+}
+
+test "1.2.11 standard readtable still serves built-ins after override test" {
+    // Sanity check: each test gets its own readtable, so the previous
+    // override didn't leak into the global.
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "'bar");
+    try std.testing.expectEqualStrings("QUOTE", symbol.name(heap.car(v)));
+}
+
+// --- 1.2.12 / source positions on cons cells ----------------------------
+
+test "1.2.12 records position for the head cons of a list" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var positions = PositionTable.init(s.allocator);
+    defer positions.deinit();
+
+    var tk = Tokenizer.init("(1 2 3)");
+    var rd = zisp.reader.Reader.initFull(
+        &tk,
+        &s.h,
+        &s.interner,
+        zisp.reader.reader.defaultReadtable(),
+        &positions,
+        "test.lisp",
+    );
+    const v = (try rd.read()).?;
+    try std.testing.expect(v.isCons());
+    const pos = positions.lookup(v) orelse return error.NoPositionRecorded;
+    try std.testing.expectEqualStrings("test.lisp", pos.file);
+    try std.testing.expectEqual(@as(u32, 1), pos.line);
+    try std.testing.expectEqual(@as(u32, 1), pos.column);
+}
+
+test "1.2.12 second-line list gets line=2" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var positions = PositionTable.init(s.allocator);
+    defer positions.deinit();
+    var tk = Tokenizer.init("\n  (foo)");
+    var rd = zisp.reader.Reader.initFull(
+        &tk,
+        &s.h,
+        &s.interner,
+        zisp.reader.reader.defaultReadtable(),
+        &positions,
+        "src.lisp",
+    );
+    const v = (try rd.read()).?;
+    const pos = positions.lookup(v).?;
+    try std.testing.expectEqual(@as(u32, 2), pos.line);
+    try std.testing.expectEqual(@as(u32, 3), pos.column);
+}
+
+test "1.2.12 every cons cell in a 3-element list has a position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var positions = PositionTable.init(s.allocator);
+    defer positions.deinit();
+    var tk = Tokenizer.init("(a b c)");
+    var rd = zisp.reader.Reader.initFull(
+        &tk,
+        &s.h,
+        &s.interner,
+        zisp.reader.reader.defaultReadtable(),
+        &positions,
+        "f.lisp",
+    );
+    const v = (try rd.read()).?;
+    var cur = v;
+    var seen: u32 = 0;
+    while (cur.isCons()) : (cur = heap.cdr(cur)) {
+        try std.testing.expect(positions.lookup(cur) != null);
+        seen += 1;
+    }
+    try std.testing.expectEqual(@as(u32, 3), seen);
+}
+
+test "1.2.12 reader without position table records nothing" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "(1 2)");
+    var empty = PositionTable.init(s.allocator);
+    defer empty.deinit();
+    try std.testing.expect(empty.lookup(v) == null);
+    try std.testing.expectEqual(@as(u32, 0), empty.count());
+}
+
+// --- coverage: atom edge cases ------------------------------------------
+
+test "read #b binary integer" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "#b1010");
+    try std.testing.expectEqual(@as(i64, 10), v.toFixnum());
+}
+
+test "read #o octal integer" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "#o755");
+    try std.testing.expectEqual(@as(i64, 493), v.toFixnum());
+}
+
+test "read pipe-quoted symbol with escaped pipe inside" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "|a\\|b|");
+    try std.testing.expectEqualStrings("a|b", symbol.name(v));
+}
+
+test "read symbol with bare backslash escape preserves case" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "f\\oo");
+    // The backslash escapes a single character so its case is preserved.
+    // Surrounding chars still upcase, so `f\oo` → `FoO`.
+    try std.testing.expectEqualStrings("FoO", symbol.name(v));
+}
+
+test "read multi-byte UTF-8 character literal" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // U+03BB GREEK SMALL LETTER LAMDA: two bytes (0xCE 0xBB).
+    const v = try readOne(s, "#\\\xCE\xBB");
+    try std.testing.expectEqual(@as(u21, 0x03BB), v.toChar());
+}
+
+test "read string longer than the on-stack buffer" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // The reader keeps a 4096-byte stack buffer; anything longer hits the
+    // heap-scratch fallback. Build "\"<5000 a's>\"".
+    const big_n = 5000;
+    var buf = try s.allocator.alloc(u8, big_n + 2);
+    defer s.allocator.free(buf);
+    buf[0] = '"';
+    @memset(buf[1 .. 1 + big_n], 'a');
+    buf[buf.len - 1] = '"';
+    var tk = Tokenizer.init(buf);
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    const v = (try rd.read()).?;
+    try std.testing.expect(v.isHeap());
+    const got = heap.asString(v).constSlice();
+    try std.testing.expectEqual(@as(usize, big_n), got.len);
+    try std.testing.expectEqual(@as(u8, 'a'), got[0]);
+    try std.testing.expectEqual(@as(u8, 'a'), got[big_n - 1]);
+}
+
+// --- coverage: error paths ----------------------------------------------
+
+test "top-level dot is BadToken" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init(".");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
+
+test "1.2.10 #+ with absent feature skips form" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // No features configured → `foo` is absent → discard `bar` → return `baz`.
+    var tk = Tokenizer.init("#+foo bar baz");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    const v = (try rd.read()).?;
+    try std.testing.expectEqualStrings("BAZ", symbol.name(v));
+}
+
+test "1.2.10 #- with absent feature keeps form" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // No features → `foo` absent → `#-foo bar` keeps `bar`.
+    var tk = Tokenizer.init("#-foo bar");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    const v = (try rd.read()).?;
+    try std.testing.expectEqualStrings("BAR", symbol.name(v));
+}
+
+test "vector with EOF mid-read is EndOfInput" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#(1 2");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.EndOfInput, rd.read());
+}
+
+test "vector with dotted pair is BadToken" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#(1 . 2)");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
+
+test "tokenizer error at top level surfaces as BadToken" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#$");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
+
+test "unterminated string at top level surfaces as EndOfInput" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("\"unterminated");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.EndOfInput, rd.read());
+}
+
+test "tokenizer error inside list (peek path) surfaces as BadToken" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("(#$)");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
+
+test "unterminated string inside list (peek path) surfaces as EndOfInput" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("(\"unterminated");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.EndOfInput, rd.read());
+}
+
+test "EOF after quote surfaces EndOfInput (covers .eof switch arm)" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("'");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.EndOfInput, rd.read());
+}
+
+test "unknown character literal name is BadToken" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#\\BogusName");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
+
+// --- 1.4.2 / reader errors carry source position ------------------------
+
+test "1.4.2 unbalanced rparen carries position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("\n  )");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.UnbalancedParens, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 2), pos.line);
+    try std.testing.expectEqual(@as(u32, 3), pos.column);
+}
+
+test "1.4.2 EOF mid-list reports lparen position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("(1 2");
+    var rd = zisp.reader.Reader.initFull(
+        &tk,
+        &s.h,
+        &s.interner,
+        zisp.reader.reader.defaultReadtable(),
+        null,
+        "src.lisp",
+    );
+    try std.testing.expectError(ReaderError.EndOfInput, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqualStrings("src.lisp", pos.file);
+    try std.testing.expectEqual(@as(u32, 1), pos.line);
+    try std.testing.expectEqual(@as(u32, 1), pos.column);
+}
+
+test "1.4.2 dot at start of list points at the dot" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("(  . 1)");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 1), pos.line);
+    try std.testing.expectEqual(@as(u32, 4), pos.column);
+}
+
+test "1.4.2 dotted-pair without closer points at the offending token" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("(1 . 2 3)");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 1), pos.line);
+    // The closer-position is the `3` token (column 8 in `(1 . 2 3)`).
+    try std.testing.expectEqual(@as(u32, 8), pos.column);
+}
+
+test "1.4.2 vector EOF reports the EOF position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#(1 2");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.EndOfInput, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 1), pos.line);
+}
+
+test "1.4.2 vector dot reports the dot position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#(1 . 2)");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 5), pos.column);
+}
+
+test "1.4.2 tokenizer error captures pre-token position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("  #$");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    // tokenizer.pos() returns the position of the next byte; we capture
+    // it before calling next(), which sits at the `#`.
+    try std.testing.expectEqual(@as(u32, 3), pos.column);
+}
+
+test "1.4.2 last_error_pos resets on subsequent successful read" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init(") 42");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.UnbalancedParens, rd.read());
+    try std.testing.expect(rd.lastErrorPos() != null);
+    const v = (try rd.read()).?;
+    try std.testing.expectEqual(@as(i64, 42), v.toFixnum());
+    try std.testing.expect(rd.lastErrorPos() == null);
+}
+
+test "1.4.2 unknown character literal carries token position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("  #\\BogusName");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 3), pos.column);
+}
+
+test "1.4.2 integer that overflows fixnum but fits i64 carries position" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // FIXNUM_MAX is 2^60 - 1; 2^60 = 1152921504606846976 still fits i64.
+    var tk = Tokenizer.init("  1152921504606846976");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
+    try std.testing.expectEqual(@as(u32, 3), pos.column);
+}
+
+test "1.4.2 fallback captures position when deeper site didn't stamp" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // (xor a b) as a feature expression hits evalFeatureExpr's BadToken
+    // path, which doesn't stamp directly. The public read wrapper must
+    // fall back to the tokenizer's current position.
+    var tk = Tokenizer.init("#+(xor a) :form");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+    try std.testing.expect(rd.lastErrorPos() != null);
+}
+
+test "readtable with nulled handler surfaces BadToken on macro char" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // Empty readtable: every reader-macro-token kind dispatches to null,
+    // so the reader falls through to the explicit BadToken arm.
+    var rt = Readtable.init();
+    var tk = Tokenizer.init("'foo");
+    var rd = zisp.reader.Reader.initFull(&tk, &s.h, &s.interner, &rt, null, "");
+    try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
