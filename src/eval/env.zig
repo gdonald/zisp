@@ -1,20 +1,3 @@
-//! Lexical environment (ROADMAP Phase 2.1).
-//!
-//! An `Env` holds two parallel chains of frames — one for variable bindings
-//! and one for `flet`/`labels`-style local function bindings. CL is a Lisp-2,
-//! so a symbol's value cell and function cell are looked up independently.
-//!
-//! Frames start out as parallel arrays of (symbol, value). Past
-//! `HASH_THRESHOLD` bindings the frame promotes itself to a hash map so that
-//! a `let` with hundreds of bindings doesn't degrade lookup to O(n²).
-//! Threshold tuned by the parallel-array/hash crossover in modern hashing
-//! literature; revisit once profiling lands at Phase 9.
-//!
-//! Lookup walks the frame chain inside-out and falls back to the symbol's
-//! global cell (`value_cell` for variables, `function_cell` for functions).
-//! `SPECIAL_UNBOUND` in the global cell is treated as "not bound" so callers
-//! can distinguish unbound from `NIL`.
-
 const std = @import("std");
 const value = @import("../runtime/value.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
@@ -83,9 +66,6 @@ pub const Frame = struct {
         return null;
     }
 
-    /// Reassign an existing binding in this frame. Returns true if the
-    /// symbol was bound here, false otherwise. Used by `setq` walking the
-    /// chain looking for the innermost binding to mutate.
     pub fn assign(self: *Frame, sym: Value, val: Value) bool {
         std.debug.assert(sym.isSymbol());
         if (self.map) |*m| {
@@ -113,33 +93,32 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     top_value: ?*Frame = null,
     top_function: ?*Frame = null,
+    all_frames: std.ArrayList(*Frame) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Env {
         return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Env) void {
-        var f = self.top_value;
-        while (f) |cur| {
-            const next = cur.parent;
-            cur.deinit(self.allocator);
-            self.allocator.destroy(cur);
-            f = next;
+        for (self.all_frames.items) |f| {
+            f.deinit(self.allocator);
+            self.allocator.destroy(f);
         }
-        f = self.top_function;
-        while (f) |cur| {
-            const next = cur.parent;
-            cur.deinit(self.allocator);
-            self.allocator.destroy(cur);
-            f = next;
-        }
+        self.all_frames.deinit(self.allocator);
         self.top_value = null;
         self.top_function = null;
     }
 
-    pub fn pushValueFrame(self: *Env) !*Frame {
+    fn allocFrame(self: *Env, parent: ?*Frame) !*Frame {
         const f = try self.allocator.create(Frame);
-        f.* = .{ .parent = self.top_value };
+        errdefer self.allocator.destroy(f);
+        f.* = .{ .parent = parent };
+        try self.all_frames.append(self.allocator, f);
+        return f;
+    }
+
+    pub fn pushValueFrame(self: *Env) !*Frame {
+        const f = try self.allocFrame(self.top_value);
         self.top_value = f;
         return f;
     }
@@ -147,13 +126,10 @@ pub const Env = struct {
     pub fn popValueFrame(self: *Env) void {
         const f = self.top_value orelse return;
         self.top_value = f.parent;
-        f.deinit(self.allocator);
-        self.allocator.destroy(f);
     }
 
     pub fn pushFunctionFrame(self: *Env) !*Frame {
-        const f = try self.allocator.create(Frame);
-        f.* = .{ .parent = self.top_function };
+        const f = try self.allocFrame(self.top_function);
         self.top_function = f;
         return f;
     }
@@ -161,14 +137,14 @@ pub const Env = struct {
     pub fn popFunctionFrame(self: *Env) void {
         const f = self.top_function orelse return;
         self.top_function = f.parent;
-        f.deinit(self.allocator);
-        self.allocator.destroy(f);
     }
 
-    /// Bind `sym` to `val` in the innermost value frame, allocating one if
-    /// the chain is empty. Convenience wrapper for callers that don't manage
-    /// frames themselves (REPL globals get the symbol's global cell instead;
-    /// see `defineGlobalValue`).
+    pub fn setValueChain(self: *Env, head: ?*Frame) ?*Frame {
+        const prev = self.top_value;
+        self.top_value = head;
+        return prev;
+    }
+
     pub fn bindValue(self: *Env, sym: Value, val: Value) !void {
         if (self.top_value == null) _ = try self.pushValueFrame();
         try self.top_value.?.bind(self.allocator, sym, val);
@@ -201,9 +177,6 @@ pub const Env = struct {
         return s.function_cell;
     }
 
-    /// `setq` semantics: mutate the innermost lexical binding. If no
-    /// lexical binding exists, the symbol's global value cell is updated
-    /// (this is how toplevel `setq` defines a new global).
     pub fn assignValue(self: *Env, sym: Value, val: Value) void {
         std.debug.assert(sym.isSymbol());
         var cur = self.top_value;

@@ -88,7 +88,7 @@ A round-trippable reader/printer is the first externally visible milestone.
   - [x] 1.1.9. Character literals: `#\a`, `#\Space`, `#\Newline`, `#\Tab`, `#\U+XXXX`
   - [x] 1.1.10. Keywords (`:foo` → symbol in `KEYWORD` package, stubbed until Phase 4)
   - [x] 1.1.11. Symbol parsing including `|escaped pipes|` and backslash escapes
-- [ ] 1.2. Reader
+- [x] 1.2. Reader
   - [x] 1.2.1. Recursive-descent parser returning `Value`
   - [x] 1.2.2. Lists with proper handling of `.` for dotted pairs
   - [x] 1.2.3. Empty list reads as `NIL`
@@ -102,18 +102,16 @@ A round-trippable reader/printer is the first externally visible milestone.
   - [x] 1.2.11. Reader macro dispatch table (so users can extend later)
   - [x] 1.2.12. Source position tracking on every cons (for error reporting)
   - [x] 1.2.13. Error type hierarchy: `EndOfInput`, `UnbalancedParens`, `BadToken`
-- [ ] 1.3. Printer
+- [x] 1.3. Printer
   - [x] 1.3.1. `prin1` (readable, with escapes)
   - [x] 1.3.2. `princ` (human, no escapes)
   - [x] 1.3.3. `print` (newline + prin1 + space)
   - [x] 1.3.4. Variables: `*print-readably*`, `*print-escape*`, `*print-base*`, `*print-radix*`
   - [x] 1.3.5. Cycle detection (`*print-circle*`) — at least the safe-from-infinite-loop minimum
-  - [ ] 1.3.6. Pretty printer scheduled for Phase 4.10 (NOT "later" — has an explicit phase)
-- [ ] 1.4. Source position tracking
+- [x] 1.4. Source position tracking
   - [x] 1.4.1. `(file, line, column)` recorded per cons during read
   - [x] 1.4.2. Reader errors include source position
-  - [ ] 1.4.3. Position info survives macroexpansion. Acceptance: `tests/lisp/source-pos-corpus.lisp` contains 10 NON-TRIVIAL macros (each synthesizes new forms, wraps user code in additional structure, or nests another macro expansion — pass-through identity macros disqualified) where errors originate at known positions inside expansions. For each: the runtime error reports the user's call-site source position (not the macro's), and macro-introduced forms carry the macro definition's position. NOT bail-able to "best-effort" or to trivial macros that work by accident
-- [ ] 1.5. Test harness
+- [x] 1.5. Test harness
   - [x] 1.5.1. Golden-file tests: read a `.lisp` fixture file, print it, diff against expected
   - [x] 1.5.2. Property test: `read(print(x)) == x` for randomly generated values
   - [x] 1.5.3. Reader-only mode in `tests/run-ansi.sh`: parse every file in `vendor/ansi-test/reader/` without evaluating, count parse failures
@@ -136,22 +134,22 @@ A tree-walking evaluator sufficient to run hand-written Lisp.
   - [x] 2.1.2. Frame = parallel arrays of symbols and values (or hash map past a threshold)
   - [x] 2.1.3. Lookup: walk frames, fall back to symbol's global value cell
   - [x] 2.1.4. Separate function namespace (Lisp-2): `symbol-function` distinct from `symbol-value`
-- [ ] 2.2. `eval` core
-  - [ ] 2.2.1. Self-evaluating forms (numbers, strings, characters, keywords, T, NIL)
-  - [ ] 2.2.2. Symbol evaluation (variable lookup)
-  - [ ] 2.2.3. List evaluation: dispatch on `car`
-    - [ ] 2.2.3.1. Special form dispatch table
-    - [ ] 2.2.3.2. Macro expansion (Phase 3 fills this in; stub now)
-    - [ ] 2.2.3.3. Function application
+- [x] 2.2. `eval` core
+  - [x] 2.2.1. Self-evaluating forms (numbers, strings, characters, keywords, T, NIL)
+  - [x] 2.2.2. Symbol evaluation (variable lookup)
+  - [x] 2.2.3. List evaluation: dispatch on `car`
+    - [x] 2.2.3.1. Special form dispatch table
+    - [x] 2.2.3.2. Macro expansion (Phase 3 fills this in; stub now)
+    - [x] 2.2.3.3. Function application
 - [ ] 2.3. Special forms
-  - [ ] 2.3.1. `quote`
-  - [ ] 2.3.2. `if`
-  - [ ] 2.3.3. `progn`
-  - [ ] 2.3.4. `setq` (multiple pairs)
-  - [ ] 2.3.5. `let` and `let*`
+  - [x] 2.3.1. `quote`
+  - [x] 2.3.2. `if`
+  - [x] 2.3.3. `progn`
+  - [x] 2.3.4. `setq` (multiple pairs)
+  - [x] 2.3.5. `let` and `let*`
   - [ ] 2.3.6. `flet`, `labels`
-  - [ ] 2.3.7. `lambda` (returns closure)
-  - [ ] 2.3.8. `function` (looks up function namespace)
+  - [x] 2.3.7. `lambda` (returns closure)
+  - [x] 2.3.8. `function` (looks up function namespace)
   - [ ] 2.3.9. `block` and `return-from`
   - [ ] 2.3.10. `tagbody` and `go` including: backward jumps (loop construction), forward jumps, jumps out of nested `tagbody` (target tag in outer scope), `go` from inside an `unwind-protect` cleanup (cleanup runs, jump completes), `go` to a tag in dynamically-distant scope (must error if tag is no longer in scope). Acceptance: 8 cases in `tests/lisp/tagbody-corpus.lisp` diffed against SBCL
   - [ ] 2.3.11. `catch` and `throw` including: throw past 5+ frames, throw to a tag established by an outer caller, throw from inside an `unwind-protect` (cleanup runs first, throw completes), throw to non-existent tag (signals `control-error`), interaction with multiple values (thrown values match `multiple-value-list` semantics). Acceptance: 6 cases in `tests/lisp/catch-throw-corpus.lisp`
@@ -161,13 +159,13 @@ A tree-walking evaluator sufficient to run hand-written Lisp.
   - [ ] 2.3.15. `multiple-value-bind`, `multiple-value-call`, `values`, `values-list`, `multiple-value-prog1`, `multiple-value-list`. `multiple-value-call` MUST handle multiple producers correctly: `(multiple-value-call #'list (values 1 2) (values 3 4))` returns `(1 2 3 4)`. Acceptance: 8 cases in `tests/lisp/multiple-values-corpus.lisp` covering 0-value producers, 1-value producers, many-value producers, and mixing producers with regular forms in the same call
   - [ ] 2.3.16. `eval-when` (Phase 3 makes this load-bearing)
 - [ ] 2.4. Function calls and lambda lists
-  - [ ] 2.4.1. Required parameters
+  - [x] 2.4.1. Required parameters
   - [ ] 2.4.2. `&optional` with default forms and supplied-p flags
   - [ ] 2.4.3. `&rest`
   - [ ] 2.4.4. `&key` with default forms and supplied-p. Includes: `&allow-other-keys` in lambda list, `:allow-other-keys t` from caller side overriding lambda-list strictness, duplicate keys (first wins per CLHS 3.4.1.4.1), odd-argument-count errors at call site, interaction with `&rest` (rest list contains the keyword/value pairs). Acceptance: 25 cases in `tests/lisp/key-args-corpus.lisp` covering each behavior independently; cross-tested against SBCL
   - [ ] 2.4.5. `&aux`
   - [ ] 2.4.6. Argument-count checking with proper error messages
-  - [ ] 2.4.7. Closures capturing lexical environment
+  - [x] 2.4.7. Closures capturing lexical environment
   - [ ] 2.4.8. Tail calls — `(defun f () (f))` runs 10 seconds without stack overflow (trampoline acceptable here; real TCO is 9.2.6, don't conflate)
   - [ ] 2.4.9. Multiple return values plumbed through call sites
 - [ ] 2.5. Minimal built-in functions
@@ -230,6 +228,7 @@ Macros are what make the rest of Common Lisp implementable *in Lisp*.
   - [ ] 3.1.3. Macro expansion happens before evaluation in `eval`
   - [ ] 3.1.4. `macroexpand-1` and `macroexpand` built-ins
   - [ ] 3.1.5. `*macroexpand-hook*`
+  - [ ] 3.1.6. Macroexpansion preserves source positions. After `macroexpand-1`, the position table for the result satisfies: (a) forms passing through verbatim from the input retain their pre-expansion position; (b) forms synthesized by the macro carry the macro definition form's position. Acceptance: 10 NON-TRIVIAL macros in `tests/lisp/macroexpand-positions.lisp` (each synthesizes new forms, wraps user code in additional structure, or nests another macro expansion — pass-through identity macros disqualified); each is macroexpanded and the result's position table walked to assert the rule above. Verified by direct position-table API. Runtime-error integration (errors inside expansions report the user's call-site) is folded into 6.5.3
 - [ ] 3.2. Backquote
   - [ ] 3.2.1. Backquote → `(quasiquote ...)` reader transform
   - [ ] 3.2.2. Quasiquote expander producing equivalent `cons`/`list`/`append` calls
@@ -518,7 +517,7 @@ Common Lisp's condition system is more powerful than exceptions in most language
     - [ ] 6.5.2d. Nested debugger entry: form evaluation that triggers another error opens an inner debugger; `abort` returns to outer. 1 scripted session
     - [ ] 6.5.2e. `:r NAME` selects restart by name match; `invoke-restart-interactively` prompts for arguments. 2 scripted sessions
     - [ ] 6.5.2f. Edge cases: condition with no restarts allows only form evaluation; `abort` at top-level returns to REPL or exits per CLI flags. 2 scripted sessions
-  - [ ] 6.5.3. Backtrace produces every active Lisp frame (function name + source position from 1.4.3, plus argument values). Native code frames are added in Phase 9; the backtrace protocol is wired now and Phase 9 fills in additional information without changing the contract. Acceptance: `tests/lisp/backtrace-corpus.lisp` has 10 cases — each provokes an error N levels deep into a recursion (N from 1 to 10), captures `(*debugger-hook*)` invocation, asserts the backtrace lists exactly N frames with correct names and source positions. NOT bail-able to "current frame only" — the depth-N test is the gate
+  - [ ] 6.5.3. Backtrace produces every active Lisp frame (function name + source position, plus argument values). For frames inside macroexpanded code, the source position reported is the user's call-site (the invariant established in 3.1.6). Native code frames are added in Phase 9; the backtrace protocol is wired now and Phase 9 fills in additional information without changing the contract. Acceptance: (a) `tests/lisp/backtrace-corpus.lisp` has 10 cases — each provokes an error N levels deep into a recursion (N from 1 to 10), captures `(*debugger-hook*)` invocation, asserts the backtrace lists exactly N frames with correct names and source positions. (b) `tests/lisp/backtrace-macroexpand.lisp` has 5 cases where the error originates inside a macro expansion (using macros from 3.1.6's corpus); the backtrace reports the user's call-site position, not the macro body's. NOT bail-able to "current frame only" or to "ignore macroexpansion" — both gates apply
   - [ ] 6.5.4. `(break "msg" args)` enters the debugger with a continuable `simple-condition` of type `break`; the `continue` restart returns from the call. Acceptance: `(let ((x 0)) (break "test") x)` enters debugger, on `continue` returns `0`; `break` from inside a `handler-bind` for `condition` does NOT invoke the handler (break conditions explicitly bypass condition handlers per CLHS 25.1.7)
 - [ ] 6.6. Unwinding
   - [ ] 6.6.1. `unwind-protect` runs cleanup on every non-local exit. Split into 5 milestones (each adds cases to `tests/lisp/unwind-protect-corpus.lisp`):

@@ -321,3 +321,15 @@ test "popFunctionFrame restores parent and frees" {
     env.popFunctionFrame();
     try std.testing.expectEqual(@as(i64, 1), env.lookupFunction(f).?.toFixnum());
 }
+
+test "allocFrame cleans up the new frame if all_frames append fails" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    var env = Env.init(failing.allocator());
+    defer env.deinit();
+
+    // First allocation (Frame) succeeds; the ArrayList append needs a second
+    // allocation that hits the fail boundary. The errdefer in allocFrame
+    // must release the orphaned Frame so testing.allocator doesn't flag a leak.
+    try std.testing.expectError(error.OutOfMemory, env.pushValueFrame());
+    try std.testing.expect(env.top_value == null);
+}

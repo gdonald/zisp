@@ -17,3 +17,4 @@ pub const Interner = symbol.Interner;
 pub const SourcePosition = source_pos.SourcePosition;
 pub const PositionTable = source_pos.PositionTable;
 pub const Env = eval.Env;
+pub const Evaluator = eval.Evaluator;
