@@ -131,11 +131,11 @@ Phase 2: Evaluator and Special Forms
 
 A tree-walking evaluator sufficient to run hand-written Lisp.
 
-- [ ] 2.1. Environment
-  - [ ] 2.1.1. Lexical environment as a linked list of frames
-  - [ ] 2.1.2. Frame = parallel arrays of symbols and values (or hash map past a threshold)
-  - [ ] 2.1.3. Lookup: walk frames, fall back to symbol's global value cell
-  - [ ] 2.1.4. Separate function namespace (Lisp-2): `symbol-function` distinct from `symbol-value`
+- [x] 2.1. Environment
+  - [x] 2.1.1. Lexical environment as a linked list of frames
+  - [x] 2.1.2. Frame = parallel arrays of symbols and values (or hash map past a threshold)
+  - [x] 2.1.3. Lookup: walk frames, fall back to symbol's global value cell
+  - [x] 2.1.4. Separate function namespace (Lisp-2): `symbol-function` distinct from `symbol-value`
 - [ ] 2.2. `eval` core
   - [ ] 2.2.1. Self-evaluating forms (numbers, strings, characters, keywords, T, NIL)
   - [ ] 2.2.2. Symbol evaluation (variable lookup)

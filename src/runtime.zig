@@ -6,6 +6,7 @@ pub const log = @import("runtime/log.zig");
 pub const source_pos = @import("runtime/source_pos.zig");
 pub const read_all = @import("runtime/read_all.zig");
 pub const reader = @import("reader.zig");
+pub const eval = @import("eval.zig");
 pub const build_options = @import("build_options");
 
 pub const Value = value.Value;
@@ -15,3 +16,4 @@ pub const Symbol = symbol.Symbol;
 pub const Interner = symbol.Interner;
 pub const SourcePosition = source_pos.SourcePosition;
 pub const PositionTable = source_pos.PositionTable;
+pub const Env = eval.Env;

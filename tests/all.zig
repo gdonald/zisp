@@ -15,5 +15,6 @@ comptime {
     _ = @import("reader/golden_test.zig");
     _ = @import("reader/roundtrip_test.zig");
     _ = @import("reader/fuzz_test.zig");
+    _ = @import("eval/env_test.zig");
     _ = @import("cli_test.zig");
 }
