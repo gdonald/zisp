@@ -145,6 +145,12 @@ pub const Env = struct {
         return prev;
     }
 
+    pub fn setFunctionChain(self: *Env, head: ?*Frame) ?*Frame {
+        const prev = self.top_function;
+        self.top_function = head;
+        return prev;
+    }
+
     pub fn bindValue(self: *Env, sym: Value, val: Value) !void {
         if (self.top_value == null) _ = try self.pushValueFrame();
         try self.top_value.?.bind(self.allocator, sym, val);

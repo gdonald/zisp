@@ -22,12 +22,16 @@ pub const NativeError = error{
     NoSpecialFormHandler,
     WrongArgCount,
     TypeError,
+    ControlError,
+    BlockReturn,
+    Go,
 } || std.mem.Allocator.Error;
 
 pub const Closure = struct {
     params: Value,
     body: Value,
     captured_env: ?*env_mod.Frame,
+    captured_fenv: ?*env_mod.Frame,
 };
 
 pub const HeapFunction = struct {
@@ -64,6 +68,7 @@ pub fn allocClosure(
     params: Value,
     body: Value,
     captured_env: ?*env_mod.Frame,
+    captured_fenv: ?*env_mod.Frame,
 ) !Value {
     const obj = try allocator.create(HeapFunction);
     obj.* = .{
@@ -77,6 +82,7 @@ pub fn allocClosure(
             .params = params,
             .body = body,
             .captured_env = captured_env,
+            .captured_fenv = captured_fenv,
         } },
     };
     return Value.fromHeapAddr(@intFromPtr(obj));

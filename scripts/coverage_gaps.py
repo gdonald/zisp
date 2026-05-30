@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print uncovered lines per file from kcov's cobertura.xml.
 
-Run after `zig build coverage` (or `./run_tests.sh`) writes
+Run after `zig build coverage` (or `./tests.sh`) writes
 coverage/test/cobertura.xml. Lists every line with zero hits in any
 file that's below 100% covered, so we can write tests for the gaps.
 """
@@ -17,7 +17,7 @@ REPORT = Path("coverage/test/cobertura.xml")
 
 def main() -> int:
     if not REPORT.exists():
-        print(f"no coverage report at {REPORT}; run ./run_tests.sh first", file=sys.stderr)
+        print(f"no coverage report at {REPORT}; run ./tests.sh first", file=sys.stderr)
         return 1
 
     tree = ET.parse(REPORT)
@@ -28,7 +28,11 @@ def main() -> int:
         rate = float(cls.get("line-rate", "1"))
         if rate >= 1.0:
             continue
-        gaps = [int(line.get("number")) for line in cls.iter("line") if int(line.get("hits", "0")) == 0]
+        gaps = [
+            int(line.get("number"))
+            for line in cls.iter("line")
+            if int(line.get("hits", "0")) == 0
+        ]
         if not gaps:
             continue
         any_gaps = True

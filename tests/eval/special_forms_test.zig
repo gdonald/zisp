@@ -843,6 +843,677 @@ test "callFunction rejects non-function" {
     try std.testing.expectError(Error.NotCallable, fx.ev.callFunction(value.Value.fromFixnum(0), &.{}));
 }
 
+test "flet: local function callable within body" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    const x = try fx.sym("X");
+    // (flet ((f (x) x)) (f 42))
+    const params = try fx.list(&.{x});
+    const def = try fx.list(&.{ f, params, x });
+    const defs = try fx.list(&.{def});
+    const call = try fx.list(&.{ f, value.Value.fromFixnum(42) });
+    const form = try fx.list(&.{ flet, defs, call });
+
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 42), r.toFixnum());
+}
+
+test "flet: local function not visible after body" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    const params = try fx.list(&.{});
+    const def = try fx.list(&.{ f, params, value.Value.fromFixnum(1) });
+    const defs = try fx.list(&.{def});
+    const form = try fx.list(&.{ flet, defs, value.Value.fromFixnum(0) });
+    _ = try fx.ev.eval(form);
+
+    // After the flet returns, calling f is an unbound function.
+    const call = try fx.list(&.{f});
+    try std.testing.expectError(Error.UnboundFunction, fx.ev.eval(call));
+}
+
+test "flet: definitions cannot see sibling definitions" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    const g = try fx.sym("G");
+    // (flet ((f () 1) (g () (f))) (g))
+    // g's body refers to f, but in flet f is NOT visible to g's definition,
+    // so calling g signals an unbound function.
+    const f_def = try fx.list(&.{ f, value.NIL, value.Value.fromFixnum(1) });
+    const g_body = try fx.list(&.{f});
+    const g_def = try fx.list(&.{ g, value.NIL, g_body });
+    const defs = try fx.list(&.{ f_def, g_def });
+    const call = try fx.list(&.{g});
+    const form = try fx.list(&.{ flet, defs, call });
+
+    try std.testing.expectError(Error.UnboundFunction, fx.ev.eval(form));
+}
+
+test "labels: definitions can call each other" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const labels = fx.interner.lookup("LABELS").?;
+    const f = try fx.sym("F");
+    const g = try fx.sym("G");
+    // (labels ((f () 7) (g () (f))) (g)) — g sees f.
+    const f_def = try fx.list(&.{ f, value.NIL, value.Value.fromFixnum(7) });
+    const g_body = try fx.list(&.{f});
+    const g_def = try fx.list(&.{ g, value.NIL, g_body });
+    const defs = try fx.list(&.{ f_def, g_def });
+    const call = try fx.list(&.{g});
+    const form = try fx.list(&.{ labels, defs, call });
+
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 7), r.toFixnum());
+}
+
+test "labels: recursive self-reference" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const labels = fx.interner.lookup("LABELS").?;
+    const if_s = fx.interner.lookup("IF").?;
+    const quote = fx.interner.lookup("QUOTE").?;
+    const f = try fx.sym("F");
+    const n = try fx.sym("N");
+    const done = try fx.sym("DONE");
+
+    // (labels ((f (n) (if n (f nil) 'done))) (f t))
+    // Called with T: n is truthy, recurse with NIL; n is NIL, return 'done.
+    const done_form = try fx.list(&.{ quote, done });
+    const rec_call = try fx.list(&.{ f, value.NIL });
+    const if_form = try fx.list(&.{ if_s, n, rec_call, done_form });
+    const params = try fx.list(&.{n});
+    const def = try fx.list(&.{ f, params, if_form });
+    const defs = try fx.list(&.{def});
+    const call = try fx.list(&.{ f, value.T });
+    const form = try fx.list(&.{ labels, defs, call });
+
+    const r = try fx.ev.eval(form);
+    try std.testing.expect(r.equalsRaw(done));
+}
+
+test "flet: captures lexical value environment" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const let = fx.interner.lookup("LET").?;
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    const x = try fx.sym("X");
+    // (let ((x 5)) (flet ((f () x)) (f))) — f returns captured x.
+    const f_body = x;
+    const def = try fx.list(&.{ f, value.NIL, f_body });
+    const defs = try fx.list(&.{def});
+    const call = try fx.list(&.{f});
+    const flet_form = try fx.list(&.{ flet, defs, call });
+    const bind = try fx.list(&.{ x, value.Value.fromFixnum(5) });
+    const bindings = try fx.list(&.{bind});
+    const form = try fx.list(&.{ let, bindings, flet_form });
+
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 5), r.toFixnum());
+}
+
+test "flet: dotted args rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const form = try fx.heap.allocCons(flet, value.Value.fromFixnum(0));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "flet: dotted definitions list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    const def = try fx.list(&.{ f, value.NIL, value.Value.fromFixnum(1) });
+    const dotted_defs = try fx.heap.allocCons(def, f);
+    const form = try fx.list(&.{ flet, dotted_defs, value.NIL });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "flet: non-cons definition rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const defs = try fx.list(&.{value.Value.fromFixnum(0)});
+    const form = try fx.list(&.{ flet, defs, value.NIL });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "flet: non-symbol name rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const def = try fx.list(&.{ value.Value.fromFixnum(0), value.NIL });
+    const defs = try fx.list(&.{def});
+    const form = try fx.list(&.{ flet, defs, value.NIL });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
+test "flet: definition missing lambda list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    // (flet ((f)) ...) — no lambda list.
+    const def = try fx.list(&.{f});
+    const defs = try fx.list(&.{def});
+    const form = try fx.list(&.{ flet, defs, value.NIL });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "flet: invalid param list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const f = try fx.sym("F");
+    // (flet ((f (5)) ...)) — 5 is not a valid parameter symbol.
+    const params = try fx.list(&.{value.Value.fromFixnum(5)});
+    const def = try fx.list(&.{ f, params, value.NIL });
+    const defs = try fx.list(&.{def});
+    const form = try fx.list(&.{ flet, defs, value.NIL });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
+test "flet: empty definitions and empty body returns NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const flet = fx.interner.lookup("FLET").?;
+    const form = try fx.list(&.{ flet, value.NIL });
+    const r = try fx.ev.eval(form);
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "labels: shadows outer function of same name within definitions" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const labels = fx.interner.lookup("LABELS").?;
+    const g = try fx.sym("G");
+    const f = try fx.sym("F");
+    // Global f returns via native, but labels f shadows it; g calls f.
+    _ = try fx.ev.defineNative("ADD2", &nativeAddTwo);
+
+    // (labels ((f () 100) (g () (f))) (g)) — g must reach the local f (100).
+    const f_def = try fx.list(&.{ f, value.NIL, value.Value.fromFixnum(100) });
+    const g_body = try fx.list(&.{f});
+    const g_def = try fx.list(&.{ g, value.NIL, g_body });
+    const defs = try fx.list(&.{ f_def, g_def });
+    const call = try fx.list(&.{g});
+    const form = try fx.list(&.{ labels, defs, call });
+
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 100), r.toFixnum());
+}
+
+test "block: returns last form when no return-from" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const name = try fx.sym("FOO");
+    // (block foo 1 2 3)
+    const form = try fx.list(&.{
+        block,
+        name,
+        value.Value.fromFixnum(1),
+        value.Value.fromFixnum(2),
+        value.Value.fromFixnum(3),
+    });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 3), r.toFixnum());
+}
+
+test "block: empty body returns NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const name = try fx.sym("FOO");
+    const form = try fx.list(&.{ block, name });
+    const r = try fx.ev.eval(form);
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "return-from: exits block with a value" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const name = try fx.sym("FOO");
+    // (block foo (return-from foo 42) 99) — 99 must not be reached.
+    const ret = try fx.list(&.{ rf, name, value.Value.fromFixnum(42) });
+    const form = try fx.list(&.{ block, name, ret, value.Value.fromFixnum(99) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 42), r.toFixnum());
+}
+
+test "return-from: skips forms after it" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const name = try fx.sym("FOO");
+    const x = try fx.sym("X");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+
+    // (block foo (return-from foo 1) (setq x 100))
+    const ret = try fx.list(&.{ rf, name, value.Value.fromFixnum(1) });
+    const side = try fx.list(&.{ setq, x, value.Value.fromFixnum(100) });
+    const form = try fx.list(&.{ block, name, ret, side });
+    _ = try fx.ev.eval(form);
+    // The setq after the return must not have run.
+    try std.testing.expectEqual(@as(i64, 0), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "return-from: no value form returns NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const name = try fx.sym("FOO");
+    // (block foo (return-from foo) 99)
+    const ret = try fx.list(&.{ rf, name });
+    const form = try fx.list(&.{ block, name, ret, value.Value.fromFixnum(99) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "return-from: returns from the named outer block, not inner" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const outer = try fx.sym("OUTER");
+    const inner = try fx.sym("INNER");
+
+    // (block outer (block inner (return-from outer 7) 8) 9)
+    // return-from outer unwinds past the inner block; the trailing 9 is skipped.
+    const ret = try fx.list(&.{ rf, outer, value.Value.fromFixnum(7) });
+    const inner_block = try fx.list(&.{ block, inner, ret, value.Value.fromFixnum(8) });
+    const form = try fx.list(&.{ block, outer, inner_block, value.Value.fromFixnum(9) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 7), r.toFixnum());
+}
+
+test "return-from: innermost block of matching name wins" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const name = try fx.sym("FOO");
+
+    // (block foo (block foo (return-from foo 1) 2) 3)
+    // The return targets the inner foo (value 1), so the inner block yields 1
+    // and the outer block then yields 3.
+    const ret = try fx.list(&.{ rf, name, value.Value.fromFixnum(1) });
+    const inner_block = try fx.list(&.{ block, name, ret, value.Value.fromFixnum(2) });
+    const form = try fx.list(&.{ block, name, inner_block, value.Value.fromFixnum(3) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 3), r.toFixnum());
+}
+
+test "return-from: unknown block name signals control-error" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const name = try fx.sym("NOPE");
+    const form = try fx.list(&.{ rf, name, value.Value.fromFixnum(1) });
+    try std.testing.expectError(Error.ControlError, fx.ev.eval(form));
+}
+
+test "return-from: escaping an exited block signals control-error" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const lambda = fx.interner.lookup("LAMBDA").?;
+    const name = try fx.sym("FOO");
+
+    // (block foo (lambda () (return-from foo 1))) — returns the closure.
+    const ret = try fx.list(&.{ rf, name, value.Value.fromFixnum(1) });
+    const lam = try fx.list(&.{ lambda, value.NIL, ret });
+    const form = try fx.list(&.{ block, name, lam });
+    const closure = try fx.ev.eval(form);
+    // The block has exited; invoking the closure now must signal control-error.
+    try std.testing.expectError(Error.ControlError, fx.ev.callFunction(closure, &.{}));
+}
+
+test "block: name must be a symbol" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const form = try fx.list(&.{ block, value.Value.fromFixnum(0) });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
+test "block: missing name errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const form = try fx.list(&.{block});
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "block: dotted args rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const form = try fx.heap.allocCons(block, value.Value.fromFixnum(0));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "return-from: missing name errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const form = try fx.list(&.{rf});
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "return-from: dotted args rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const form = try fx.heap.allocCons(rf, value.Value.fromFixnum(0));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "return-from: non-symbol name errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const form = try fx.list(&.{ rf, value.Value.fromFixnum(0) });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
+test "return-from: extra value forms rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block = fx.interner.lookup("BLOCK").?;
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const name = try fx.sym("FOO");
+    // (block foo (return-from foo 1 2)) — two value forms is malformed.
+    const ret = try fx.list(&.{ rf, name, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const form = try fx.list(&.{ block, name, ret });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "return-from: dotted value tail rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const rf = fx.interner.lookup("RETURN-FROM").?;
+    const name = try fx.sym("FOO");
+    // (return-from foo . 1) — dotted tail after the name.
+    const dotted = try fx.heap.allocCons(name, value.Value.fromFixnum(1));
+    const form = try fx.heap.allocCons(rf, dotted);
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+fn nativeSub1(ev_opaque: *anyopaque, args: []const value.Value) zisp.eval.function.NativeError!value.Value {
+    _ = ev_opaque;
+    if (args.len != 1) return error.WrongArgCount;
+    return value.Value.fromFixnum(args[0].toFixnum() - 1);
+}
+
+fn nativeZerop(ev_opaque: *anyopaque, args: []const value.Value) zisp.eval.function.NativeError!value.Value {
+    _ = ev_opaque;
+    if (args.len != 1) return error.WrongArgCount;
+    return if (args[0].toFixnum() == 0) value.T else value.NIL;
+}
+
+test "tagbody: empty body returns NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const r = try fx.ev.eval(try fx.list(&.{tb}));
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "tagbody: only tags, no statements, returns NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const a = try fx.sym("A");
+    const b = try fx.sym("B");
+    const r = try fx.ev.eval(try fx.list(&.{ tb, a, b }));
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "tagbody: statements run in order, returns NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+
+    const s1 = try fx.list(&.{ setq, x, value.Value.fromFixnum(5) });
+    const r = try fx.ev.eval(try fx.list(&.{ tb, s1 }));
+    try std.testing.expect(r.equalsRaw(value.NIL));
+    try std.testing.expectEqual(@as(i64, 5), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "go: forward jump skips intervening statements" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    const skip = try fx.sym("SKIP");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(1);
+
+    // (tagbody (go skip) (setq x 99) skip (setq x 2))
+    const go_skip = try fx.list(&.{ go, skip });
+    const set99 = try fx.list(&.{ setq, x, value.Value.fromFixnum(99) });
+    const set2 = try fx.list(&.{ setq, x, value.Value.fromFixnum(2) });
+    const form = try fx.list(&.{ tb, go_skip, set99, skip, set2 });
+    _ = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 2), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "go: backward jump builds a loop" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    _ = try fx.ev.defineNative("ADD2", &nativeAddTwo);
+    _ = try fx.ev.defineNative("SUB1", &nativeSub1);
+    _ = try fx.ev.defineNative("ZEROP", &nativeZerop);
+    const add = fx.interner.lookup("ADD2").?;
+    const sub1 = fx.interner.lookup("SUB1").?;
+    const zerop = fx.interner.lookup("ZEROP").?;
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const if_s = fx.interner.lookup("IF").?;
+    const i = try fx.sym("I");
+    const acc = try fx.sym("ACC");
+    const top = try fx.sym("TOP");
+    symbol_mod.symbol(i).value_cell = value.Value.fromFixnum(3);
+    symbol_mod.symbol(acc).value_cell = value.Value.fromFixnum(0);
+
+    // top: (setq acc (+ acc i)) (setq i (- i 1)) (if (zerop i) nil (go top))
+    const acc_plus = try fx.list(&.{ add, acc, i });
+    const set_acc = try fx.list(&.{ setq, acc, acc_plus });
+    const i_minus = try fx.list(&.{ sub1, i });
+    const set_i = try fx.list(&.{ setq, i, i_minus });
+    const test_form = try fx.list(&.{ zerop, i });
+    const go_top = try fx.list(&.{ go, top });
+    const if_form = try fx.list(&.{ if_s, test_form, value.NIL, go_top });
+    const form = try fx.list(&.{ tb, top, set_acc, set_i, if_form });
+    _ = try fx.ev.eval(form);
+    // 3 + 2 + 1 = 6
+    try std.testing.expectEqual(@as(i64, 6), symbol_mod.symbol(acc).value_cell.toFixnum());
+}
+
+test "go: jumps out of a nested tagbody to an outer tag" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const r = try fx.sym("R");
+    const outer_tag = try fx.sym("OUTER-TAG");
+    symbol_mod.symbol(r).value_cell = value.Value.fromFixnum(0);
+
+    // (tagbody (tagbody (go outer-tag)) (setq r 1) outer-tag (setq r 5))
+    const go_outer = try fx.list(&.{ go, outer_tag });
+    const inner_tb = try fx.list(&.{ tb, go_outer });
+    const set1 = try fx.list(&.{ setq, r, value.Value.fromFixnum(1) });
+    const set5 = try fx.list(&.{ setq, r, value.Value.fromFixnum(5) });
+    const form = try fx.list(&.{ tb, inner_tb, set1, outer_tag, set5 });
+    _ = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 5), symbol_mod.symbol(r).value_cell.toFixnum());
+}
+
+test "go: integer tags are supported" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+
+    // (tagbody (go 1) (setq x 99) 1 (setq x 7))
+    const go1 = try fx.list(&.{ go, value.Value.fromFixnum(1) });
+    const set99 = try fx.list(&.{ setq, x, value.Value.fromFixnum(99) });
+    const set7 = try fx.list(&.{ setq, x, value.Value.fromFixnum(7) });
+    const form = try fx.list(&.{ tb, go1, set99, value.Value.fromFixnum(1), set7 });
+    _ = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 7), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "go: unknown tag signals control-error" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const nope = try fx.sym("NOPE");
+    // (tagbody (go nope)) — no such tag anywhere.
+    const go_nope = try fx.list(&.{ go, nope });
+    const form = try fx.list(&.{ tb, go_nope });
+    try std.testing.expectError(Error.ControlError, fx.ev.eval(form));
+}
+
+test "go: outside any tagbody signals control-error" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const go = fx.interner.lookup("GO").?;
+    const foo = try fx.sym("FOO");
+    try std.testing.expectError(Error.ControlError, fx.ev.eval(try fx.list(&.{ go, foo })));
+}
+
+test "go: escaping an exited tagbody signals control-error" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const lambda = fx.interner.lookup("LAMBDA").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const a = try fx.sym("A");
+    const f = try fx.sym("F");
+
+    // (tagbody a (setq f (lambda () (go a)))) — capture a closure that gos to a.
+    const go_a = try fx.list(&.{ go, a });
+    const lam = try fx.list(&.{ lambda, value.NIL, go_a });
+    const set_f = try fx.list(&.{ setq, f, lam });
+    const form = try fx.list(&.{ tb, a, set_f });
+    _ = try fx.ev.eval(form);
+
+    // The tagbody has exited; invoking the closure now must error.
+    const closure = symbol_mod.symbol(f).value_cell;
+    try std.testing.expectError(Error.ControlError, fx.ev.callFunction(closure, &.{}));
+}
+
+test "tagbody: dotted body rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const form = try fx.heap.allocCons(tb, value.Value.fromFixnum(0));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "go: missing tag rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const go = fx.interner.lookup("GO").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{go})));
+}
+
+test "go: extra args rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const go = fx.interner.lookup("GO").?;
+    const a = try fx.sym("A");
+    const b = try fx.sym("B");
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{ go, a, b })));
+}
+
+test "go: non-symbol non-integer tag rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    // (tagbody (go (foo))) — tag is a list, which is not a valid go tag.
+    const foo = try fx.sym("FOO");
+    const tag_list = try fx.list(&.{foo});
+    const go_form = try fx.list(&.{ go, tag_list });
+    const form = try fx.list(&.{ tb, go_form });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
 test "closure: dotted body errors at call time" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
@@ -855,6 +1526,7 @@ test "closure: dotted body errors at call time" {
         null,
         value.NIL,
         dotted_body,
+        null,
         null,
     );
     try std.testing.expectError(Error.BadArgList, fx.ev.callFunction(closure, &.{}));

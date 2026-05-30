@@ -26,6 +26,10 @@ fn defaultMacroExpander(ev: *Evaluator, form: Value) Error!?Value {
     return null;
 }
 
+const BlockEntry = struct { name: Value, id: u64 };
+const TagbodyEntry = struct { body: Value, id: u64 };
+pub const GoTarget = struct { id: u64, pos: Value };
+
 pub const Evaluator = struct {
     allocator: std.mem.Allocator,
     heap: *Heap,
@@ -33,6 +37,14 @@ pub const Evaluator = struct {
     env: Env,
     special_forms: std.AutoHashMapUnmanaged(u64, SpecialFormFn) = .{},
     macro_expander: MacroExpander = defaultMacroExpander,
+    block_stack: std.ArrayList(BlockEntry) = .empty,
+    block_counter: u64 = 0,
+    return_id: u64 = 0,
+    return_value: Value = undefined,
+    tagbody_stack: std.ArrayList(TagbodyEntry) = .empty,
+    tagbody_counter: u64 = 0,
+    go_id: u64 = 0,
+    go_target: Value = undefined,
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -40,12 +52,65 @@ pub const Evaluator = struct {
             .heap = heap_ref,
             .interner = interner,
             .env = Env.init(allocator),
+            .return_value = value.NIL,
+            .go_target = value.NIL,
         };
     }
 
     pub fn deinit(self: *Evaluator) void {
         self.env.deinit();
         self.special_forms.deinit(self.allocator);
+        self.block_stack.deinit(self.allocator);
+        self.tagbody_stack.deinit(self.allocator);
+    }
+
+    pub fn pushTagbody(self: *Evaluator, body: Value) Error!u64 {
+        self.tagbody_counter += 1;
+        const id = self.tagbody_counter;
+        try self.tagbody_stack.append(self.allocator, .{ .body = body, .id = id });
+        return id;
+    }
+
+    pub fn popTagbody(self: *Evaluator) void {
+        _ = self.tagbody_stack.pop();
+    }
+
+    pub fn findTagbody(self: *const Evaluator, tag: Value) ?GoTarget {
+        var i = self.tagbody_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            var cur = self.tagbody_stack.items[i].body;
+            while (cur.isCons()) {
+                const elem = heap_mod.car(cur);
+                if (!elem.isCons() and elem.equalsRaw(tag)) {
+                    return .{ .id = self.tagbody_stack.items[i].id, .pos = heap_mod.cdr(cur) };
+                }
+                cur = heap_mod.cdr(cur);
+            }
+        }
+        return null;
+    }
+
+    pub fn pushBlock(self: *Evaluator, name: Value) Error!u64 {
+        self.block_counter += 1;
+        const id = self.block_counter;
+        try self.block_stack.append(self.allocator, .{ .name = name, .id = id });
+        return id;
+    }
+
+    pub fn popBlock(self: *Evaluator) void {
+        _ = self.block_stack.pop();
+    }
+
+    pub fn findBlock(self: *const Evaluator, name: Value) ?u64 {
+        var i = self.block_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.block_stack.items[i].name.equalsRaw(name)) {
+                return self.block_stack.items[i].id;
+            }
+        }
+        return null;
     }
 
     pub fn registerSpecialForm(self: *Evaluator, name: []const u8, handler: SpecialFormFn) !void {
@@ -132,6 +197,9 @@ pub const Evaluator = struct {
 
         const prev_chain = self.env.setValueChain(c.captured_env);
         defer _ = self.env.setValueChain(prev_chain);
+
+        const prev_fchain = self.env.setFunctionChain(c.captured_fenv);
+        defer _ = self.env.setFunctionChain(prev_fchain);
 
         const frame = try self.env.pushValueFrame();
         defer self.env.popValueFrame();
