@@ -1,4 +1,4 @@
-//! ROADMAP 1.2.10 acceptance gate.
+//! Feature-expression (#+/#-) acceptance tests.
 //!
 //! Reads `tests/lisp/feature-expr-corpus.lisp` and, for each line, sets
 //! up a reader with the given feature set, parses the feature expression
@@ -235,7 +235,7 @@ fn readWithFeatures(s: *Setup, features: []const Value, src: []const u8) !?Value
     return try rd.read();
 }
 
-test "1.2.10 #+ keeps form when feature is present" {
+test "#+ keeps form when feature is present" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const sbcl = try s.interner.intern(":SBCL");
@@ -244,7 +244,7 @@ test "1.2.10 #+ keeps form when feature is present" {
     try std.testing.expectEqualStrings(":YES", symbol.name(v));
 }
 
-test "1.2.10 #- discards form when feature is present" {
+test "#- discards form when feature is present" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const sbcl = try s.interner.intern(":SBCL");
@@ -253,7 +253,7 @@ test "1.2.10 #- discards form when feature is present" {
     try std.testing.expectEqualStrings(":OK", symbol.name(v));
 }
 
-test "1.2.10 #+ inside list elides element when feature absent" {
+test "#+ inside list elides element when feature absent" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = (try readWithFeatures(s, &.{}, "(a #+nope b c)")).?;
@@ -264,7 +264,7 @@ test "1.2.10 #+ inside list elides element when feature absent" {
     try std.testing.expect(heap.cdr(heap.cdr(v)).equalsRaw(value.NIL));
 }
 
-test "1.2.10 #+ at end of list before close paren elides cleanly" {
+test "#+ at end of list before close paren elides cleanly" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = (try readWithFeatures(s, &.{}, "(a b #+nope skipped)")).?;
@@ -274,7 +274,7 @@ test "1.2.10 #+ at end of list before close paren elides cleanly" {
     try std.testing.expect(heap.cdr(heap.cdr(v)).equalsRaw(value.NIL));
 }
 
-test "1.2.10 #+ inside vector elides element when feature absent" {
+test "#+ inside vector elides element when feature absent" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = (try readWithFeatures(s, &.{}, "#(1 #+nope 2 3)")).?;
@@ -284,7 +284,7 @@ test "1.2.10 #+ inside vector elides element when feature absent" {
     try std.testing.expectEqual(@as(i64, 3), items[1].toFixnum());
 }
 
-test "1.2.10 #+ inside vector keeps element when feature present" {
+test "#+ inside vector keeps element when feature present" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const sbcl = try s.interner.intern(":SBCL");
@@ -294,7 +294,7 @@ test "1.2.10 #+ inside vector keeps element when feature present" {
     try std.testing.expectEqual(@as(usize, 3), items.len);
 }
 
-test "1.2.10 nested #+#+ requires both features" {
+test "nested #+#+ requires both features" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const a = try s.interner.intern(":A");
@@ -308,7 +308,7 @@ test "1.2.10 nested #+#+ requires both features" {
     try std.testing.expectEqualStrings(":FALLBACK", symbol.name(v2));
 }
 
-test "1.2.10 #+ feature expr (or ...) " {
+test "#+ feature expr (or ...) " {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const ccl = try s.interner.intern(":CCL");
@@ -317,7 +317,7 @@ test "1.2.10 #+ feature expr (or ...) " {
     try std.testing.expectEqualStrings(":PICKED", symbol.name(v));
 }
 
-test "1.2.10 #+ feature expr (and (not ...)) " {
+test "#+ feature expr (and (not ...)) " {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const sbcl = try s.interner.intern(":SBCL");
@@ -327,7 +327,7 @@ test "1.2.10 #+ feature expr (and (not ...)) " {
     try std.testing.expectEqualStrings(":YES", symbol.name(v));
 }
 
-test "1.2.10 #+ all-skipped at top level returns null" {
+test "#+ all-skipped at top level returns null" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#+nope only-form");
@@ -336,7 +336,7 @@ test "1.2.10 #+ all-skipped at top level returns null" {
     try std.testing.expect(v == null);
 }
 
-test "1.2.10 EOF after #+ feature expr is EndOfInput" {
+test "EOF after #+ feature expr is EndOfInput" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#+sbcl");
@@ -344,7 +344,7 @@ test "1.2.10 EOF after #+ feature expr is EndOfInput" {
     try std.testing.expectError(ReaderError.EndOfInput, rd.read());
 }
 
-test "1.2.10 #+ with bad feature expression shape is BadToken" {
+test "#+ with bad feature expression shape is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // 42 is neither a symbol nor a list.
@@ -353,7 +353,7 @@ test "1.2.10 #+ with bad feature expression shape is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "1.2.10 #+ with unknown operator is BadToken" {
+test "#+ with unknown operator is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#+(xor a b) :yes");
@@ -361,7 +361,7 @@ test "1.2.10 #+ with unknown operator is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "1.2.10 (not ...) requires exactly one operand" {
+test "(not ...) requires exactly one operand" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#+(not) :yes");
@@ -373,7 +373,7 @@ test "1.2.10 (not ...) requires exactly one operand" {
     try std.testing.expectError(ReaderError.BadToken, rd2.read());
 }
 
-test "1.2.10 feature expr with non-symbol head is BadToken" {
+test "feature expr with non-symbol head is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#+(1 2 3) :yes");
@@ -381,7 +381,7 @@ test "1.2.10 feature expr with non-symbol head is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "1.2.10 dotted feature expression is BadToken" {
+test "dotted feature expression is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#+(or sbcl . ccl) :yes");
@@ -389,7 +389,7 @@ test "1.2.10 dotted feature expression is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "1.2.10 features compare case-sensitively after stripping colon" {
+test "features compare case-sensitively after stripping colon" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // Plain `sbcl` in expr → SBCL after upcase. Feature `:SBCL` strips
@@ -400,7 +400,7 @@ test "1.2.10 features compare case-sensitively after stripping colon" {
     try std.testing.expectEqualStrings(":YES", symbol.name(v));
 }
 
-test "1.2.10 non-symbol value in features list is ignored" {
+test "non-symbol value in features list is ignored" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // A fixnum in the features list would be ignored — only symbol

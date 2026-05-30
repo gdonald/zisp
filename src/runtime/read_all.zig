@@ -1,4 +1,4 @@
-//! Reader-only sweep helper (ROADMAP Phase 1.5.3).
+//! Reader-only sweep helper.
 //!
 //! Drives a fresh reader through every form in a source buffer and
 //! returns either a count or the position of the first failure. The

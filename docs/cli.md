@@ -12,11 +12,11 @@ zisp [OPTIONS] [FILE [ARGS...]]
 |--------|-------------|
 | `--version` | Print version and exit 0 |
 | `--help`, `-h` | Print usage and exit 0 |
-| `--eval EXPR`, `-e EXPR` | Read, evaluate, print EXPR. May be repeated. (Phase 2) |
-| `--load FILE`, `-l FILE` | Load FILE. May be repeated. (Phase 2) |
-| `--batch` | Process options and exit; suppress REPL. (Phase 2) |
-| `--quiet`, `-q` | Suppress startup banner. (Phase 2) |
-| `--script FILE` | Treat FILE as a script; remaining args bound to `*command-line-arguments*`. (Phase 2) |
+| `--eval EXPR`, `-e EXPR` | Read, evaluate, print EXPR. May be repeated. (planned) |
+| `--load FILE`, `-l FILE` | Load FILE. May be repeated. (planned) |
+| `--batch` | Process options and exit; suppress REPL. (planned) |
+| `--quiet`, `-q` | Suppress startup banner. (planned) |
+| `--script FILE` | Treat FILE as a script; remaining args bound to `*command-line-arguments*`. (planned) |
 | `--` | End of options |
 
 ## Exit codes
@@ -34,7 +34,7 @@ zisp [OPTIONS] [FILE [ARGS...]]
 ```sh
 zisp --version
 zisp --help
-zisp --eval '(+ 1 2)'              # Phase 2
-zisp --load init.lisp --batch       # Phase 2
-zisp script.lisp arg1 arg2          # Phase 2
+zisp --eval '(+ 1 2)'              # planned
+zisp --load init.lisp --batch       # planned
+zisp script.lisp arg1 arg2          # planned
 ```

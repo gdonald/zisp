@@ -7,7 +7,7 @@ pub const Symbol = struct {
     value_cell: Value,
     function_cell: Value,
     plist: Value,
-    // package added in Phase 4
+    // package field to be added once packages exist
 };
 
 pub const Interner = struct {

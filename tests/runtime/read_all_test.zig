@@ -1,4 +1,4 @@
-//! ROADMAP Phase 1.5.3 helper coverage.
+//! read_all helper coverage.
 //!
 //! Drives `zisp.read_all.parseAll` against synthetic sources. The
 //! `--read-only` CLI flag wraps this helper with file I/O; here we test
@@ -8,20 +8,20 @@
 const std = @import("std");
 const zisp = @import("zisp");
 
-test "1.5.3 parseAll counts forms in a clean source" {
+test "parseAll counts forms in a clean source" {
     const a = std.testing.allocator;
     const outcome = try zisp.read_all.parseAll(a, "1 2 3 (a b)", "test");
     try std.testing.expect(outcome == .ok);
     try std.testing.expectEqual(@as(u32, 4), outcome.ok);
 }
 
-test "1.5.3 parseAll handles empty source" {
+test "parseAll handles empty source" {
     const a = std.testing.allocator;
     const outcome = try zisp.read_all.parseAll(a, "", "test");
     try std.testing.expectEqual(@as(u32, 0), outcome.ok);
 }
 
-test "1.5.3 parseAll reports first failure with position" {
+test "parseAll reports first failure with position" {
     const a = std.testing.allocator;
     // Two valid forms, then unbalanced rparen on a fresh line.
     const outcome = try zisp.read_all.parseAll(a, "1 2\n)", "src.lisp");
@@ -33,7 +33,7 @@ test "1.5.3 parseAll reports first failure with position" {
     try std.testing.expectEqualStrings("src.lisp", info.pos.file);
 }
 
-test "1.5.3 parseAll fail position propagates from deep error site" {
+test "parseAll fail position propagates from deep error site" {
     const a = std.testing.allocator;
     const outcome = try zisp.read_all.parseAll(a, "(1 . 2 3)", "f");
     try std.testing.expect(outcome == .fail);

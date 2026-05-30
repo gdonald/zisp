@@ -1,10 +1,7 @@
 # zisp
 
 Common Lisp implementation written in Zig, targeting the ANSI INCITS 226-1994
-standard. See [ROADMAP.md](ROADMAP.md) for the phased plan and compliance
-targets.
-
-Status: Phase 0 (foundations).
+standard.
 
 ## Requirements
 
@@ -37,7 +34,7 @@ zig build              # build the zisp binary into zig-out/bin/
 zig build run          # build and run the REPL
 zig build tests        # run unit tests
 zig build coverage     # run unit tests under kcov; report in ./coverage/
-zig build ansi-test    # run the ANSI compliance suite (Phase 1+)
+zig build ansi-test    # run the ANSI compliance suite
 ```
 
 ### Build options
@@ -45,8 +42,8 @@ zig build ansi-test    # run the ANSI compliance suite (Phase 1+)
 ```sh
 zig build -Doptimize=ReleaseFast    # standard Zig optimization modes
 zig build -Dansi-tests=true         # include ansi-test in the default build
-zig build -Dprofile=true            # enable profiling hooks (Phase 9 placeholder)
-zig build -Dfreestanding=true       # embedded build (Phase 10 placeholder)
+zig build -Dprofile=true            # enable profiling hooks (placeholder)
+zig build -Dfreestanding=true       # embedded build (placeholder)
 ```
 
 ## Documentation

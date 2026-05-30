@@ -33,14 +33,14 @@ pub fn main(init: std.process.Init) !u8 {
         },
         .read_only => |path| readOnlyMode(init.gpa, init.io, path),
         .repl => blk: {
-            cli.write("zisp {s}\n(REPL not implemented yet — Phase 2)\n", .{cli.VERSION});
+            cli.write("zisp {s}\n(REPL not implemented yet)\n", .{cli.VERSION});
             break :blk @intFromEnum(cli.ExitCode.success);
         },
     };
 }
 
-/// Phase 1.5.3 acceptance support. Reads `path`, hands the bytes to
-/// `zisp.read_all.parseAll`, and prints a one-line summary tailored for
+/// Reads `path`, hands the bytes to `zisp.read_all.parseAll`, and prints
+/// a one-line summary tailored for
 /// `tests/run-ansi.sh`'s grep aggregation. The parsing logic itself
 /// lives in `read_all.zig` so the test binary can exercise it directly.
 fn readOnlyMode(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !u8 {

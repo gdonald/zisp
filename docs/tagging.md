@@ -34,7 +34,7 @@ Zisp uses low-3-bit pointer tagging on 64-bit. Every Lisp value fits in a single
 - `FIXNUM_MIN = -2^60 = -1152921504606846976`
 - `FIXNUM_MAX = 2^60 - 1 = 1152921504606846975`
 
-Overflow promotes to a `bignum` heap object (Phase 4.5).
+Overflow will promote to a `bignum` heap object (not yet implemented).
 
 ## Reserved tags
 

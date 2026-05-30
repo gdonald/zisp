@@ -15,15 +15,14 @@ pub const Action = union(enum) {
     print_help: void,
     user_error: []const u8, // message
     /// `--read-only FILE` — parse every form in FILE, report a one-line
-    /// summary, exit non-zero on any parse failure. Used by Phase 1.5.3
-    /// (reader-only ansi-test sweep) to measure parse-rate before the
-    /// evaluator exists.
+    /// summary, exit non-zero on any parse failure. Used by the reader-only
+    /// ansi-test sweep to measure parse-rate before the evaluator exists.
     read_only: []const u8,
 };
 
-/// Parses argv (minus the program name) into an Action. Phase 0 understands
-/// `--version` and `--help`; Phase 1.5.3 adds `--read-only`. Phase 2 will
-/// expand this with `--eval`/`--load`/`--batch`.
+/// Parses argv (minus the program name) into an Action. Currently understands
+/// `--version`, `--help`, and `--read-only`; `--eval`/`--load`/`--batch` will
+/// follow once the evaluator exists.
 pub fn parseArgs(args: []const []const u8) Action {
     if (args.len == 0) return .repl;
 
@@ -55,7 +54,7 @@ pub const HELP_TEXT =
     \\    --help, -h          Print this message and exit
     \\    --read-only FILE    Parse FILE without evaluating; report parse-rate
     \\
-    \\Coming in Phase 2:
+    \\Coming later:
     \\    --eval EXPR, -e     Evaluate EXPR
     \\    --load FILE, -l     Load FILE
     \\    --batch             Process options and exit

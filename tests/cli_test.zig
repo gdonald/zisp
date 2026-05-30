@@ -28,7 +28,7 @@ test "unknown option returns user_error" {
     try std.testing.expectEqualStrings("--bogus", action.user_error);
 }
 
-test "non-option arg = repl (will become script in Phase 2)" {
+test "non-option arg = repl" {
     const args = [_][]const u8{"file.lisp"};
     try std.testing.expect(cli.parseArgs(&args) == .repl);
 }

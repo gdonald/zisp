@@ -1,4 +1,4 @@
-//! ROADMAP Phase 1.5.2.
+//! Reader/printer round-trip property tests.
 //!
 //! Property test: `read(prin1(x)) == x` for randomly generated values.
 //! `==` uses structural equality via the printer — print both, compare
@@ -162,7 +162,7 @@ fn roundTripOnce(allocator: std.mem.Allocator, setup: *Setup, v: Value) !void {
     };
 }
 
-test "1.5.2 read(print(x)) round-trip on random values" {
+test "read(print(x)) round-trip on random values" {
     const a = std.testing.allocator;
 
     const seeds = [_]u64{ 1, 2, 7, 11, 23, 0xdeadbeef, 0xfeedface, 0xcafebabe };
@@ -191,7 +191,7 @@ test "1.5.2 read(print(x)) round-trip on random values" {
     }
 }
 
-test "1.5.2 round-trip on hand-picked tricky atoms" {
+test "round-trip on hand-picked tricky atoms" {
     const a = std.testing.allocator;
     const s = try newSetup(a);
     defer s.deinit();

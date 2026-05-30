@@ -1,15 +1,15 @@
-//! Common Lisp tokenizer (ROADMAP Phase 1.1).
+//! Common Lisp tokenizer.
 //!
 //! The tokenizer is allocation-free: every token's `text` is a slice into
 //! the source buffer the caller provided. The tokenizer borrows the source
 //! for its lifetime; the caller keeps it alive.
 //!
-//! Float literals (1.1.6) are recognized as a lexeme but not parsed — the
-//! token's `text` carries the full source. Numeric value parsing belongs to
-//! 1.1.6, which has a 100-value SBCL-diffed corpus gate.
+//! Float literals are recognized as a lexeme but not parsed — the token's
+//! `text` carries the full source. Numeric value parsing belongs to the
+//! reader, which has a 100-value SBCL-diffed corpus gate.
 //!
-//! Keyword tokens (1.1.10) are reported with the leading `:` stripped from
-//! `text`; the reader will intern into the KEYWORD package once 4.8 lands.
+//! Keyword tokens are reported with the leading `:` stripped from `text`;
+//! the reader will intern into the KEYWORD package once packages exist.
 
 const std = @import("std");
 const tok = @import("token.zig");
@@ -46,7 +46,7 @@ pub const Tokenizer = struct {
     col: u32 = 1,
     /// Start position of the most recent `next()` token, captured after
     /// skipping leading trivia. The reader uses this to point error
-    /// messages at the start of a malformed token (1.4.2) rather than
+    /// messages at the start of a malformed token rather than
     /// at the leading whitespace or the in-progress token-recognition
     /// state at the moment the tokenizer raised.
     last_token_start: Position = .{},

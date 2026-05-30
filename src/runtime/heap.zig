@@ -48,8 +48,8 @@ pub const HeapObject = extern struct {
 };
 
 /// String: header + length-prefixed UTF-8 byte slice. The codepoint count
-/// (CL `length`) waits for Phase 4 once strings can be indexed; for now the
-/// reader only needs to round-trip the bytes.
+/// (CL `length`) waits until strings can be indexed; for now the reader
+/// only needs to round-trip the bytes.
 pub const HeapString = extern struct {
     header: HeapHeader,
     len: u64,
@@ -80,8 +80,8 @@ pub const HeapDoubleFloat = extern struct {
     value: f64,
 };
 
-/// Exact ratio of two fixnums — Phase 1 only stores the lexeme's literal
-/// numerator/denominator. Phase 4 arithmetic will normalize and promote
+/// Exact ratio of two fixnums — for now this only stores the lexeme's
+/// literal numerator/denominator. Arithmetic will normalize and promote
 /// to bignum when needed.
 pub const HeapRatio = extern struct {
     header: HeapHeader,
@@ -89,8 +89,8 @@ pub const HeapRatio = extern struct {
     denominator: i64,
 };
 
-/// Stub vector — flat `Value` array. Phase 4 grows specialized element types
-/// (`(simple-array (unsigned-byte 8) ...)`, etc.); the reader only needs the
+/// Stub vector — flat `Value` array. Specialized element types
+/// (`(simple-array (unsigned-byte 8) ...)`, etc.) come later; the reader only needs the
 /// general T-vector path for `#(...)` literals.
 pub const HeapVector = extern struct {
     header: HeapHeader,
@@ -111,8 +111,8 @@ pub const HeapVector = extern struct {
     }
 };
 
-/// All allocation flows through this. Phase 0 uses a bump arena from outside;
-/// Phase 5 swaps the underlying allocator for a real GC heap.
+/// All allocation flows through this. For now a bump arena is supplied from
+/// outside; a real GC heap will replace the underlying allocator later.
 pub const Heap = struct {
     allocator: std.mem.Allocator,
 

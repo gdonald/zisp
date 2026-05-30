@@ -3,14 +3,14 @@
 # Run the ANSI Common Lisp test suite against zisp.
 #
 # Two modes:
-#   1. Reader-only (Phase 1.5.3): parse every .lsp without evaluating,
-#      report per-category PASS/FAIL counts. Drives the parse-rate
-#      compliance milestone before the evaluator exists.
+#   1. Reader-only: parse every .lsp without evaluating, report
+#      per-category PASS/FAIL counts. Measures the parse rate before the
+#      evaluator exists.
 #         tests/run-ansi.sh --read-only            # all categories
 #         tests/run-ansi.sh --read-only reader     # one category
 #
-#   2. Full eval (Phase 2+): load every .lsp and run (do-tests). STUB
-#      until the evaluator + load + (do-tests) are wired.
+#   2. Full eval: load every .lsp and run (do-tests). STUB until the
+#      evaluator + load + (do-tests) are wired.
 #         tests/run-ansi.sh                        # all categories
 #         tests/run-ansi.sh cons numbers           # selected categories
 #
@@ -19,8 +19,7 @@
 #   ZISP=/path/to/zisp tests/run-ansi.sh ...      # override binary path
 #
 # Output:
-#   Per-category pass/fail counts plus an overall percentage. The percentage
-#   is the number tracked against the compliance table in ROADMAP.md.
+#   Per-category pass/fail counts plus an overall percentage.
 
 set -euo pipefail
 
@@ -37,7 +36,7 @@ fi
 
 # Categories are subdirectories of vendor/ansi-test. Each contains many .lsp
 # files; running a category means loading all of them and then (do-tests).
-# Order roughly tracks ROADMAP phases so partial runs are meaningful early.
+# Ordered so partial runs are meaningful early.
 CATEGORIES=(
   reader
   printer
@@ -100,8 +99,7 @@ run_category() {
 
 # Reader-only run: each .lsp gets a single zisp --read-only invocation. The
 # binary prints `OK ... forms=N` on success and `FAIL ... line:col` on the
-# first parse error. Aggregated counts feed the compliance number tracked
-# in ROADMAP.md (Phase 1 milestone: ~3% of total .lsp files parse).
+# first parse error. Aggregated counts feed the overall parse-rate number.
 run_category_read_only() {
   local cat="$1"
   local dir="$SUITE/$cat"

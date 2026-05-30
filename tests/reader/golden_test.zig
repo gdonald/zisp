@@ -1,4 +1,4 @@
-//! ROADMAP Phase 1.5.1.
+//! Golden-file reader/printer round-trip tests.
 //!
 //! Golden-file tests pin reader+printer round-trip output. Each case is
 //! a (`input`, `expected_print_output`) pair: read every form in `input`
@@ -92,7 +92,7 @@ fn readPrintAll(allocator: std.mem.Allocator, setup: *Setup, input: []const u8) 
     return aw.toOwnedSlice();
 }
 
-test "1.5.1 golden corpus" {
+test "golden corpus" {
     for (cases) |c| {
         const s = try newSetup(std.testing.allocator);
         defer s.deinit();

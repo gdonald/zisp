@@ -320,7 +320,7 @@ test "print unknown special index" {
     try std.testing.expectEqualStrings("#<special:42>", s);
 }
 
-// --- 1.3.1 / 1.3.2 / 1.3.3 — prin1 / princ / print ----------------------
+// --- prin1 / princ / print ----------------------
 
 fn princOwned(allocator: std.mem.Allocator, v: Value) ![]u8 {
     return printer.princToOwnedSlice(allocator, v);
@@ -330,7 +330,7 @@ fn writeOwned(allocator: std.mem.Allocator, v: Value, settings: printer.Settings
     return printer.writeToOwnedSlice(allocator, v, settings);
 }
 
-test "1.3.1 prin1 string keeps quotes" {
+test "prin1 string keeps quotes" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -341,7 +341,7 @@ test "1.3.1 prin1 string keeps quotes" {
     try std.testing.expectEqualStrings("\"hi\"", s);
 }
 
-test "1.3.2 princ string drops quotes and escapes" {
+test "princ string drops quotes and escapes" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -354,35 +354,35 @@ test "1.3.2 princ string drops quotes and escapes" {
     try std.testing.expectEqualStrings("he said \"hi\"\\bye", s);
 }
 
-test "1.3.2 princ character writes the char itself" {
+test "princ character writes the char itself" {
     const a = std.testing.allocator;
     const s = try princOwned(a, Value.fromChar('A'));
     defer a.free(s);
     try std.testing.expectEqualStrings("A", s);
 }
 
-test "1.3.2 princ space character is a literal space" {
+test "princ space character is a literal space" {
     const a = std.testing.allocator;
     const s = try princOwned(a, Value.fromChar(' '));
     defer a.free(s);
     try std.testing.expectEqualStrings(" ", s);
 }
 
-test "1.3.2 princ non-ascii character emits UTF-8" {
+test "princ non-ascii character emits UTF-8" {
     const a = std.testing.allocator;
     const s = try princOwned(a, Value.fromChar(0x03BB));
     defer a.free(s);
     try std.testing.expectEqualStrings("\u{03BB}", s);
 }
 
-test "1.3.2 princ invalid codepoint falls back to U+ form" {
+test "princ invalid codepoint falls back to U+ form" {
     const a = std.testing.allocator;
     const s = try princOwned(a, Value.fromChar(0x110000));
     defer a.free(s);
     try std.testing.expectEqualStrings("U+110000", s);
 }
 
-test "1.3.3 print emits newline-prin1-space" {
+test "print emits newline-prin1-space" {
     const a = std.testing.allocator;
     var aw = std.Io.Writer.Allocating.init(a);
     defer aw.deinit();
@@ -390,65 +390,65 @@ test "1.3.3 print emits newline-prin1-space" {
     try std.testing.expectEqualStrings("\n7 ", aw.written());
 }
 
-// --- 1.3.4 — base / radix / readably / escape ---------------------------
+// --- base / radix / readably / escape ---------------------------
 
-test "1.3.4 base 2 integer" {
+test "base 2 integer" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(10), .{ .base = 2 });
     defer a.free(s);
     try std.testing.expectEqualStrings("1010", s);
 }
 
-test "1.3.4 base 16 integer with radix prefix" {
+test "base 16 integer with radix prefix" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(255), .{ .base = 16, .radix = true });
     defer a.free(s);
     try std.testing.expectEqualStrings("#xFF", s);
 }
 
-test "1.3.4 base 8 integer with radix prefix" {
+test "base 8 integer with radix prefix" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(8), .{ .base = 8, .radix = true });
     defer a.free(s);
     try std.testing.expectEqualStrings("#o10", s);
 }
 
-test "1.3.4 base 2 integer with radix prefix" {
+test "base 2 integer with radix prefix" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(5), .{ .base = 2, .radix = true });
     defer a.free(s);
     try std.testing.expectEqualStrings("#b101", s);
 }
 
-test "1.3.4 base 10 integer with radix gets trailing dot" {
+test "base 10 integer with radix gets trailing dot" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(42), .{ .base = 10, .radix = true });
     defer a.free(s);
     try std.testing.expectEqualStrings("42.", s);
 }
 
-test "1.3.4 explicit nnR radix prefix" {
+test "explicit nnR radix prefix" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(31), .{ .base = 36, .radix = true });
     defer a.free(s);
     try std.testing.expectEqualStrings("#36rV", s);
 }
 
-test "1.3.4 negative integer in base 16" {
+test "negative integer in base 16" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(-255), .{ .base = 16 });
     defer a.free(s);
     try std.testing.expectEqualStrings("-FF", s);
 }
 
-test "1.3.4 zero in base 2" {
+test "zero in base 2" {
     const a = std.testing.allocator;
     const s = try writeOwned(a, Value.fromFixnum(0), .{ .base = 2 });
     defer a.free(s);
     try std.testing.expectEqualStrings("0", s);
 }
 
-test "1.3.4 base out-of-range clamps high" {
+test "base out-of-range clamps high" {
     const a = std.testing.allocator;
     // base=99 clamps to 36; same as the 36-base case.
     const s = try writeOwned(a, Value.fromFixnum(35), .{ .base = 99 });
@@ -456,7 +456,7 @@ test "1.3.4 base out-of-range clamps high" {
     try std.testing.expectEqualStrings("Z", s);
 }
 
-test "1.3.4 base out-of-range clamps low" {
+test "base out-of-range clamps low" {
     const a = std.testing.allocator;
     // base=0 clamps to 2.
     const s = try writeOwned(a, Value.fromFixnum(3), .{ .base = 0 });
@@ -464,7 +464,7 @@ test "1.3.4 base out-of-range clamps low" {
     try std.testing.expectEqualStrings("11", s);
 }
 
-test "1.3.4 fixnum minimum survives base conversion" {
+test "fixnum minimum survives base conversion" {
     const a = std.testing.allocator;
     // FIXNUM_MIN is -2^60 — make sure unsigned-conversion path doesn't
     // overflow.
@@ -473,7 +473,7 @@ test "1.3.4 fixnum minimum survives base conversion" {
     try std.testing.expectEqualStrings("-1000000000000000", s);
 }
 
-test "1.3.4 ratio respects base/radix" {
+test "ratio respects base/radix" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -484,7 +484,7 @@ test "1.3.4 ratio respects base/radix" {
     try std.testing.expectEqualStrings("#xF/10", s);
 }
 
-test "1.3.4 readably forces escape even when escape=false" {
+test "readably forces escape even when escape=false" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -495,9 +495,9 @@ test "1.3.4 readably forces escape even when escape=false" {
     try std.testing.expectEqualStrings("\"hi\"", s);
 }
 
-// --- 1.3.1 — symbol escape rules for round-trip ------------------------
+// --- symbol escape rules for round-trip ------------------------
 
-test "1.3.1 prin1 escapes lowercase symbol" {
+test "prin1 escapes lowercase symbol" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -507,7 +507,7 @@ test "1.3.1 prin1 escapes lowercase symbol" {
     try std.testing.expectEqualStrings("|HiThere|", s);
 }
 
-test "1.3.1 prin1 escapes symbol with embedded pipe" {
+test "prin1 escapes symbol with embedded pipe" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -517,7 +517,7 @@ test "1.3.1 prin1 escapes symbol with embedded pipe" {
     try std.testing.expectEqualStrings("|a\\|b|", s);
 }
 
-test "1.3.1 prin1 escapes symbol that starts with digit" {
+test "prin1 escapes symbol that starts with digit" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -527,7 +527,7 @@ test "1.3.1 prin1 escapes symbol that starts with digit" {
     try std.testing.expectEqualStrings("|1A|", s);
 }
 
-test "1.3.1 prin1 escapes symbol with sign-then-digit" {
+test "prin1 escapes symbol with sign-then-digit" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -537,7 +537,7 @@ test "1.3.1 prin1 escapes symbol with sign-then-digit" {
     try std.testing.expectEqualStrings("|+1|", s);
 }
 
-test "1.3.1 prin1 leaves bare uppercase symbol unescaped" {
+test "prin1 leaves bare uppercase symbol unescaped" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -547,7 +547,7 @@ test "1.3.1 prin1 leaves bare uppercase symbol unescaped" {
     try std.testing.expectEqualStrings("FOO-BAR", s);
 }
 
-test "1.3.1 prin1 leaves keyword symbol unescaped" {
+test "prin1 leaves keyword symbol unescaped" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -557,7 +557,7 @@ test "1.3.1 prin1 leaves keyword symbol unescaped" {
     try std.testing.expectEqualStrings(":KEY", s);
 }
 
-test "1.3.1 prin1 leaves bare + symbol unescaped" {
+test "prin1 leaves bare + symbol unescaped" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -567,7 +567,7 @@ test "1.3.1 prin1 leaves bare + symbol unescaped" {
     try std.testing.expectEqualStrings("+", s);
 }
 
-test "1.3.1 prin1 escapes empty symbol name" {
+test "prin1 escapes empty symbol name" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -577,7 +577,7 @@ test "1.3.1 prin1 escapes empty symbol name" {
     try std.testing.expectEqualStrings("||", s);
 }
 
-test "1.3.1 prin1 escapes symbol with whitespace inside" {
+test "prin1 escapes symbol with whitespace inside" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -587,7 +587,7 @@ test "1.3.1 prin1 escapes symbol with whitespace inside" {
     try std.testing.expectEqualStrings("|HAS SPACE|", s);
 }
 
-test "1.3.1 prin1 escapes symbol with embedded backslash" {
+test "prin1 escapes symbol with embedded backslash" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -597,7 +597,7 @@ test "1.3.1 prin1 escapes symbol with embedded backslash" {
     try std.testing.expectEqualStrings("|a\\\\b|", s);
 }
 
-test "1.3.2 princ does not escape lowercase symbol" {
+test "princ does not escape lowercase symbol" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -607,7 +607,7 @@ test "1.3.2 princ does not escape lowercase symbol" {
     try std.testing.expectEqualStrings("HiThere", s);
 }
 
-test "1.3.1 prin1 leaves dot-prefixed name unescaped" {
+test "prin1 leaves dot-prefixed name unescaped" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();
@@ -617,7 +617,7 @@ test "1.3.1 prin1 leaves dot-prefixed name unescaped" {
     try std.testing.expectEqualStrings(".FOO", s);
 }
 
-test "1.3.1 prin1 escapes name that starts with .digit" {
+test "prin1 escapes name that starts with .digit" {
     const a = std.testing.allocator;
     var interner = symbol.Interner.init(a);
     defer interner.deinit();

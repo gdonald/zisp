@@ -2,4 +2,3 @@
 zig-out/
 coverage/
 *.o
-!ROADMAP.md

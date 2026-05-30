@@ -28,7 +28,7 @@ pub const TokenKind = enum {
     // Literals
     integer, // text holds the digit run (with optional sign / radix prefix)
     ratio, // text is "<num>/<denom>"; both halves may be signed
-    float, // 1.1.6 lands the parser; tokenizer recognizes the lexeme
+    float, // tokenizer recognizes the lexeme; reader parses it
     string, // text excludes surrounding quotes; \\ and \" escapes still raw
     character, // text excludes the leading "#\"; reader resolves the name
     symbol, // text holds the printed name (case-folded if not |..|-quoted)
@@ -43,10 +43,10 @@ pub const Token = struct {
     /// Slice of the original source covered by the token's payload, lifetime
     /// tied to the source buffer the tokenizer borrowed. The tokenizer never
     /// allocates; case folding, escape processing, and numeric parsing all
-    /// happen in the reader (Phase 1.2). For each kind:
+    /// happen in the reader. For each kind:
     ///   integer — the digits, with optional sign and radix prefix
     ///   ratio — "num/denom", either half optionally signed
-    ///   float — the full lexeme; parsing waits for 1.1.6
+    ///   float — the full lexeme; the reader parses it
     ///   string — between the quotes, escapes still raw
     ///   character — after the "#\\", e.g. "Space" or "A" or "U+03BB"
     ///   symbol — the printed name as it appeared, pipes included if any

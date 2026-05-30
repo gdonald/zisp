@@ -34,7 +34,7 @@ fn expectError(src: []const u8, want: Err) !void {
     return error.TestExpectedError;
 }
 
-// --- 1.1.1 whitespace ----------------------------------------------------
+// --- whitespace ----------------------------------------------------
 
 test "empty input yields eof" {
     try expectKinds("", &.{});
@@ -59,7 +59,7 @@ test "column tracks across whitespace" {
     try std.testing.expectEqual(@as(u32, 3), tk.pos.column);
 }
 
-// --- 1.1.2 line comments -------------------------------------------------
+// --- line comments -------------------------------------------------
 
 test "line comment skipped" {
     try expectKinds("; ignore me\n42", &.{.integer});
@@ -69,7 +69,7 @@ test "line comment at eof without newline" {
     try expectKinds("; trailing", &.{});
 }
 
-// --- 1.1.3 block comments with nesting ----------------------------------
+// --- block comments with nesting ----------------------------------
 
 test "block comment skipped" {
     try expectKinds("#| ignored |# 7", &.{.integer});
@@ -92,7 +92,7 @@ test "unterminated nested block comment errors" {
     try expectError("#| outer #| inner |# missing-outer", Err.UnexpectedEndOfInput);
 }
 
-// --- 1.1.4 integer literals ---------------------------------------------
+// --- integer literals ---------------------------------------------
 
 test "integer literal" {
     try expectKindAndText("42", .integer, "42");
@@ -110,7 +110,7 @@ test "integer with trailing dot" {
     try expectKindAndText("123.", .integer, "123.");
 }
 
-// --- 1.1.5 radix prefixes -----------------------------------------------
+// --- radix prefixes -----------------------------------------------
 
 test "binary radix #b" {
     try expectKindAndText("#b1010", .integer, "#b1010");
@@ -164,7 +164,7 @@ test "explicit radix above 36 errors" {
     try expectError("#37R0", Err.BadRadix);
 }
 
-// --- 1.1.7 ratio literals -----------------------------------------------
+// --- ratio literals -----------------------------------------------
 
 test "ratio literal" {
     try expectKindAndText("1/2", .ratio, "1/2");
@@ -208,7 +208,7 @@ test "numeric-shaped lexeme with trailing backslash is a symbol" {
     try std.testing.expectEqualStrings("1\\", got.text);
 }
 
-// --- 1.1.6 floats are recognized as a lexeme (1.1.6 parses them) --------
+// --- floats are recognized as a lexeme (the parser handles them) --------
 
 test "float with decimal point" {
     try expectKindAndText("1.5", .float, "1.5");
@@ -230,7 +230,7 @@ test "float with single-float exponent marker" {
     try expectKindAndText("1f0", .float, "1f0");
 }
 
-// --- 1.1.8 strings -------------------------------------------------------
+// --- strings -------------------------------------------------------
 
 test "string literal" {
     try expectKindAndText("\"hello\"", .string, "hello");
@@ -256,7 +256,7 @@ test "string with backslash at eof errors" {
     try expectError("\"oops\\", Err.UnexpectedEndOfInput);
 }
 
-// --- 1.1.9 characters ---------------------------------------------------
+// --- characters ---------------------------------------------------
 
 test "character single ascii" {
     try expectKindAndText("#\\A", .character, "A");
@@ -295,7 +295,7 @@ test "character single digit" {
     try expectKindAndText("#\\3", .character, "3");
 }
 
-// --- 1.1.10 keywords ----------------------------------------------------
+// --- keywords ----------------------------------------------------
 
 test "keyword bare" {
     try expectKindAndText(":foo", .keyword, "foo");
@@ -325,7 +325,7 @@ test "keyword pipe body absorbs escaped backslash" {
     try expectKindAndText(":|a\\\\b|", .keyword, "|a\\\\b|");
 }
 
-// --- 1.1.11 symbols, including |escaped| --------------------------------
+// --- symbols, including |escaped| --------------------------------
 
 test "symbol bare" {
     try expectKindAndText("hello", .symbol, "hello");

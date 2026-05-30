@@ -1,8 +1,7 @@
 # ansi-test
 
 The [ansi-test](https://gitlab.common-lisp.net/ansi-test/ansi-test) suite is the
-compliance gate for ROADMAP.md. Each phase declares which categories it expects
-to make pass, and `tests/run-ansi.sh` is what produces the numbers.
+compliance gate for zisp. `tests/run-ansi.sh` runs it and produces the numbers.
 
 ## Running
 
@@ -53,32 +52,14 @@ Per-category runs follow this shape (see `run_category` in
 
 The harness parses the trailing `PASS=N FAIL=M` line.
 
-## Phase mapping
-
 The categories enumerated at the top of `tests/run-ansi.sh` are ordered so
-partial runs are meaningful early in the project. Roughly:
-
-| Phase | Categories landed (cumulative)              |
-|-------|---------------------------------------------|
-| 1     | `reader/`                                    |
-| 2     | + `cons/`, `eval-and-compile/`, `data-and-control-flow/` (subset) |
-| 3     | + macros, `setf`, `printer/`, full `symbols/` |
-| 4     | + strings, arrays, sequences, hash-tables, numbers, characters, packages, pathnames, streams, types-and-classes |
-| 6     | + `conditions/`                              |
-| 7     | + `objects/`                                 |
-| 8     | + `iteration/`                               |
-
-Phase 5 (GC) and Phase 9 (compilation) don't add new categories — they
-make the existing suite run without OOM and faster, respectively.
-
-The compliance table in ROADMAP.md tracks file pass rates at each phase
-boundary.
+partial runs are meaningful early in the project.
 
 ## Status
 
-Until Phase 2 lands `--eval` and `load`, the harness can't actually drive
-the suite. Today it prints `STUB: would run <cat> (N .lsp files)` per
-category to prove the submodule and binary are wired up end-to-end.
+Until `--eval` and `load` exist, the harness can't actually drive the
+suite. Today it prints `STUB: would run <cat> (N .lsp files)` per category
+to prove the submodule and binary are wired up end-to-end.
 
 The TODO marker in `run_category()` is where the real `--eval` invocation
-goes; phase 2.9 wires it in.
+goes.

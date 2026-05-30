@@ -1,14 +1,14 @@
-//! Reader-macro dispatch table (ROADMAP Phase 1.2.11).
+//! Reader-macro dispatch table.
 //!
 //! In Common Lisp the reader is character-driven: each character has a
 //! syntax type and (for macro characters) an associated reader function.
-//! Phase 1's tokenizer bakes the spec's default syntax into a fast pre-pass,
+//! The tokenizer bakes the spec's default syntax into a fast pre-pass,
 //! so the dispatch the user can extend lives one layer up — it's keyed on
 //! the *reader-macro tokens* the tokenizer emits (`'`, `` ` ``, `,`, `,@`,
 //! `#'`, `#(`, `#+`, `#-`).
 //!
 //! The user-facing `set-macro-character` / `set-dispatch-macro-character`
-//! APIs wait for Phase 4 once Lisp-callable functions exist; for now this
+//! APIs wait for Lisp-callable functions to exist; for now this
 //! table holds Zig fn pointers, and the Reader queries it during dispatch.
 //! Built-in handlers are populated by `Readtable.initStandard`. Tests can
 //! override an entry to verify dispatch goes through the table rather than

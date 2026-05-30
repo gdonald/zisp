@@ -1,7 +1,7 @@
 //! Categorical runtime logger.
 //!
-//! Phase 0.8 of ROADMAP.md. Five categories — gc, reader, eval, compile, cli —
-//! each independently togglable.
+//! Five categories — gc, reader, eval, compile, cli — each independently
+//! togglable.
 //!
 //! Compile-time gating by build mode:
 //!
@@ -14,9 +14,9 @@
 //! load + branch; in ReleaseFast it's literally zero.
 //!
 //! `*trace-output*` (CLHS) is the Lisp-visible binding for trace output. It
-//! lands in Phase 4 once streams exist; for now we expose a placeholder hook
-//! at `trace_output_stream` that the eventual stream-aware version will
-//! replace.
+//! is not yet wired up — that waits for streams; for now we expose a
+//! placeholder hook at `trace_output_stream` that the eventual stream-aware
+//! version will replace.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -93,7 +93,7 @@ fn categoryFromName(name: []const u8) ?Category {
     return null;
 }
 
-/// Phase 4 will replace this with a real stream once `*standard-output*` and
-/// friends exist. For now: nothing reads it; the placeholder exists so 0.8.3
-/// has a concrete landing site that Phase 4 can grep for.
+/// This will be replaced with a real stream once `*standard-output*` and
+/// friends exist. For now nothing reads it; the placeholder exists so the
+/// stream-aware version has a concrete landing site to grep for.
 pub var trace_output_stream: ?*anyopaque = null;

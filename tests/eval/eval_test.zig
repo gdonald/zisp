@@ -273,7 +273,7 @@ test "cons with non-symbol head errors NotCallable" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
-    // ((1 2) 3) — head is a list, not a symbol; lambda forms wait for 2.3.7.
+    // ((1 2) 3) — head is a list, not a symbol; lambda forms are not yet supported.
     const inner_b = try fx.heap.allocCons(value.Value.fromFixnum(2), value.NIL);
     const inner_head = try fx.heap.allocCons(value.Value.fromFixnum(1), inner_b);
     const tail = try fx.heap.allocCons(value.Value.fromFixnum(3), value.NIL);

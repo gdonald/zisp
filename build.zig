@@ -12,21 +12,21 @@ pub fn build(b: *std.Build) void {
         "Run the ANSI Common Lisp test suite as part of `zig build`",
     ) orelse false;
 
-    // -Dprofile=true compiles in profiling hooks. No-op until Phase 9; the
+    // -Dprofile=true compiles in profiling hooks. Currently a no-op; the
     // option exists now so the rest of the tree can read it from build_options.
     const profile = b.option(
         bool,
         "profile",
-        "Enable profiling instrumentation (Phase 9 placeholder)",
+        "Enable profiling instrumentation (placeholder)",
     ) orelse false;
 
-    // -Dfreestanding=true is the Phase 10 embedded build. The option is
-    // accepted now and threaded through build_options so 10.2.1's grep-gate
-    // can detect violations the moment the freestanding tree starts taking shape.
+    // -Dfreestanding=true selects the embedded build. The option is accepted
+    // now and threaded through build_options so a grep-gate can detect
+    // violations the moment the freestanding tree starts taking shape.
     const freestanding = b.option(
         bool,
         "freestanding",
-        "Build for a freestanding target — no std.io/std.fs/std.os (Phase 10 placeholder)",
+        "Build for a freestanding target — no std.io/std.fs/std.os (placeholder)",
     ) orelse false;
 
     const build_options = b.addOptions();
@@ -112,7 +112,7 @@ pub fn build(b: *std.Build) void {
     // engage Zig's mutation loop, and also drives a deterministic
     // PRNG-based loop that runs each invocation regardless of fuzz
     // mode — the property check (no panic / no leak / typed errors
-    // only) holds for both. Phase 1.5.4 acceptance.
+    // only) holds for both.
     const fuzz_reader_module = b.createModule(.{
         .root_source_file = b.path("tests/reader/fuzz_test.zig"),
         .target = target,

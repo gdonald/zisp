@@ -1,17 +1,17 @@
-//! Source-position side-table for cons cells (ROADMAP Phase 1.2.12 / 1.4.1).
+//! Source-position side-table for cons cells.
 //!
 //! Cons cells are exactly 16 bytes (car + cdr) so per-cell metadata cannot
 //! live inline. Instead the reader writes positions into this side-table
-//! keyed on the cons's heap address. Macroexpansion (1.4.3) carries
-//! positions forward by copying entries when it builds new cons cells.
+//! keyed on the cons's heap address. Macroexpansion carries positions
+//! forward by copying entries when it builds new cons cells.
 
 const std = @import("std");
 const value = @import("value.zig");
 const Value = value.Value;
 
 /// Position of a token or cons in a source file. The file slice is
-/// borrowed; callers keep the underlying buffer alive (Phase 4 will
-/// switch to interned filenames).
+/// borrowed; callers keep the underlying buffer alive (interned filenames
+/// will replace this later).
 pub const SourcePosition = struct {
     file: []const u8,
     line: u32,

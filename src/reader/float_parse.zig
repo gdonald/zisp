@@ -1,4 +1,4 @@
-//! Common Lisp float-lexeme parser (ROADMAP Phase 1.1.6).
+//! Common Lisp float-lexeme parser.
 //!
 //! The tokenizer recognizes a float as a lexeme but doesn't compute its
 //! numeric value. This module turns the lexeme into a typed `f32`/`f64`
@@ -13,9 +13,9 @@
 //!   `d` / `D`      → double
 //!   `l` / `L`      → double (long — Lisp permits long = double)
 //!
-//! `*read-default-float-format*` is fixed at `single-float` for Phase 1.
-//! 4.6.x will let user code rebind it; this parser will read that variable
-//! when the dynamic-bindings substrate lands.
+//! `*read-default-float-format*` is fixed at `single-float` for now.
+//! User code will be able to rebind it later; this parser will read that
+//! variable when the dynamic-bindings substrate lands.
 
 const std = @import("std");
 

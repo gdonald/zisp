@@ -1,4 +1,4 @@
-//! Common Lisp printer (ROADMAP Phase 1.3).
+//! Common Lisp printer.
 //!
 //! Three CL-named entry points share one core driver `write`:
 //!
@@ -7,14 +7,13 @@
 //!   * `print`  — newline + prin1 + space (CL's "fresh-line + readable + space")
 //!
 //! Settings track `*print-readably*` / `*print-escape*` / `*print-base*` /
-//! `*print-radix*`. `*print-circle*` (1.3.5) only requires the safe-from-
+//! `*print-radix*`. `*print-circle*` only requires the safe-from-
 //! infinite-loop minimum here — cycles print as `#<cycle>` placeholders
 //! rather than the full `#1=` / `#1#` markers, which wait for the pretty
-//! printer at Phase 4.10.
+//! printer.
 //!
-//! For backward compatibility with Phase-0 callers, the bare `print` /
-//! `printToOwnedSlice` driver functions kept their prin1-style defaults
-//! and live alongside the CL-named variants.
+//! The bare `print` / `printToOwnedSlice` driver functions keep prin1-style
+//! defaults and live alongside the CL-named variants.
 
 const std = @import("std");
 const value = @import("value.zig");
@@ -25,8 +24,8 @@ const Value = value.Value;
 const MAX_DEPTH: u32 = 1024;
 
 /// Mirrors the CL `*print-...*` variables. The eventual special-variable
-/// plumbing (Phase 2) will read these out of the dynamic environment;
-/// Phase 1 just passes them per call.
+/// plumbing will read these out of the dynamic environment; for now they
+/// are passed per call.
 pub const Settings = struct {
     /// `*print-escape*` — wrap strings in quotes, escape symbols, etc.
     escape: bool = true,
@@ -73,19 +72,19 @@ pub fn write(allocator: std.mem.Allocator, writer: *std.Io.Writer, v: Value, set
     try printValue(&ctx, v, 0);
 }
 
-/// 1.3.1. Readable output: strings quoted, symbols pipe-escaped when
+/// Readable output: strings quoted, symbols pipe-escaped when
 /// they couldn't round-trip otherwise, characters as `#\X`/`#\Name`.
 pub fn prin1(allocator: std.mem.Allocator, writer: *std.Io.Writer, v: Value) PrintError!void {
     return write(allocator, writer, v, PRIN1);
 }
 
-/// 1.3.2. Human output: strings unquoted, symbols as bare names,
+/// Human output: strings unquoted, symbols as bare names,
 /// characters written as the character itself.
 pub fn princ(allocator: std.mem.Allocator, writer: *std.Io.Writer, v: Value) PrintError!void {
     return write(allocator, writer, v, PRINC);
 }
 
-/// 1.3.3. CL `print`: leading newline, then prin1, then trailing space.
+/// CL `print`: leading newline, then prin1, then trailing space.
 pub fn print(allocator: std.mem.Allocator, writer: *std.Io.Writer, v: Value) PrintError!void {
     try writer.writeByte('\n');
     try prin1(allocator, writer, v);

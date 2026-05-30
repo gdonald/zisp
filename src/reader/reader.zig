@@ -1,4 +1,4 @@
-//! Common Lisp reader (ROADMAP Phase 1.2).
+//! Common Lisp reader.
 //!
 //! Builds a `Value` tree from the token stream a `Tokenizer` produces.
 //! The reader is recursive-descent: each top-level call to `read` returns
@@ -10,11 +10,11 @@
 //! never owns its inputs — it borrows the tokenizer's source buffer for
 //! token text, and borrows the heap/interner for value construction.
 //!
-//! Reader-macro dispatch (1.2.11) goes through a `Readtable` so the
-//! handler set is replaceable. Source positions (1.2.12) are written to
-//! an optional side-table keyed on cons address.
+//! Reader-macro dispatch goes through a `Readtable` so the handler set is
+//! replaceable. Source positions are written to an optional side-table
+//! keyed on cons address.
 //!
-//! Conditional reading (1.2.10) runs through the same readtable: `#+` and
+//! Conditional reading runs through the same readtable: `#+` and
 //! `#-` consume a feature expression and a following form; the form is
 //! either kept or discarded based on whether the expression matches the
 //! reader's `features` list. A discarded form yields a `ReadStep.skipped`
@@ -44,7 +44,7 @@ const ReadStep = readtable_mod.ReadStep;
 const PositionTable = source_pos.PositionTable;
 const SourcePosition = source_pos.SourcePosition;
 
-/// 1.2.13 error type hierarchy. `EndOfInput` and `UnbalancedParens` cover
+/// Error type hierarchy. `EndOfInput` and `UnbalancedParens` cover
 /// list-shape failures; `BadToken` covers everything the tokenizer or
 /// numeric/character/string post-processing rejects. Allocator errors
 /// surface unwrapped so callers can distinguish OOM from bad input.
@@ -91,13 +91,13 @@ pub const Reader = struct {
     heap: *Heap,
     interner: *Interner,
     readtable: *Readtable,
-    /// Optional side-table for cons positions (1.2.12). When non-null the
+    /// Optional side-table for cons positions. When non-null the
     /// reader records `(file, line, column)` for every cons it allocates.
     positions: ?*PositionTable = null,
     /// Filename associated with this reader's input. Borrowed; the caller
     /// keeps it alive. Used only when `positions` is non-null.
     file: []const u8 = "",
-    /// Active feature symbols for `#+` / `#-` (1.2.10). Empty by default.
+    /// Active feature symbols for `#+` / `#-`. Empty by default.
     /// Borrowed: the caller keeps the slice alive. Names match feature
     /// expressions case-sensitively after stripping a leading `:` from
     /// either side, mirroring CL's "feature names compare by symbol-name".
@@ -106,7 +106,7 @@ pub const Reader = struct {
     /// between dotted-pair and final-element in a list, and to detect
     /// EOF without consuming.
     peeked: ?Token = null,
-    /// Position of the last error this reader returned (1.4.2). Reset
+    /// Position of the last error this reader returned. Reset
     /// to null at the start of every public `read` call. Use
     /// `lastErrorPos` to retrieve after a failing read.
     last_error_pos: ?SourcePosition = null,
@@ -146,7 +146,7 @@ pub const Reader = struct {
         self.features = features;
     }
 
-    /// 1.4.2 accessor. Position of the most recently raised reader error,
+    /// Accessor for the position of the most recently raised reader error,
     /// or null if the last public `read` call succeeded. The position
     /// resets at the start of every `read` so old errors don't leak into
     /// later results.
@@ -205,13 +205,13 @@ pub const Reader = struct {
         return cell;
     }
 
-    /// 1.2.1 entry. Returns one form, or null if the stream is empty
+    /// Entry point. Returns one form, or null if the stream is empty
     /// before any token. EOF mid-form raises `Error.EndOfInput`.
     ///
     /// Loops past `skipped` results so a top-level `#+nope x` followed by
     /// EOF returns null cleanly, and `#+nope x y` returns `y`.
     /// Resets `last_error_pos` so callers see the error position only
-    /// from the most recent failing read (1.4.2). If a deeper site
+    /// from the most recent failing read. If a deeper site
     /// didn't stamp a position before the error escaped, the wrapper
     /// captures the current tokenizer position as a best-effort fallback.
     pub fn read(self: *Reader) Error!?Value {
@@ -255,7 +255,7 @@ pub const Reader = struct {
 
     fn readFromToken(self: *Reader, t: Token) Error!ReadStep {
         // Reader-macro tokens go through the dispatch table so user-side
-        // overrides (1.2.11) actually fire. Everything else is a fixed
+        // overrides actually fire. Everything else is a fixed
         // shape the tokenizer already classified.
         if (self.readtable.get(t.kind)) |handler| {
             return try handler(@ptrCast(self));
@@ -279,7 +279,7 @@ pub const Reader = struct {
         };
     }
 
-    /// 1.2.2 / 1.2.3. `()` reads as `NIL`. Otherwise build a chain of cons
+    /// `()` reads as `NIL`. Otherwise build a chain of cons
     /// cells. A `.` token before the final element switches into dotted
     /// mode — exactly one form must follow, then the closing paren.
     /// Element-position dispatches that produce `skipped` are silently
@@ -327,7 +327,7 @@ pub const Reader = struct {
         }
     }
 
-    /// 1.2.4–1.2.8 helper: lower a reader-macro form into `(SYM x)`.
+    /// Helper: lower a reader-macro form into `(SYM x)`.
     /// The handlers below all funnel through this; the readtable picks
     /// which symbol to splice in.
     fn readMacroExpansion(self: *Reader, sym_name: []const u8) Error!Value {
@@ -340,7 +340,7 @@ pub const Reader = struct {
         return try self.allocConsAt(sym, tail, pos);
     }
 
-    /// 1.2.9. `#(a b c)` reads each form until the matching `)`, then
+    /// `#(a b c)` reads each form until the matching `)`, then
     /// allocates a flat T-vector. Empty `#()` is permitted. Conditional
     /// elements that produce `skipped` are silently elided, matching the
     /// list-reader behavior.
@@ -367,7 +367,7 @@ pub const Reader = struct {
         }
     }
 
-    /// 1.2.10. Read a feature expression, then read the following form.
+    /// Read a feature expression, then read the following form.
     /// Keep the form when the expression's truth value matches `want`;
     /// otherwise discard it and signal `skipped`.
     fn readConditional(self: *Reader, want: bool) Error!ReadStep {
@@ -377,17 +377,17 @@ pub const Reader = struct {
             return ReadStep{ .value = try self.readForm() };
         }
         // Read and discard the form. We don't bind `*read-suppress*` yet
-        // (that lands with Phase 2's special-variable plumbing); instead
-        // we read normally and throw away the result. Bad input inside a
-        // discarded form still raises errors — strictly less permissive
-        // than `*read-suppress* T`, but matches "fail loud" until Phase 2.
+        // (that waits for special-variable plumbing); instead we read
+        // normally and throw away the result. Bad input inside a discarded
+        // form still raises errors — strictly less permissive than
+        // `*read-suppress* T`, but matches "fail loud" for now.
         _ = try self.readForm();
         return ReadStep.skipped;
     }
 
     /// True if any feature in `self.features` shares a name with `query`,
-    /// stripping a leading `:` from either side. Phase 4 swaps this for a
-    /// real `KEYWORD::name` package lookup.
+    /// stripping a leading `:` from either side. This will be replaced with
+    /// a real `KEYWORD::name` package lookup once packages exist.
     pub fn hasFeature(self: *const Reader, query_name: []const u8) bool {
         const q = stripLeadingColon(query_name);
         for (self.features) |f| {
@@ -441,8 +441,8 @@ pub const Reader = struct {
         return try self.interner.intern(name);
     }
 
-    /// Keyword stub (1.1.10): until Phase 4 packages exist, intern with a
-    /// leading `:` so `:FOO` and `FOO` are distinct symbols. The printer
+    /// Keyword stub: until packages exist, intern with a leading `:` so
+    /// `:FOO` and `FOO` are distinct symbols. The printer
     /// reads the leading `:` back out for free.
     fn parseKeywordAt(self: *Reader, text: []const u8, p: Position) Error!Value {
         var buf: [256]u8 = undefined;
@@ -469,7 +469,7 @@ pub const Reader = struct {
     fn parseIntegerAt(self: *Reader, text: []const u8, p: Position) Error!Value {
         const n = parseIntegerLexeme(text) catch return self.errAt(p, Error.BadToken);
         if (n < value.FIXNUM_MIN or n > value.FIXNUM_MAX) {
-            // Bignums land in Phase 4. For now reject overflow loudly.
+            // Bignums are not yet supported. For now reject overflow loudly.
             return self.errAt(p, Error.BadToken);
         }
         return Value.fromFixnum(n);

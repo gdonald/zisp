@@ -128,7 +128,7 @@ pub const Value = extern struct {
 pub const SPECIAL_UNBOUND: Value = Value.fromSpecial(0);
 pub const SPECIAL_EOF: Value = Value.fromSpecial(1);
 
-// NIL and T are populated when the symbol table is initialized (Phase 0.4).
+// NIL and T are populated when the symbol table is initialized.
 // Their canonical Value forms are exposed so identity checks can use raw equality.
 pub var NIL: Value = .{ .raw = 0 };
 pub var T: Value = .{ .raw = 0 };

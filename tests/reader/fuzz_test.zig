@@ -1,4 +1,4 @@
-//! ROADMAP Phase 1.5.4.
+//! Reader fuzz tests.
 //!
 //! Reader fuzzer driven by Zig's `std.testing.fuzz` / `std.testing.Smith`
 //! infrastructure. The property is "never panic": for any byte sequence,
@@ -69,7 +69,7 @@ fn fuzzReader(_: void, smith: *std.testing.Smith) !void {
     }
 }
 
-test "1.5.4 reader fuzz: no input crashes the reader" {
+test "reader fuzz: no input crashes the reader" {
     try std.testing.fuzz({}, fuzzReader, .{});
 }
 
@@ -77,7 +77,7 @@ test "1.5.4 reader fuzz: no input crashes the reader" {
 // the binary isn't built with `-ffuzz`. Generates 2000 random byte
 // strings biased toward syntactically interesting characters and
 // verifies the same no-panic property.
-test "1.5.4 reader fuzz: deterministic mass invocation" {
+test "reader fuzz: deterministic mass invocation" {
     const a = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xfeed_face_cafe_babe);
     const rand = prng.random();

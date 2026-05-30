@@ -1,4 +1,4 @@
-//! ROADMAP Phase 1.2 reader tests.
+//! Reader tests.
 //!
 //! Each test sets up a fresh tokenizer, heap, and interner, reads one or
 //! more forms, and asserts on the resulting `Value` structure (or on the
@@ -59,9 +59,9 @@ fn expectPrints(allocator: std.mem.Allocator, v: Value, expected: []const u8) !v
     try std.testing.expectEqualStrings(expected, got);
 }
 
-// --- 1.2.1 / atoms -------------------------------------------------------
+// --- atoms -------------------------------------------------------
 
-test "1.2.1 read positive integer" {
+test "read positive integer" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "42");
@@ -69,28 +69,28 @@ test "1.2.1 read positive integer" {
     try std.testing.expectEqual(@as(i64, 42), v.toFixnum());
 }
 
-test "1.2.1 read negative integer" {
+test "read negative integer" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "-17");
     try std.testing.expectEqual(@as(i64, -17), v.toFixnum());
 }
 
-test "1.2.1 read radix integer #xff" {
+test "read radix integer #xff" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "#xff");
     try std.testing.expectEqual(@as(i64, 255), v.toFixnum());
 }
 
-test "1.2.1 read explicit radix integer" {
+test "read explicit radix integer" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "#16r1F");
     try std.testing.expectEqual(@as(i64, 31), v.toFixnum());
 }
 
-test "1.2.1 read symbol upcased" {
+test "read symbol upcased" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "foo-bar");
@@ -98,14 +98,14 @@ test "1.2.1 read symbol upcased" {
     try std.testing.expectEqualStrings("FOO-BAR", symbol.name(v));
 }
 
-test "1.2.1 read |escaped pipes| preserves case" {
+test "read |escaped pipes| preserves case" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "|HiThere|");
     try std.testing.expectEqualStrings("HiThere", symbol.name(v));
 }
 
-test "1.2.1 same name interns to same symbol" {
+test "same name interns to same symbol" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const a = try readOne(s, "foo");
@@ -113,7 +113,7 @@ test "1.2.1 same name interns to same symbol" {
     try std.testing.expect(a.equalsRaw(b));
 }
 
-test "1.2.1 read string with escapes" {
+test "read string with escapes" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "\"hello \\\"world\\\"\"");
@@ -122,7 +122,7 @@ test "1.2.1 read string with escapes" {
     try std.testing.expectEqualStrings("hello \"world\"", got);
 }
 
-test "1.2.1 read character literals" {
+test "read character literals" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const a = try readOne(s, "#\\a");
@@ -135,7 +135,7 @@ test "1.2.1 read character literals" {
     try std.testing.expectEqual(@as(u21, 0x03BB), u.toChar());
 }
 
-test "1.2.1 read float and ratio" {
+test "read float and ratio" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const f = try readOne(s, "1.5");
@@ -154,7 +154,7 @@ test "1.2.1 read float and ratio" {
     try std.testing.expectEqual(@as(i64, 4), ratio.denominator);
 }
 
-test "1.2.1 read keyword stub" {
+test "read keyword stub" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, ":foo");
@@ -162,16 +162,16 @@ test "1.2.1 read keyword stub" {
     try std.testing.expectEqualStrings(":FOO", symbol.name(v));
 }
 
-// --- 1.2.2 / lists / dotted pairs ----------------------------------------
+// --- lists / dotted pairs ----------------------------------------
 
-test "1.2.3 empty list reads as NIL" {
+test "empty list reads as NIL" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "()");
     try std.testing.expect(v.equalsRaw(value.NIL));
 }
 
-test "1.2.2 proper list of three" {
+test "proper list of three" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "(1 2 3)");
@@ -182,7 +182,7 @@ test "1.2.2 proper list of three" {
     try std.testing.expect(heap.cdr(heap.cdr(heap.cdr(v))).equalsRaw(value.NIL));
 }
 
-test "1.2.2 dotted pair" {
+test "dotted pair" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "(1 . 2)");
@@ -191,7 +191,7 @@ test "1.2.2 dotted pair" {
     try std.testing.expectEqual(@as(i64, 2), heap.cdr(v).toFixnum());
 }
 
-test "1.2.2 dotted tail in longer list" {
+test "dotted tail in longer list" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "(1 2 . 3)");
@@ -199,7 +199,7 @@ test "1.2.2 dotted tail in longer list" {
     try std.testing.expectEqual(@as(i64, 3), tail.toFixnum());
 }
 
-test "1.2.2 nested lists" {
+test "nested lists" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "((a b) (c d))");
@@ -209,9 +209,9 @@ test "1.2.2 nested lists" {
     try std.testing.expectEqualStrings("B", symbol.name(heap.car(heap.cdr(first))));
 }
 
-// --- 1.2.4–1.2.8 / reader macros ----------------------------------------
+// --- reader macros ----------------------------------------
 
-test "1.2.4 quote 'x → (QUOTE x)" {
+test "quote 'x → (QUOTE x)" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "'foo");
@@ -221,28 +221,28 @@ test "1.2.4 quote 'x → (QUOTE x)" {
     try std.testing.expect(heap.cdr(heap.cdr(v)).equalsRaw(value.NIL));
 }
 
-test "1.2.5 backquote `x → (QUASIQUOTE x)" {
+test "backquote `x → (QUASIQUOTE x)" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "`foo");
     try std.testing.expectEqualStrings("QUASIQUOTE", symbol.name(heap.car(v)));
 }
 
-test "1.2.6 unquote ,x → (UNQUOTE x)" {
+test "unquote ,x → (UNQUOTE x)" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, ",foo");
     try std.testing.expectEqualStrings("UNQUOTE", symbol.name(heap.car(v)));
 }
 
-test "1.2.7 unquote-splicing ,@x → (UNQUOTE-SPLICING x)" {
+test "unquote-splicing ,@x → (UNQUOTE-SPLICING x)" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, ",@foo");
     try std.testing.expectEqualStrings("UNQUOTE-SPLICING", symbol.name(heap.car(v)));
 }
 
-test "1.2.8 #'fn → (FUNCTION fn)" {
+test "#'fn → (FUNCTION fn)" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "#'car");
@@ -250,7 +250,7 @@ test "1.2.8 #'fn → (FUNCTION fn)" {
     try std.testing.expectEqualStrings("CAR", symbol.name(heap.car(heap.cdr(v))));
 }
 
-test "1.2.5 nested backquote/unquote" {
+test "nested backquote/unquote" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // `(a ,b ,@c)
@@ -265,9 +265,9 @@ test "1.2.5 nested backquote/unquote" {
     try std.testing.expectEqualStrings("UNQUOTE-SPLICING", symbol.name(heap.car(third)));
 }
 
-// --- 1.2.9 / vectors ----------------------------------------------------
+// --- vectors ----------------------------------------------------
 
-test "1.2.9 vector literal #(1 2 3)" {
+test "vector literal #(1 2 3)" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "#(1 2 3)");
@@ -280,16 +280,16 @@ test "1.2.9 vector literal #(1 2 3)" {
     try std.testing.expectEqual(@as(i64, 3), items[2].toFixnum());
 }
 
-test "1.2.9 empty vector #()" {
+test "empty vector #()" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "#()");
     try std.testing.expectEqual(@as(usize, 0), heap.asVector(v).len);
 }
 
-// --- 1.2.13 / errors ----------------------------------------------------
+// --- errors ----------------------------------------------------
 
-test "1.2.13 unbalanced rparen" {
+test "unbalanced rparen" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init(")");
@@ -297,7 +297,7 @@ test "1.2.13 unbalanced rparen" {
     try std.testing.expectError(ReaderError.UnbalancedParens, rd.read());
 }
 
-test "1.2.13 EOF mid-list" {
+test "EOF mid-list" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("(1 2");
@@ -305,7 +305,7 @@ test "1.2.13 EOF mid-list" {
     try std.testing.expectError(ReaderError.EndOfInput, rd.read());
 }
 
-test "1.2.13 dot at start of list is BadToken" {
+test "dot at start of list is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("(. 1)");
@@ -313,7 +313,7 @@ test "1.2.13 dot at start of list is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "1.2.13 empty stream returns null" {
+test "empty stream returns null" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("   ;; just a comment\n");
@@ -361,7 +361,7 @@ test "print( read('quote-form) ) round-trips structurally" {
     try expectPrints(s.allocator, v, "(QUOTE FOO)");
 }
 
-// --- 1.2.11 / readtable dispatch ----------------------------------------
+// --- readtable dispatch ----------------------------------------
 
 const Readtable = zisp.reader.Readtable;
 const TokenKind = zisp.reader.TokenKind;
@@ -379,7 +379,7 @@ fn overrideQuoteHandler(ctx: *anyopaque) zisp.reader.readtable.HandlerError!zisp
     return .{ .value = sym };
 }
 
-test "1.2.11 dispatch goes through the readtable" {
+test "dispatch goes through the readtable" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var rt = Readtable.initStandard(.{
@@ -399,7 +399,7 @@ test "1.2.11 dispatch goes through the readtable" {
     try std.testing.expectEqualStrings("OVERRIDDEN-QUOTE", symbol.name(v));
 }
 
-test "1.2.11 standard readtable still serves built-ins after override test" {
+test "standard readtable still serves built-ins after override test" {
     // Sanity check: each test gets its own readtable, so the previous
     // override didn't leak into the global.
     const s = try newSetup(std.testing.allocator);
@@ -408,9 +408,9 @@ test "1.2.11 standard readtable still serves built-ins after override test" {
     try std.testing.expectEqualStrings("QUOTE", symbol.name(heap.car(v)));
 }
 
-// --- 1.2.12 / source positions on cons cells ----------------------------
+// --- source positions on cons cells ----------------------------
 
-test "1.2.12 records position for the head cons of a list" {
+test "records position for the head cons of a list" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var positions = PositionTable.init(s.allocator);
@@ -433,7 +433,7 @@ test "1.2.12 records position for the head cons of a list" {
     try std.testing.expectEqual(@as(u32, 1), pos.column);
 }
 
-test "1.2.12 second-line list gets line=2" {
+test "second-line list gets line=2" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var positions = PositionTable.init(s.allocator);
@@ -453,7 +453,7 @@ test "1.2.12 second-line list gets line=2" {
     try std.testing.expectEqual(@as(u32, 3), pos.column);
 }
 
-test "1.2.12 every cons cell in a 3-element list has a position" {
+test "every cons cell in a 3-element list has a position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var positions = PositionTable.init(s.allocator);
@@ -477,7 +477,7 @@ test "1.2.12 every cons cell in a 3-element list has a position" {
     try std.testing.expectEqual(@as(u32, 3), seen);
 }
 
-test "1.2.12 reader without position table records nothing" {
+test "reader without position table records nothing" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "(1 2)");
@@ -558,7 +558,7 @@ test "top-level dot is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "1.2.10 #+ with absent feature skips form" {
+test "#+ with absent feature skips form" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // No features configured → `foo` is absent → discard `bar` → return `baz`.
@@ -568,7 +568,7 @@ test "1.2.10 #+ with absent feature skips form" {
     try std.testing.expectEqualStrings("BAZ", symbol.name(v));
 }
 
-test "1.2.10 #- with absent feature keeps form" {
+test "#- with absent feature keeps form" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // No features → `foo` absent → `#-foo bar` keeps `bar`.
@@ -642,9 +642,9 @@ test "unknown character literal name is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-// --- 1.4.2 / reader errors carry source position ------------------------
+// --- reader errors carry source position ------------------------
 
-test "1.4.2 unbalanced rparen carries position" {
+test "unbalanced rparen carries position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("\n  )");
@@ -655,7 +655,7 @@ test "1.4.2 unbalanced rparen carries position" {
     try std.testing.expectEqual(@as(u32, 3), pos.column);
 }
 
-test "1.4.2 EOF mid-list reports lparen position" {
+test "EOF mid-list reports lparen position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("(1 2");
@@ -674,7 +674,7 @@ test "1.4.2 EOF mid-list reports lparen position" {
     try std.testing.expectEqual(@as(u32, 1), pos.column);
 }
 
-test "1.4.2 dot at start of list points at the dot" {
+test "dot at start of list points at the dot" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("(  . 1)");
@@ -685,7 +685,7 @@ test "1.4.2 dot at start of list points at the dot" {
     try std.testing.expectEqual(@as(u32, 4), pos.column);
 }
 
-test "1.4.2 dotted-pair without closer points at the offending token" {
+test "dotted-pair without closer points at the offending token" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("(1 . 2 3)");
@@ -697,7 +697,7 @@ test "1.4.2 dotted-pair without closer points at the offending token" {
     try std.testing.expectEqual(@as(u32, 8), pos.column);
 }
 
-test "1.4.2 vector EOF reports the EOF position" {
+test "vector EOF reports the EOF position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#(1 2");
@@ -707,7 +707,7 @@ test "1.4.2 vector EOF reports the EOF position" {
     try std.testing.expectEqual(@as(u32, 1), pos.line);
 }
 
-test "1.4.2 vector dot reports the dot position" {
+test "vector dot reports the dot position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("#(1 . 2)");
@@ -717,7 +717,7 @@ test "1.4.2 vector dot reports the dot position" {
     try std.testing.expectEqual(@as(u32, 5), pos.column);
 }
 
-test "1.4.2 tokenizer error captures pre-token position" {
+test "tokenizer error captures pre-token position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("  #$");
@@ -729,7 +729,7 @@ test "1.4.2 tokenizer error captures pre-token position" {
     try std.testing.expectEqual(@as(u32, 3), pos.column);
 }
 
-test "1.4.2 last_error_pos resets on subsequent successful read" {
+test "last_error_pos resets on subsequent successful read" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init(") 42");
@@ -741,7 +741,7 @@ test "1.4.2 last_error_pos resets on subsequent successful read" {
     try std.testing.expect(rd.lastErrorPos() == null);
 }
 
-test "1.4.2 unknown character literal carries token position" {
+test "unknown character literal carries token position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     var tk = Tokenizer.init("  #\\BogusName");
@@ -751,7 +751,7 @@ test "1.4.2 unknown character literal carries token position" {
     try std.testing.expectEqual(@as(u32, 3), pos.column);
 }
 
-test "1.4.2 integer that overflows fixnum but fits i64 carries position" {
+test "integer that overflows fixnum but fits i64 carries position" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // FIXNUM_MAX is 2^60 - 1; 2^60 = 1152921504606846976 still fits i64.
@@ -762,7 +762,7 @@ test "1.4.2 integer that overflows fixnum but fits i64 carries position" {
     try std.testing.expectEqual(@as(u32, 3), pos.column);
 }
 
-test "1.4.2 fallback captures position when deeper site didn't stamp" {
+test "fallback captures position when deeper site didn't stamp" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // (xor a b) as a feature expression hits evalFeatureExpr's BadToken
