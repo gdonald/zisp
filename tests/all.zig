@@ -18,5 +18,10 @@ comptime {
     _ = @import("eval/env_test.zig");
     _ = @import("eval/eval_test.zig");
     _ = @import("eval/special_forms_test.zig");
+    _ = @import("eval/tagbody_corpus_test.zig");
+    _ = @import("eval/catch_throw_corpus_test.zig");
+    _ = @import("eval/multiple_values_corpus_test.zig");
+    _ = @import("eval/lambda_list_test.zig");
+    _ = @import("eval/key_args_corpus_test.zig");
     _ = @import("cli_test.zig");
 }

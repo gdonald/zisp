@@ -25,6 +25,8 @@ pub const NativeError = error{
     ControlError,
     BlockReturn,
     Go,
+    Throw,
+    ProgramError,
 } || std.mem.Allocator.Error;
 
 pub const Closure = struct {

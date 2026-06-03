@@ -4,6 +4,7 @@ const heap_mod = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const env_mod = @import("env.zig");
 const function = @import("function.zig");
+const lambda_list = @import("lambda_list.zig");
 
 const Value = value.Value;
 const Heap = heap_mod.Heap;
@@ -28,6 +29,7 @@ fn defaultMacroExpander(ev: *Evaluator, form: Value) Error!?Value {
 
 const BlockEntry = struct { name: Value, id: u64 };
 const TagbodyEntry = struct { body: Value, id: u64 };
+const CatchEntry = struct { tag: Value, id: u64 };
 pub const GoTarget = struct { id: u64, pos: Value };
 
 pub const Evaluator = struct {
@@ -40,11 +42,20 @@ pub const Evaluator = struct {
     block_stack: std.ArrayList(BlockEntry) = .empty,
     block_counter: u64 = 0,
     return_id: u64 = 0,
-    return_value: Value = undefined,
     tagbody_stack: std.ArrayList(TagbodyEntry) = .empty,
     tagbody_counter: u64 = 0,
     go_id: u64 = 0,
     go_target: Value = undefined,
+    catch_stack: std.ArrayList(CatchEntry) = .empty,
+    catch_counter: u64 = 0,
+    throw_id: u64 = 0,
+    // Complete multiple-value list of the most recently evaluated form.
+    // After any normal `eval` return, `values.items[0]` (or NIL when empty)
+    // equals the returned primary value.
+    values: std.ArrayList(Value) = .empty,
+    // Value list carried by an in-flight return-from / throw, read by the
+    // catching block / catch frame.
+    transfer_values: std.ArrayList(Value) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -52,7 +63,6 @@ pub const Evaluator = struct {
             .heap = heap_ref,
             .interner = interner,
             .env = Env.init(allocator),
-            .return_value = value.NIL,
             .go_target = value.NIL,
         };
     }
@@ -62,6 +72,81 @@ pub const Evaluator = struct {
         self.special_forms.deinit(self.allocator);
         self.block_stack.deinit(self.allocator);
         self.tagbody_stack.deinit(self.allocator);
+        self.catch_stack.deinit(self.allocator);
+        self.values.deinit(self.allocator);
+        self.transfer_values.deinit(self.allocator);
+    }
+
+    /// Record `v` as the sole value of the current form and return it.
+    pub fn set1(self: *Evaluator, v: Value) Error!Value {
+        self.values.clearRetainingCapacity();
+        try self.values.append(self.allocator, v);
+        return v;
+    }
+
+    /// Record `vals` as the complete value list of the current form and
+    /// return the primary value (NIL when there are zero values).
+    pub fn setValues(self: *Evaluator, vals: []const Value) Error!Value {
+        self.values.clearRetainingCapacity();
+        try self.values.appendSlice(self.allocator, vals);
+        return if (vals.len == 0) value.NIL else vals[0];
+    }
+
+    /// Copy the current value list into the transfer channel so a catching
+    /// frame can recover it after an in-flight return-from / throw.
+    pub fn stashTransferValues(self: *Evaluator) Error!void {
+        self.transfer_values.clearRetainingCapacity();
+        try self.transfer_values.appendSlice(self.allocator, self.values.items);
+    }
+
+    /// Restore the current value list from the transfer channel.
+    pub fn unstashTransferValues(self: *Evaluator) Error!Value {
+        return self.setValues(self.transfer_values.items);
+    }
+
+    pub const TransferState = struct {
+        return_id: u64,
+        go_id: u64,
+        go_target: Value,
+        throw_id: u64,
+    };
+
+    pub fn saveTransferState(self: *const Evaluator) TransferState {
+        return .{
+            .return_id = self.return_id,
+            .go_id = self.go_id,
+            .go_target = self.go_target,
+            .throw_id = self.throw_id,
+        };
+    }
+
+    pub fn restoreTransferState(self: *Evaluator, s: TransferState) void {
+        self.return_id = s.return_id;
+        self.go_id = s.go_id;
+        self.go_target = s.go_target;
+        self.throw_id = s.throw_id;
+    }
+
+    pub fn pushCatch(self: *Evaluator, tag: Value) Error!u64 {
+        self.catch_counter += 1;
+        const id = self.catch_counter;
+        try self.catch_stack.append(self.allocator, .{ .tag = tag, .id = id });
+        return id;
+    }
+
+    pub fn popCatch(self: *Evaluator) void {
+        _ = self.catch_stack.pop();
+    }
+
+    pub fn findCatch(self: *const Evaluator, tag: Value) ?u64 {
+        var i = self.catch_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.catch_stack.items[i].tag.equalsRaw(tag)) {
+                return self.catch_stack.items[i].id;
+            }
+        }
+        return null;
     }
 
     pub fn pushTagbody(self: *Evaluator, body: Value) Error!u64 {
@@ -131,11 +216,11 @@ pub const Evaluator = struct {
     }
 
     pub fn eval(self: *Evaluator, form: Value) Error!Value {
-        if (form.equalsRaw(value.NIL)) return form;
-        if (form.equalsRaw(value.T)) return form;
+        if (form.equalsRaw(value.NIL)) return self.set1(form);
+        if (form.equalsRaw(value.T)) return self.set1(form);
         switch (form.tag()) {
-            .fixnum, .char, .heap, .special => return form,
-            .symbol => return self.evalSymbol(form),
+            .fixnum, .char, .heap, .special => return self.set1(form),
+            .symbol => return self.set1(try self.evalSymbol(form)),
             .cons => return self.evalCons(form),
             ._reserved6, ._reserved7 => return Error.TypeError,
         }
@@ -186,15 +271,14 @@ pub const Evaluator = struct {
         if (!isFunction(fn_v)) return Error.NotCallable;
         const f = asFunction(fn_v);
         switch (f.kind) {
-            .native => return f.payload.native(@ptrCast(self), args),
+            // Natives are single-valued; multiple-value producers are special
+            // forms, so collapsing the channel here is always correct.
+            .native => return self.set1(try f.payload.native(@ptrCast(self), args)),
             .closure => return self.applyClosure(&f.payload.closure, args),
         }
     }
 
     fn applyClosure(self: *Evaluator, c: *const function.Closure, args: []const Value) Error!Value {
-        const param_count = try countList(c.params);
-        if (param_count != args.len) return Error.WrongArgCount;
-
         const prev_chain = self.env.setValueChain(c.captured_env);
         defer _ = self.env.setValueChain(prev_chain);
 
@@ -204,14 +288,11 @@ pub const Evaluator = struct {
         const frame = try self.env.pushValueFrame();
         defer self.env.popValueFrame();
 
-        var rest = c.params;
-        var i: usize = 0;
-        while (!rest.equalsRaw(value.NIL)) : (i += 1) {
-            const sym = heap_mod.car(rest);
-            try frame.bind(self.env.allocator, sym, args[i]);
-            rest = heap_mod.cdr(rest);
-        }
+        try lambda_list.bindInto(self, c.params, args, frame);
 
+        // An empty body yields a single NIL; otherwise the last form's
+        // value list (set by its eval) propagates out unchanged.
+        if (!c.body.isCons()) return self.set1(value.NIL);
         var result = value.NIL;
         var body = c.body;
         while (!body.equalsRaw(value.NIL)) {
@@ -226,14 +307,3 @@ pub const Evaluator = struct {
         return @ptrCast(@alignCast(p));
     }
 };
-
-fn countList(list: Value) Error!usize {
-    var n: usize = 0;
-    var cur = list;
-    while (!cur.equalsRaw(value.NIL)) {
-        if (!cur.isCons()) return Error.BadArgList;
-        n += 1;
-        cur = heap_mod.cdr(cur);
-    }
-    return n;
-}

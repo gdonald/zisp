@@ -1514,6 +1514,736 @@ test "go: non-symbol non-integer tag rejected" {
     try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
 }
 
+test "catch: body with no throw returns last value" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    const tag = try fx.sym(":A");
+    // (catch :a 1 2 3)
+    const form = try fx.list(&.{
+        catch_s,                   tag,
+        value.Value.fromFixnum(1), value.Value.fromFixnum(2),
+        value.Value.fromFixnum(3),
+    });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 3), r.toFixnum());
+}
+
+test "throw: transfers value to matching catch" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    const throw_s = fx.interner.lookup("THROW").?;
+    const tag = try fx.sym(":A");
+    // (catch :a (throw :a 42) 99)
+    const thr = try fx.list(&.{ throw_s, tag, value.Value.fromFixnum(42) });
+    const form = try fx.list(&.{ catch_s, tag, thr, value.Value.fromFixnum(99) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 42), r.toFixnum());
+}
+
+test "catch: empty arg list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{catch_s})));
+}
+
+test "throw: missing tag rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const throw_s = fx.interner.lookup("THROW").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{throw_s})));
+}
+
+test "throw: missing result rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const throw_s = fx.interner.lookup("THROW").?;
+    const tag = try fx.sym(":A");
+    // (throw :a) — no result form
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{ throw_s, tag })));
+}
+
+test "throw: extra args rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const throw_s = fx.interner.lookup("THROW").?;
+    const tag = try fx.sym(":A");
+    // (throw :a 1 2) — too many forms
+    const form = try fx.list(&.{ throw_s, tag, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "throw: no matching catch signals control-error" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const throw_s = fx.interner.lookup("THROW").?;
+    const tag = try fx.sym(":A");
+    // (throw :a 1) with no enclosing catch
+    const form = try fx.list(&.{ throw_s, tag, value.Value.fromFixnum(1) });
+    try std.testing.expectError(Error.ControlError, fx.ev.eval(form));
+}
+
+test "throw: unmatched tag propagates past a different catch" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    const throw_s = fx.interner.lookup("THROW").?;
+    const a = try fx.sym(":A");
+    const b = try fx.sym(":B");
+    // (catch :a (catch :b (throw :a 7)) 99) — throw :a skips the :b catch.
+    const thr = try fx.list(&.{ throw_s, a, value.Value.fromFixnum(7) });
+    const inner = try fx.list(&.{ catch_s, b, thr });
+    const form = try fx.list(&.{ catch_s, a, inner, value.Value.fromFixnum(99) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 7), r.toFixnum());
+}
+
+test "unwind-protect: normal completion runs cleanup, returns protected value" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const r = try fx.sym("R");
+    const cl = try fx.sym("CL");
+    symbol_mod.symbol(r).value_cell = value.Value.fromFixnum(0);
+    symbol_mod.symbol(cl).value_cell = value.Value.fromFixnum(0);
+
+    // (unwind-protect (setq r 4) (setq cl 8))
+    const protected = try fx.list(&.{ setq, r, value.Value.fromFixnum(4) });
+    const cleanup = try fx.list(&.{ setq, cl, value.Value.fromFixnum(8) });
+    const form = try fx.list(&.{ uwp, protected, cleanup });
+    const result = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 4), result.toFixnum());
+    try std.testing.expectEqual(@as(i64, 8), symbol_mod.symbol(cl).value_cell.toFixnum());
+}
+
+test "unwind-protect: cleanup runs while a throw is in flight" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    const throw_s = fx.interner.lookup("THROW").?;
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const tag = try fx.sym(":A");
+    const cl = try fx.sym("CL");
+    symbol_mod.symbol(cl).value_cell = value.Value.fromFixnum(0);
+
+    // (catch :a (unwind-protect (throw :a 1) (setq cl 5)))
+    const thr = try fx.list(&.{ throw_s, tag, value.Value.fromFixnum(1) });
+    const cleanup = try fx.list(&.{ setq, cl, value.Value.fromFixnum(5) });
+    const prot = try fx.list(&.{ uwp, thr, cleanup });
+    const form = try fx.list(&.{ catch_s, tag, prot });
+    const result = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 1), result.toFixnum());
+    try std.testing.expectEqual(@as(i64, 5), symbol_mod.symbol(cl).value_cell.toFixnum());
+}
+
+test "unwind-protect: cleanup runs while a go is in flight" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    const cl = try fx.sym("CL");
+    const skip = try fx.sym("SKIP");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+    symbol_mod.symbol(cl).value_cell = value.Value.fromFixnum(0);
+
+    // (tagbody (unwind-protect (go skip) (setq cl 5)) (setq x 99) skip (setq x 7))
+    const go_skip = try fx.list(&.{ go, skip });
+    const cleanup = try fx.list(&.{ setq, cl, value.Value.fromFixnum(5) });
+    const prot = try fx.list(&.{ uwp, go_skip, cleanup });
+    const set99 = try fx.list(&.{ setq, x, value.Value.fromFixnum(99) });
+    const set7 = try fx.list(&.{ setq, x, value.Value.fromFixnum(7) });
+    const form = try fx.list(&.{ tb, prot, set99, skip, set7 });
+    _ = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 7), symbol_mod.symbol(x).value_cell.toFixnum());
+    try std.testing.expectEqual(@as(i64, 5), symbol_mod.symbol(cl).value_cell.toFixnum());
+}
+
+test "unwind-protect: cleanup runs while a return-from is in flight" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block_s = fx.interner.lookup("BLOCK").?;
+    const ret = fx.interner.lookup("RETURN-FROM").?;
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const b = try fx.sym("B");
+    const cl = try fx.sym("CL");
+    symbol_mod.symbol(cl).value_cell = value.Value.fromFixnum(0);
+
+    // (block b (unwind-protect (return-from b 3) (setq cl 9)))
+    const rf = try fx.list(&.{ ret, b, value.Value.fromFixnum(3) });
+    const cleanup = try fx.list(&.{ setq, cl, value.Value.fromFixnum(9) });
+    const prot = try fx.list(&.{ uwp, rf, cleanup });
+    const form = try fx.list(&.{ block_s, b, prot });
+    const result = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 3), result.toFixnum());
+    try std.testing.expectEqual(@as(i64, 9), symbol_mod.symbol(cl).value_cell.toFixnum());
+}
+
+test "unwind-protect: cleanup's own non-local exit supersedes" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const tb = fx.interner.lookup("TAGBODY").?;
+    const go = fx.interner.lookup("GO").?;
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    const out = try fx.sym("OUT");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+
+    // (tagbody (unwind-protect (setq x 1) (go out)) (setq x 2) out (setq x 5))
+    const set1 = try fx.list(&.{ setq, x, value.Value.fromFixnum(1) });
+    const go_out = try fx.list(&.{ go, out });
+    const prot = try fx.list(&.{ uwp, set1, go_out });
+    const set2 = try fx.list(&.{ setq, x, value.Value.fromFixnum(2) });
+    const set5 = try fx.list(&.{ setq, x, value.Value.fromFixnum(5) });
+    const form = try fx.list(&.{ tb, prot, set2, out, set5 });
+    _ = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 5), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "unwind-protect: cleanup's own catch does not divert the in-flight throw" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    const throw_s = fx.interner.lookup("THROW").?;
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    const a = try fx.sym(":A");
+    const b = try fx.sym(":B");
+
+    // (catch :a (unwind-protect (throw :a 11) (catch :b (throw :b 22))))
+    // The cleanup completes a throw of its own; the outer :a throw must still win.
+    const thr_a = try fx.list(&.{ throw_s, a, value.Value.fromFixnum(11) });
+    const thr_b = try fx.list(&.{ throw_s, b, value.Value.fromFixnum(22) });
+    const inner_catch = try fx.list(&.{ catch_s, b, thr_b });
+    const prot = try fx.list(&.{ uwp, thr_a, inner_catch });
+    const form = try fx.list(&.{ catch_s, a, prot });
+    const result = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 11), result.toFixnum());
+}
+
+test "unwind-protect: empty arg list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const uwp = fx.interner.lookup("UNWIND-PROTECT").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{uwp})));
+}
+
+test "the: evaluates the form and ignores the type" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const the = fx.interner.lookup("THE").?;
+    const integer = try fx.sym("INTEGER");
+    // (the integer 5)
+    const form = try fx.list(&.{ the, integer, value.Value.fromFixnum(5) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 5), r.toFixnum());
+}
+
+test "the: a compound type specifier is accepted and ignored" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const the = fx.interner.lookup("THE").?;
+    const integer = try fx.sym("INTEGER");
+    // (the (integer 0 10) 7) — the unevaluated compound type is ignored.
+    const type_spec = try fx.list(&.{ integer, value.Value.fromFixnum(0), value.Value.fromFixnum(10) });
+    const form = try fx.list(&.{ the, type_spec, value.Value.fromFixnum(7) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 7), r.toFixnum());
+}
+
+test "the: missing arguments rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const the = fx.interner.lookup("THE").?;
+    const integer = try fx.sym("INTEGER");
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{the})));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{ the, integer })));
+}
+
+test "the: extra arguments rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const the = fx.interner.lookup("THE").?;
+    const integer = try fx.sym("INTEGER");
+    const form = try fx.list(&.{ the, integer, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "declare: accepted and ignored, yields NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const declare = fx.interner.lookup("DECLARE").?;
+    const ignore = try fx.sym("IGNORE");
+    const x = try fx.sym("X");
+    // (declare (ignore x))
+    const spec = try fx.list(&.{ ignore, x });
+    const form = try fx.list(&.{ declare, spec });
+    const r = try fx.ev.eval(form);
+    try std.testing.expect(r.equalsRaw(value.NIL));
+
+    // (declare) with no specifiers is also accepted.
+    const empty = try fx.ev.eval(try fx.list(&.{declare}));
+    try std.testing.expect(empty.equalsRaw(value.NIL));
+}
+
+fn nativeList(ev_opaque: *anyopaque, args: []const value.Value) zisp.eval.function.NativeError!value.Value {
+    const ev = zisp.eval.Evaluator.fromOpaque(ev_opaque);
+    var list = value.NIL;
+    var i = args.len;
+    while (i > 0) {
+        i -= 1;
+        list = try ev.heap.allocCons(args[i], list);
+    }
+    return list;
+}
+
+fn listLen(v: value.Value) usize {
+    var n: usize = 0;
+    var cur = v;
+    while (cur.isCons()) : (cur = heap_mod.cdr(cur)) n += 1;
+    return n;
+}
+
+test "values: returns all arguments, primary is the first" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const values = fx.interner.lookup("VALUES").?;
+    const form = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2), value.Value.fromFixnum(3) });
+    const primary = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 1), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 3), fx.ev.values.items.len);
+    try std.testing.expectEqual(@as(i64, 3), fx.ev.values.items[2].toFixnum());
+}
+
+test "values: no arguments yields zero values, primary NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const values = fx.interner.lookup("VALUES").?;
+    const primary = try fx.ev.eval(try fx.list(&.{values}));
+    try std.testing.expect(primary.equalsRaw(value.NIL));
+    try std.testing.expectEqual(@as(usize, 0), fx.ev.values.items.len);
+}
+
+test "values: dotted argument list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const values = fx.interner.lookup("VALUES").?;
+    // (values . 5)
+    const form = try fx.heap.allocCons(values, value.Value.fromFixnum(5));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "values-list: spreads a list into values" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const vl = fx.interner.lookup("VALUES-LIST").?;
+    const quote = fx.interner.lookup("QUOTE").?;
+    const list = try fx.list(&.{ value.Value.fromFixnum(10), value.Value.fromFixnum(20) });
+    // (values-list '(10 20))
+    const form = try fx.list(&.{ vl, try fx.list(&.{ quote, list }) });
+    const primary = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 10), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+}
+
+test "values-list: a non-list argument is rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const vl = fx.interner.lookup("VALUES-LIST").?;
+    // (values-list 5) — 5 is not a list
+    const form = try fx.list(&.{ vl, value.Value.fromFixnum(5) });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
+test "multiple-value-list: collects the values into a fresh list" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvl = fx.interner.lookup("MULTIPLE-VALUE-LIST").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2), value.Value.fromFixnum(3) });
+    // (multiple-value-list (values 1 2 3)) => (1 2 3)
+    const r = try fx.ev.eval(try fx.list(&.{ mvl, producer }));
+    try std.testing.expectEqual(@as(usize, 3), listLen(r));
+    try std.testing.expectEqual(@as(i64, 1), heap_mod.car(r).toFixnum());
+    // The list itself is a single value.
+    try std.testing.expectEqual(@as(usize, 1), fx.ev.values.items.len);
+}
+
+test "multiple-value-call: concatenates producers and applies the function" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    _ = try fx.ev.defineNative("LIST", &nativeList);
+    const mvc = fx.interner.lookup("MULTIPLE-VALUE-CALL").?;
+    const fn_s = fx.interner.lookup("FUNCTION").?;
+    const list_s = fx.interner.lookup("LIST").?;
+    const values = fx.interner.lookup("VALUES").?;
+
+    // (multiple-value-call #'list (values 1 2) (values 3 4)) => (1 2 3 4)
+    const fref = try fx.list(&.{ fn_s, list_s });
+    const p1 = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const p2 = try fx.list(&.{ values, value.Value.fromFixnum(3), value.Value.fromFixnum(4) });
+    const r = try fx.ev.eval(try fx.list(&.{ mvc, fref, p1, p2 }));
+    try std.testing.expectEqual(@as(usize, 4), listLen(r));
+    try std.testing.expectEqual(@as(i64, 4), heap_mod.car(heap_mod.cdr(heap_mod.cdr(heap_mod.cdr(r)))).toFixnum());
+}
+
+test "multiple-value-call: resolves a symbol function designator" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    _ = try fx.ev.defineNative("LIST", &nativeList);
+    const mvc = fx.interner.lookup("MULTIPLE-VALUE-CALL").?;
+    const quote = fx.interner.lookup("QUOTE").?;
+    const list_s = fx.interner.lookup("LIST").?;
+    const values = fx.interner.lookup("VALUES").?;
+
+    // (multiple-value-call 'list (values 1 2)) => (1 2)
+    const fref = try fx.list(&.{ quote, list_s });
+    const p1 = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const r = try fx.ev.eval(try fx.list(&.{ mvc, fref, p1 }));
+    try std.testing.expectEqual(@as(usize, 2), listLen(r));
+}
+
+test "multiple-value-call: empty arg list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvc = fx.interner.lookup("MULTIPLE-VALUE-CALL").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{mvc})));
+}
+
+test "multiple-value-call: dotted arg forms rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    _ = try fx.ev.defineNative("LIST", &nativeList);
+    const mvc = fx.interner.lookup("MULTIPLE-VALUE-CALL").?;
+    const quote = fx.interner.lookup("QUOTE").?;
+    const list_s = fx.interner.lookup("LIST").?;
+    const fref = try fx.list(&.{ quote, list_s });
+    // (multiple-value-call 'list . 5)
+    const form = try fx.heap.allocCons(mvc, try fx.heap.allocCons(fref, value.Value.fromFixnum(5)));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "multiple-value-call: non-callable designator rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvc = fx.interner.lookup("MULTIPLE-VALUE-CALL").?;
+    // (multiple-value-call 5) — 5 is neither a function nor a symbol
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(try fx.list(&.{ mvc, value.Value.fromFixnum(5) })));
+}
+
+test "multiple-value-call: unbound symbol designator rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvc = fx.interner.lookup("MULTIPLE-VALUE-CALL").?;
+    const quote = fx.interner.lookup("QUOTE").?;
+    const nope = try fx.sym("NOPE");
+    const fref = try fx.list(&.{ quote, nope });
+    try std.testing.expectError(Error.UnboundFunction, fx.ev.eval(try fx.list(&.{ mvc, fref })));
+}
+
+test "multiple-value-prog1: keeps the first form's values, runs the rest for effect" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvp = fx.interner.lookup("MULTIPLE-VALUE-PROG1").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+
+    // (multiple-value-prog1 (values 7 8) (setq x 1))
+    const first = try fx.list(&.{ values, value.Value.fromFixnum(7), value.Value.fromFixnum(8) });
+    const eff = try fx.list(&.{ setq, x, value.Value.fromFixnum(1) });
+    const primary = try fx.ev.eval(try fx.list(&.{ mvp, first, eff }));
+    try std.testing.expectEqual(@as(i64, 7), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+    try std.testing.expectEqual(@as(i64, 1), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "multiple-value-prog1: empty arg list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvp = fx.interner.lookup("MULTIPLE-VALUE-PROG1").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{mvp})));
+}
+
+test "multiple-value-prog1: dotted rest rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvp = fx.interner.lookup("MULTIPLE-VALUE-PROG1").?;
+    // (multiple-value-prog1 1 . 2)
+    const form = try fx.heap.allocCons(mvp, try fx.heap.allocCons(value.Value.fromFixnum(1), value.Value.fromFixnum(2)));
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "multiple-value-bind: binds values, missing become NIL, body propagates" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvb = fx.interner.lookup("MULTIPLE-VALUE-BIND").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const a = try fx.sym("A");
+    const b = try fx.sym("B");
+    // (multiple-value-bind (a b) (values 10) (values a b)) => 10, NIL
+    const vars = try fx.list(&.{ a, b });
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(10) });
+    const body = try fx.list(&.{ values, a, b });
+    const primary = try fx.ev.eval(try fx.list(&.{ mvb, vars, producer, body }));
+    try std.testing.expectEqual(@as(i64, 10), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+    try std.testing.expect(fx.ev.values.items[1].equalsRaw(value.NIL));
+}
+
+test "multiple-value-bind: extra values are ignored" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvb = fx.interner.lookup("MULTIPLE-VALUE-BIND").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const a = try fx.sym("A");
+    // (multiple-value-bind (a) (values 1 2 3) a) => 1
+    const vars = try fx.list(&.{a});
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2), value.Value.fromFixnum(3) });
+    const r = try fx.ev.eval(try fx.list(&.{ mvb, vars, producer, a }));
+    try std.testing.expectEqual(@as(i64, 1), r.toFixnum());
+}
+
+test "multiple-value-bind: empty arg list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvb = fx.interner.lookup("MULTIPLE-VALUE-BIND").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{mvb})));
+}
+
+test "multiple-value-bind: missing values form rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvb = fx.interner.lookup("MULTIPLE-VALUE-BIND").?;
+    const a = try fx.sym("A");
+    // (multiple-value-bind (a)) — no values form
+    const vars = try fx.list(&.{a});
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{ mvb, vars })));
+}
+
+test "multiple-value-bind: dotted variable list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvb = fx.interner.lookup("MULTIPLE-VALUE-BIND").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const a = try fx.sym("A");
+    // (multiple-value-bind (a . b) (values 1) a) — dotted var list
+    const vars = try fx.heap.allocCons(a, try fx.sym("B"));
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1) });
+    const form = try fx.list(&.{ mvb, vars, producer, a });
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(form));
+}
+
+test "multiple-value-bind: non-symbol variable rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const mvb = fx.interner.lookup("MULTIPLE-VALUE-BIND").?;
+    const values = fx.interner.lookup("VALUES").?;
+    // (multiple-value-bind (5) (values 1) 5) — 5 is not a variable name
+    const vars = try fx.list(&.{value.Value.fromFixnum(5)});
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1) });
+    const form = try fx.list(&.{ mvb, vars, producer, value.Value.fromFixnum(5) });
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(form));
+}
+
+test "return-from: carries multiple values out of the block" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const block_s = fx.interner.lookup("BLOCK").?;
+    const ret = fx.interner.lookup("RETURN-FROM").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const b = try fx.sym("B");
+    // (block b (return-from b (values 1 2)))
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const rf = try fx.list(&.{ ret, b, producer });
+    const primary = try fx.ev.eval(try fx.list(&.{ block_s, b, rf }));
+    try std.testing.expectEqual(@as(i64, 1), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+    try std.testing.expectEqual(@as(i64, 2), fx.ev.values.items[1].toFixnum());
+}
+
+test "throw: carries multiple values out of the catch" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const catch_s = fx.interner.lookup("CATCH").?;
+    const throw_s = fx.interner.lookup("THROW").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const tag = try fx.sym(":A");
+    // (catch :a (throw :a (values 1 2)))
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const thr = try fx.list(&.{ throw_s, tag, producer });
+    const primary = try fx.ev.eval(try fx.list(&.{ catch_s, tag, thr }));
+    try std.testing.expectEqual(@as(i64, 1), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+}
+
+test "the: propagates multiple values from its form" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const the = fx.interner.lookup("THE").?;
+    const values = fx.interner.lookup("VALUES").?;
+    const t_sym = try fx.sym("T");
+    // (the t (values 1 2))
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const primary = try fx.ev.eval(try fx.list(&.{ the, t_sym, producer }));
+    try std.testing.expectEqual(@as(i64, 1), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+}
+
+test "eval-when: :execute runs the body" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    const execute = try fx.sym(":EXECUTE");
+    // (eval-when (:execute) 1 2 3)
+    const sits = try fx.list(&.{execute});
+    const form = try fx.list(&.{ ew, sits, value.Value.fromFixnum(1), value.Value.fromFixnum(2), value.Value.fromFixnum(3) });
+    const r = try fx.ev.eval(form);
+    try std.testing.expectEqual(@as(i64, 3), r.toFixnum());
+}
+
+test "eval-when: deprecated eval situation runs the body" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    const eval_s = try fx.sym("EVAL");
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+    // (eval-when (eval) (setq x 5))
+    const sits = try fx.list(&.{eval_s});
+    const eff = try fx.list(&.{ setq, x, value.Value.fromFixnum(5) });
+    const r = try fx.ev.eval(try fx.list(&.{ ew, sits, eff }));
+    try std.testing.expectEqual(@as(i64, 5), r.toFixnum());
+    try std.testing.expectEqual(@as(i64, 5), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "eval-when: compile/load-only situations skip the body" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    const ct = try fx.sym(":COMPILE-TOPLEVEL");
+    const lt = try fx.sym(":LOAD-TOPLEVEL");
+    const setq = fx.interner.lookup("SETQ").?;
+    const x = try fx.sym("X");
+    symbol_mod.symbol(x).value_cell = value.Value.fromFixnum(0);
+    // (eval-when (:compile-toplevel :load-toplevel) (setq x 9))
+    const sits = try fx.list(&.{ ct, lt });
+    const eff = try fx.list(&.{ setq, x, value.Value.fromFixnum(9) });
+    const r = try fx.ev.eval(try fx.list(&.{ ew, sits, eff }));
+    try std.testing.expect(r.equalsRaw(value.NIL));
+    // The body did not run.
+    try std.testing.expectEqual(@as(i64, 0), symbol_mod.symbol(x).value_cell.toFixnum());
+}
+
+test "eval-when: empty situation list yields NIL" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    // (eval-when () 1)
+    const r = try fx.ev.eval(try fx.list(&.{ ew, value.NIL, value.Value.fromFixnum(1) }));
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "eval-when: empty arg list rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{ew})));
+}
+
+test "eval-when: situations must be a proper list" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    const execute = try fx.sym(":EXECUTE");
+    // (eval-when :execute 1) — situations is an atom, not a list
+    try std.testing.expectError(Error.BadArgList, fx.ev.eval(try fx.list(&.{ ew, execute, value.Value.fromFixnum(1) })));
+}
+
+test "eval-when: non-symbol situation rejected" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    // (eval-when (5) 1)
+    const sits = try fx.list(&.{value.Value.fromFixnum(5)});
+    try std.testing.expectError(Error.TypeError, fx.ev.eval(try fx.list(&.{ ew, sits, value.Value.fromFixnum(1) })));
+}
+
+test "eval-when: propagates multiple values from the body" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const ew = fx.interner.lookup("EVAL-WHEN").?;
+    const execute = try fx.sym(":EXECUTE");
+    const values = fx.interner.lookup("VALUES").?;
+    // (eval-when (:execute) (values 1 2))
+    const sits = try fx.list(&.{execute});
+    const producer = try fx.list(&.{ values, value.Value.fromFixnum(1), value.Value.fromFixnum(2) });
+    const primary = try fx.ev.eval(try fx.list(&.{ ew, sits, producer }));
+    try std.testing.expectEqual(@as(i64, 1), primary.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
+}
+
 test "closure: dotted body errors at call time" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
