@@ -23,5 +23,6 @@ comptime {
     _ = @import("eval/multiple_values_corpus_test.zig");
     _ = @import("eval/lambda_list_test.zig");
     _ = @import("eval/key_args_corpus_test.zig");
+    _ = @import("eval/tail_call_test.zig");
     _ = @import("cli_test.zig");
 }

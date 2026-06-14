@@ -18,6 +18,12 @@ pub const Frame = struct {
         if (self.map) |*m| m.deinit(allocator);
     }
 
+    pub fn reset(self: *Frame) void {
+        self.symbols.clearRetainingCapacity();
+        self.values.clearRetainingCapacity();
+        if (self.map) |*m| m.clearRetainingCapacity();
+    }
+
     pub fn count(self: *const Frame) usize {
         if (self.map) |m| return m.count();
         return self.symbols.items.len;

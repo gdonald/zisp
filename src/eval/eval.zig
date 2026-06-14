@@ -39,6 +39,10 @@ pub const Evaluator = struct {
     env: Env,
     special_forms: std.AutoHashMapUnmanaged(u64, SpecialFormFn) = .{},
     macro_expander: MacroExpander = defaultMacroExpander,
+    // Tail-position dispatch through these control forms reuses the caller's
+    // frame instead of growing the native stack. Populated by registerStandard.
+    sym_if: Value = undefined,
+    sym_progn: Value = undefined,
     block_stack: std.ArrayList(BlockEntry) = .empty,
     block_counter: u64 = 0,
     return_id: u64 = 0,
@@ -64,6 +68,8 @@ pub const Evaluator = struct {
             .interner = interner,
             .env = Env.init(allocator),
             .go_target = value.NIL,
+            .sym_if = value.NIL,
+            .sym_progn = value.NIL,
         };
     }
 
@@ -278,29 +284,142 @@ pub const Evaluator = struct {
         }
     }
 
-    fn applyClosure(self: *Evaluator, c: *const function.Closure, args: []const Value) Error!Value {
-        const prev_chain = self.env.setValueChain(c.captured_env);
-        defer _ = self.env.setValueChain(prev_chain);
+    const TailStep = union(enum) {
+        value: Value,
+        call: *const function.Closure,
+    };
 
-        const prev_fchain = self.env.setFunctionChain(c.captured_fenv);
-        defer _ = self.env.setFunctionChain(prev_fchain);
-
-        const frame = try self.env.pushValueFrame();
-        defer self.env.popValueFrame();
-
-        try lambda_list.bindInto(self, c.params, args, frame);
-
-        // An empty body yields a single NIL; otherwise the last form's
-        // value list (set by its eval) propagates out unchanged.
-        if (!c.body.isCons()) return self.set1(value.NIL);
-        var result = value.NIL;
-        var body = c.body;
-        while (!body.equalsRaw(value.NIL)) {
-            if (!body.isCons()) return Error.BadArgList;
-            result = try self.eval(heap_mod.car(body));
-            body = heap_mod.cdr(body);
+    fn applyClosure(self: *Evaluator, c0: *const function.Closure, args0: []const Value) Error!Value {
+        const saved_value_chain = self.env.top_value;
+        const saved_function_chain = self.env.top_function;
+        defer {
+            self.env.top_value = saved_value_chain;
+            self.env.top_function = saved_function_chain;
         }
-        return result;
+
+        // Tail jumps alternate between two buffers so the args feeding the
+        // current call are never the buffer being refilled for the next one.
+        var buf_a: std.ArrayList(Value) = .empty;
+        var buf_b: std.ArrayList(Value) = .empty;
+        defer buf_a.deinit(self.allocator);
+        defer buf_b.deinit(self.allocator);
+
+        var cur = c0;
+        var cur_args: []const Value = args0;
+        var use_a = true;
+        var frame: ?*env_mod.Frame = null;
+
+        while (true) {
+            self.env.top_function = cur.captured_fenv;
+            if (frame) |f| {
+                f.reset();
+                f.parent = cur.captured_env;
+                self.env.top_value = f;
+            } else {
+                self.env.top_value = cur.captured_env;
+                frame = try self.env.pushValueFrame();
+            }
+            try lambda_list.bindInto(self, cur.params, cur_args, frame.?);
+
+            if (!cur.body.isCons()) return self.set1(value.NIL);
+
+            var body = cur.body;
+            while (true) {
+                if (!body.isCons()) return Error.BadArgList;
+                const next = heap_mod.cdr(body);
+                if (next.equalsRaw(value.NIL)) break;
+                if (!next.isCons()) return Error.BadArgList;
+                _ = try self.eval(heap_mod.car(body));
+                body = next;
+            }
+            const last = heap_mod.car(body);
+
+            const out_buf = if (use_a) &buf_a else &buf_b;
+            switch (try self.evalTail(last, out_buf)) {
+                .value => |v| return v,
+                .call => |next_c| {
+                    cur = next_c;
+                    cur_args = out_buf.items;
+                    use_a = !use_a;
+                },
+            }
+        }
+    }
+
+    /// Evaluate `form` in tail position. A direct call to a closure (possibly
+    /// reached through `if` or `progn`) is reported as a `.call` for the
+    /// trampoline to loop on; everything else evaluates here and returns a
+    /// `.value`. Closure call arguments are evaluated into `out_buf`.
+    fn evalTail(self: *Evaluator, form: Value, out_buf: *std.ArrayList(Value)) Error!TailStep {
+        if (!form.isCons()) return .{ .value = try self.eval(form) };
+        const head = heap_mod.car(form);
+        if (!head.isSymbol()) return .{ .value = try self.eval(form) };
+        const tail = heap_mod.cdr(form);
+
+        if (self.lookupSpecialForm(head)) |handler| {
+            if (head.equalsRaw(self.sym_if)) return self.tailIf(tail, out_buf);
+            if (head.equalsRaw(self.sym_progn)) return self.tailProgn(tail, out_buf);
+            return .{ .value = try handler(self, tail) };
+        }
+
+        if (try self.macro_expander(self, form)) |expanded| {
+            return self.evalTail(expanded, out_buf);
+        }
+
+        const fn_v = self.env.lookupFunction(head) orelse return Error.UnboundFunction;
+        if (isFunction(fn_v) and asFunction(fn_v).kind == .closure) {
+            out_buf.clearRetainingCapacity();
+            var rest = tail;
+            while (!rest.equalsRaw(value.NIL)) {
+                if (!rest.isCons()) return Error.BadArgList;
+                try out_buf.append(self.allocator, try self.eval(heap_mod.car(rest)));
+                rest = heap_mod.cdr(rest);
+            }
+            return .{ .call = &asFunction(fn_v).payload.closure };
+        }
+
+        return .{ .value = try self.applyFunction(fn_v, tail) };
+    }
+
+    fn tailIf(self: *Evaluator, args: Value, out_buf: *std.ArrayList(Value)) Error!TailStep {
+        if (!args.isCons()) return Error.BadArgList;
+        const test_form = heap_mod.car(args);
+        const rest = heap_mod.cdr(args);
+        if (!rest.isCons()) return Error.BadArgList;
+        const then_form = heap_mod.car(rest);
+        const after_then = heap_mod.cdr(rest);
+
+        var else_form = value.NIL;
+        var has_else = false;
+        if (after_then.isCons()) {
+            else_form = heap_mod.car(after_then);
+            has_else = true;
+            if (!heap_mod.cdr(after_then).equalsRaw(value.NIL)) return Error.BadArgList;
+        } else if (!after_then.equalsRaw(value.NIL)) {
+            return Error.BadArgList;
+        }
+
+        const test_val = try self.eval(test_form);
+        if (!test_val.equalsRaw(value.NIL)) return self.evalTail(then_form, out_buf);
+        if (has_else) return self.evalTail(else_form, out_buf);
+        return .{ .value = try self.set1(value.NIL) };
+    }
+
+    fn tailProgn(self: *Evaluator, body: Value, out_buf: *std.ArrayList(Value)) Error!TailStep {
+        if (!body.isCons()) {
+            if (body.equalsRaw(value.NIL)) return .{ .value = try self.set1(value.NIL) };
+            return Error.BadArgList;
+        }
+        var rest = body;
+        while (true) {
+            if (!rest.isCons()) return Error.BadArgList;
+            const this = heap_mod.car(rest);
+            const next = heap_mod.cdr(rest);
+            if (next.equalsRaw(value.NIL)) return self.evalTail(this, out_buf);
+            if (!next.isCons()) return Error.BadArgList;
+            _ = try self.eval(this);
+            rest = next;
+        }
     }
 
     pub fn fromOpaque(p: *anyopaque) *Evaluator {

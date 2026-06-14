@@ -37,6 +37,9 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("MULTIPLE-VALUE-PROG1", &multipleValueProg1);
     try ev.registerSpecialForm("MULTIPLE-VALUE-BIND", &multipleValueBind);
     try ev.registerSpecialForm("EVAL-WHEN", &evalWhen);
+
+    ev.sym_if = try ev.interner.intern("IF");
+    ev.sym_progn = try ev.interner.intern("PROGN");
 }
 
 fn quote(ev: *Evaluator, args: Value) Error!Value {
