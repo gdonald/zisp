@@ -27,6 +27,7 @@ pub const NativeError = error{
     Go,
     Throw,
     ProgramError,
+    DivisionByZero,
 } || std.mem.Allocator.Error;
 
 pub const Closure = struct {

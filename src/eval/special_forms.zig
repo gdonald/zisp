@@ -37,6 +37,11 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("MULTIPLE-VALUE-PROG1", &multipleValueProg1);
     try ev.registerSpecialForm("MULTIPLE-VALUE-BIND", &multipleValueBind);
     try ev.registerSpecialForm("EVAL-WHEN", &evalWhen);
+    try ev.registerSpecialForm("AND", &andForm);
+    try ev.registerSpecialForm("OR", &orForm);
+    try ev.registerSpecialForm("WHEN", &whenForm);
+    try ev.registerSpecialForm("UNLESS", &unlessForm);
+    try ev.registerSpecialForm("COND", &condForm);
 
     ev.sym_if = try ev.interner.intern("IF");
     ev.sym_progn = try ev.interner.intern("PROGN");
@@ -535,6 +540,65 @@ fn multipleValueBind(ev: *Evaluator, args: Value) Error!Value {
         rest = heap.cdr(rest);
     }
     return prognBody(ev, body);
+}
+
+fn andForm(ev: *Evaluator, args: Value) Error!Value {
+    if (args.equalsRaw(value.NIL)) return ev.set1(value.T);
+    var rest = args;
+    while (true) {
+        if (!rest.isCons()) return Error.BadArgList;
+        const this = heap.car(rest);
+        const next = heap.cdr(rest);
+        const result = try ev.eval(this);
+        if (next.equalsRaw(value.NIL)) return result;
+        if (result.equalsRaw(value.NIL)) return ev.set1(value.NIL);
+        rest = next;
+    }
+}
+
+fn orForm(ev: *Evaluator, args: Value) Error!Value {
+    var rest = args;
+    while (!rest.equalsRaw(value.NIL)) {
+        if (!rest.isCons()) return Error.BadArgList;
+        const this = heap.car(rest);
+        const next = heap.cdr(rest);
+        const result = try ev.eval(this);
+        if (!result.equalsRaw(value.NIL)) return result;
+        if (next.equalsRaw(value.NIL)) return result;
+        rest = next;
+    }
+    return ev.set1(value.NIL);
+}
+
+fn whenForm(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const test_val = try ev.eval(heap.car(args));
+    if (test_val.equalsRaw(value.NIL)) return ev.set1(value.NIL);
+    return prognBody(ev, heap.cdr(args));
+}
+
+fn unlessForm(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const test_val = try ev.eval(heap.car(args));
+    if (!test_val.equalsRaw(value.NIL)) return ev.set1(value.NIL);
+    return prognBody(ev, heap.cdr(args));
+}
+
+fn condForm(ev: *Evaluator, args: Value) Error!Value {
+    var rest = args;
+    while (!rest.equalsRaw(value.NIL)) {
+        if (!rest.isCons()) return Error.BadArgList;
+        const clause = heap.car(rest);
+        if (!clause.isCons()) return Error.TypeError;
+        const test_val = try ev.eval(heap.car(clause));
+        if (!test_val.equalsRaw(value.NIL)) {
+            const forms = heap.cdr(clause);
+            if (forms.equalsRaw(value.NIL)) return ev.set1(test_val);
+            return prognBody(ev, forms);
+        }
+        rest = heap.cdr(rest);
+    }
+    return ev.set1(value.NIL);
 }
 
 fn expectOneArg(args: Value) Error!Value {
