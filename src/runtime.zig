@@ -8,6 +8,7 @@ pub const read_all = @import("runtime/read_all.zig");
 pub const reader = @import("reader.zig");
 pub const eval = @import("eval.zig");
 pub const builtins = @import("builtins/builtins.zig");
+pub const repl = @import("repl/repl.zig");
 pub const build_options = @import("build_options");
 
 pub const Value = value.Value;

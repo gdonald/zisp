@@ -32,11 +32,35 @@ pub fn main(init: std.process.Init) !u8 {
             break :blk @intFromEnum(cli.ExitCode.user_error);
         },
         .read_only => |path| readOnlyMode(init.gpa, init.io, path),
-        .repl => blk: {
-            cli.write("zisp {s}\n(REPL not implemented yet)\n", .{cli.VERSION});
-            break :blk @intFromEnum(cli.ExitCode.success);
-        },
+        .repl => replMode(init.gpa, init.io),
     };
+}
+
+/// Reads all of stdin, then read-eval-prints every form through a persistent
+/// `Repl`. The loop logic and history-variable bookkeeping live in
+/// `repl.zig`; this wrapper only supplies the stdin/stdout plumbing.
+fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
+    var out_buf: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.Writer.init(std.Io.File.stdout(), io, &out_buf);
+    const out = &stdout_writer.interface;
+
+    try out.print("zisp {s}\n", .{cli.VERSION});
+
+    var repl = try zisp.repl.Repl.init(gpa, out);
+    defer repl.deinit();
+
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = std.Io.File.Reader.init(std.Io.File.stdin(), io, &read_buf);
+    var source_list: std.ArrayList(u8) = .empty;
+    defer source_list.deinit(gpa);
+    file_reader.interface.appendRemainingUnlimited(gpa, &source_list) catch |e| {
+        cli.write("zisp: read error: {s}\n", .{@errorName(e)});
+        return @intFromEnum(cli.ExitCode.internal_error);
+    };
+
+    try repl.run(source_list.items);
+    try out.flush();
+    return @intFromEnum(cli.ExitCode.success);
 }
 
 /// Reads `path`, hands the bytes to `zisp.read_all.parseAll`, and prints
