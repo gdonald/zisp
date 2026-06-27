@@ -9,10 +9,13 @@
 #         tests/run-ansi.sh --read-only            # all categories
 #         tests/run-ansi.sh --read-only reader     # one category
 #
-#   2. Full eval: load every .lsp and run (do-tests). STUB until the
-#      evaluator + load + (do-tests) are wired.
+#   2. Full eval: load every .lsp under a category and count how many load
+#      and run to completion without error.
 #         tests/run-ansi.sh                        # all categories
 #         tests/run-ansi.sh cons numbers           # selected categories
+#      The rt-based (do-tests) play depends on the macro and package layers;
+#      until those land, this sweep measures the load rate, which is the
+#      meaningful pre-rt signal (analogous to the reader-only parse rate).
 #
 # Common options:
 #   VERBOSE=1 tests/run-ansi.sh ...               # show per-file lines
@@ -75,26 +78,31 @@ fi
 # in the category directory, then (do-tests) and exit. The full upstream play
 # is just (load "gclload.lsp") which loads everything — useful for a final run,
 # not for per-phase tracking.
+# Eval-mode sweep: load each .lsp under the category in batch mode and count
+# clean loads. Once the rt framework loads (after the macro and package
+# layers), this becomes a (do-tests) run that parses a trailing
+# `PASS=N FAIL=M` line printed by zisp; the parsing below already expects that
+# shape, so only the per-file inner loop changes.
 run_category() {
   local cat="$1"
   local dir="$SUITE/$cat"
   [[ -d "$dir" ]] || { echo "skip $cat (no $dir)"; return; }
 
-  # TODO: replace with real invocation once zisp can (load ...) and (do-tests).
-  # Expected shape (run from $SUITE so relative paths in the suite resolve):
-  #
-  #   cd "$SUITE"
-  #   "$ZISP" --batch \
-  #     --eval "(load \"gclload1.lsp\")" \
-  #     --eval "(dolist (f (directory \"$cat/*.lsp\")) (load f))" \
-  #     --eval "(in-package :cl-test)" \
-  #     --eval "(let ((r (do-tests))) (format t \"~&PASS=~A FAIL=~A~%\" (length (pending-tests)) ...))" \
-  #     --eval "(quit)"
-  #
-  # Then parse the trailing PASS=N FAIL=M line.
-  local count
-  count=$(find "$dir" -maxdepth 1 -name '*.lsp' | wc -l | tr -d ' ')
-  echo "STUB: would run $cat ($count .lsp files)"
+  local pass=0 fail=0
+  while IFS= read -r f; do
+    if (cd "$SUITE" && "$ZISP" --batch --load "$f") >/tmp/zisp-eval.$$.out 2>&1; then
+      pass=$((pass + 1))
+      [[ "$VERBOSE" == "1" ]] && cat /tmp/zisp-eval.$$.out
+    else
+      fail=$((fail + 1))
+      [[ "$VERBOSE" == "1" ]] && cat /tmp/zisp-eval.$$.out
+    fi
+  done < <(find "$dir" -maxdepth 1 -name '*.lsp' | sort)
+  rm -f /tmp/zisp-eval.$$.out
+
+  printf "%-26s PASS=%d FAIL=%d\n" "$cat" "$pass" "$fail"
+  total_pass=$((total_pass + pass))
+  total_fail=$((total_fail + fail))
 }
 
 # Reader-only run: each .lsp gets a single zisp --read-only invocation. The
@@ -140,9 +148,14 @@ if (( READ_ONLY )); then
 else
   for cat in "${selected[@]}"; do
     run_category "$cat"
-    # TODO: parse output, accumulate into total_pass / total_fail.
   done
-  # TODO: print summary table once parsing is in place.
   echo
-  echo "Summary (stub): $total_pass passed, $total_fail failed"
+  total=$((total_pass + total_fail))
+  if (( total > 0 )); then
+    pct=$(awk -v p="$total_pass" -v t="$total" 'BEGIN{printf "%.1f", 100*p/t}')
+    echo "Eval summary: $total_pass / $total ($pct%) loaded and ran"
+  else
+    echo "Eval summary: no files matched"
+  fi
+  (( total_fail == 0 )) || exit 1
 fi

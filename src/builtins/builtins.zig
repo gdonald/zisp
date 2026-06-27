@@ -5,6 +5,9 @@ const symbol_mod = @import("../runtime/symbol.zig");
 const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 
+pub const system = @import("system.zig");
+pub const registerSystem = system.registerSystem;
+
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
 const Error = function.NativeError;

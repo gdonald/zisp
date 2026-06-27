@@ -44,7 +44,7 @@ pub const Repl = struct {
     star2: Value,
     star3: Value,
 
-    pub fn init(gpa: std.mem.Allocator, out: *std.Io.Writer) !*Repl {
+    pub fn init(gpa: std.mem.Allocator, out: *std.Io.Writer, io: ?std.Io) !*Repl {
         const self = try gpa.create(Repl);
         errdefer gpa.destroy(self);
         self.* = .{
@@ -65,8 +65,11 @@ pub const Repl = struct {
         try symbol_mod.initStandardSymbols(&self.interner);
         self.heap = heap_mod.Heap.init(self.arena.allocator());
         self.ev = Evaluator.init(gpa, &self.heap, &self.interner);
+        self.ev.out = out;
+        self.ev.io = io;
         try eval_pkg.registerStandardSpecialForms(&self.ev);
         try builtins.registerStandard(&self.ev);
+        try builtins.registerSystem(&self.ev);
 
         self.minus = try self.interner.intern("-");
         self.plus = try self.interner.intern("+");
@@ -100,6 +103,7 @@ pub const Repl = struct {
             const f = form orelse break;
             self.rotateInput(f);
             const result = self.ev.eval(f) catch |e| {
+                if (e == error.Quit) return;
                 try self.reportError("Error", e);
                 try self.breakLoop(&rd);
                 continue;
@@ -107,6 +111,28 @@ pub const Repl = struct {
             self.rotateOutput(result);
             try self.printResult(result);
         }
+    }
+
+    /// Read every form in `source`, evaluate each, and (when `print` is set)
+    /// print its primary value. Unlike `run`, an evaluation error is not
+    /// caught: it propagates so the batch driver can choose an exit code.
+    /// Used by `--eval` (print) and `--load` (no print).
+    pub fn evalForms(self: *Repl, source: []const u8, print: bool) Error!void {
+        var tokenizer = reader_mod.Tokenizer.init(source);
+        var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
+        while (true) {
+            const form = rd.read() catch return Error.ProgramError;
+            const f = form orelse break;
+            self.rotateInput(f);
+            const result = try self.ev.eval(f);
+            self.rotateOutput(result);
+            if (print) try self.printResult(result);
+        }
+    }
+
+    /// Read and evaluate every form in the file at `path`, discarding values.
+    pub fn loadFile(self: *Repl, path: []const u8) Error!void {
+        try builtins.system.loadPath(&self.ev, path);
     }
 
     /// Minimal break loop entered after an evaluation error. Reads forms and
@@ -127,6 +153,7 @@ pub const Repl = struct {
             }
             self.rotateInput(f);
             const result = self.ev.eval(f) catch |e| {
+                if (e == error.Quit) return;
                 try self.reportError("Error", e);
                 continue;
             };

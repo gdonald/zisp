@@ -28,7 +28,10 @@ pub const NativeError = error{
     Throw,
     ProgramError,
     DivisionByZero,
-} || std.mem.Allocator.Error;
+    FileError,
+    NoOutputStream,
+    Quit,
+} || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 pub const Closure = struct {
     params: Value,

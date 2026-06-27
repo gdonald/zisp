@@ -18,7 +18,8 @@ pub fn main(init: std.process.Init) !u8 {
         buf[n] = arg;
     }
 
-    return switch (cli.parseArgs(buf[0..n])) {
+    const action = try cli.parseArgs(init.gpa, buf[0..n]);
+    return switch (action) {
         .print_version => blk: {
             cli.write("zisp {s}\n", .{cli.VERSION});
             break :blk @intFromEnum(cli.ExitCode.success);
@@ -28,17 +29,86 @@ pub fn main(init: std.process.Init) !u8 {
             break :blk @intFromEnum(cli.ExitCode.success);
         },
         .user_error => |msg| blk: {
-            cli.write("zisp: unknown option '{s}'\nTry 'zisp --help' for usage.\n", .{msg});
+            cli.write("zisp: {s}\nTry 'zisp --help' for usage.\n", .{msg});
             break :blk @intFromEnum(cli.ExitCode.user_error);
         },
         .read_only => |path| readOnlyMode(init.gpa, init.io, path),
         .repl => replMode(init.gpa, init.io),
+        .run => |plan| blk: {
+            defer plan.deinit(init.gpa);
+            break :blk runPlan(init.gpa, init.io, plan);
+        },
     };
 }
 
-/// Reads all of stdin, then read-eval-prints every form through a persistent
-/// `Repl`. The loop logic and history-variable bookkeeping live in
-/// `repl.zig`; this wrapper only supplies the stdin/stdout plumbing.
+/// Execute a batch plan: run each `--eval` / `--load` op in order, then a
+/// script if present, then drop into the REPL unless `--batch` was given.
+fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
+    var out_buf: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.Writer.init(std.Io.File.stdout(), io, &out_buf);
+    const out = &stdout_writer.interface;
+
+    var repl = try zisp.repl.Repl.init(gpa, out, io);
+    defer repl.deinit();
+
+    for (plan.ops) |op| {
+        const result = switch (op) {
+            .eval => |expr| repl.evalForms(expr, true),
+            .load => |path| repl.loadFile(path),
+        };
+        result catch |e| {
+            if (e == error.Quit) break;
+            try out.flush();
+            cli.write("zisp: error: {s}\n", .{@errorName(e)});
+            return @intFromEnum(cli.ExitCode.user_error);
+        };
+    }
+
+    if (repl.ev.quit_code == null) {
+        if (plan.script) |path| {
+            try bindCommandLineArgs(repl, plan.script_args);
+            repl.loadFile(path) catch |e| {
+                if (e != error.Quit) {
+                    try out.flush();
+                    cli.write("zisp: error: {s}\n", .{@errorName(e)});
+                    return @intFromEnum(cli.ExitCode.user_error);
+                }
+            };
+        }
+    }
+
+    if (repl.ev.quit_code) |code| {
+        try out.flush();
+        return code;
+    }
+
+    if (!plan.batch and plan.script == null) {
+        if (!plan.quiet) try out.print("zisp {s}\n", .{cli.VERSION});
+        try runInteractive(gpa, io, repl, out);
+        if (repl.ev.quit_code) |code| {
+            try out.flush();
+            return code;
+        }
+    }
+
+    try out.flush();
+    return @intFromEnum(cli.ExitCode.success);
+}
+
+/// Bind `*command-line-arguments*` to a list of the script's arguments.
+fn bindCommandLineArgs(repl: *zisp.repl.Repl, script_args: []const []const u8) !void {
+    var list = zisp.value.NIL;
+    var i: usize = script_args.len;
+    while (i > 0) {
+        i -= 1;
+        const s = try repl.ev.heap.allocString(script_args[i]);
+        list = try repl.ev.heap.allocCons(s, list);
+    }
+    const sym = try repl.ev.interner.intern("*COMMAND-LINE-ARGUMENTS*");
+    zisp.symbol.symbol(sym).value_cell = list;
+}
+
+/// Read all of stdin and feed it to the REPL.
 fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
     var out_buf: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.Writer.init(std.Io.File.stdout(), io, &out_buf);
@@ -46,27 +116,30 @@ fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
 
     try out.print("zisp {s}\n", .{cli.VERSION});
 
-    var repl = try zisp.repl.Repl.init(gpa, out);
+    var repl = try zisp.repl.Repl.init(gpa, out, io);
     defer repl.deinit();
 
+    try runInteractive(gpa, io, repl, out);
+    try out.flush();
+    return @intFromEnum(cli.ExitCode.success);
+}
+
+fn runInteractive(gpa: std.mem.Allocator, io: std.Io, repl: *zisp.repl.Repl, out: *std.Io.Writer) !void {
     var read_buf: [4096]u8 = undefined;
     var file_reader = std.Io.File.Reader.init(std.Io.File.stdin(), io, &read_buf);
     var source_list: std.ArrayList(u8) = .empty;
     defer source_list.deinit(gpa);
     file_reader.interface.appendRemainingUnlimited(gpa, &source_list) catch |e| {
         cli.write("zisp: read error: {s}\n", .{@errorName(e)});
-        return @intFromEnum(cli.ExitCode.internal_error);
+        return;
     };
 
     try repl.run(source_list.items);
     try out.flush();
-    return @intFromEnum(cli.ExitCode.success);
 }
 
 /// Reads `path`, hands the bytes to `zisp.read_all.parseAll`, and prints
-/// a one-line summary tailored for
-/// `tests/run-ansi.sh`'s grep aggregation. The parsing logic itself
-/// lives in `read_all.zig` so the test binary can exercise it directly.
+/// a one-line summary tailored for `tests/run-ansi.sh`'s grep aggregation.
 fn readOnlyMode(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !u8 {
     const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |e| {
         cli.write("FAIL {s}: {s}\n", .{ path, @errorName(e) });

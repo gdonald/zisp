@@ -37,6 +37,15 @@ pub const Evaluator = struct {
     heap: *Heap,
     interner: *Interner,
     env: Env,
+    // Standard-output sink for the printing builtins (`format`, etc.) and the
+    // value of `*standard-output*`. The host wires this to a real writer; it
+    // stays null in unit fixtures that never print.
+    out: ?*std.Io.Writer = null,
+    // Filesystem access for `load`. Null where no file I/O is expected.
+    io: ?std.Io = null,
+    // Set by `quit` / `exit`; the driver reads it to choose the process exit
+    // code after the in-flight `Quit` unwinds the evaluator.
+    quit_code: ?u8 = null,
     special_forms: std.AutoHashMapUnmanaged(u64, SpecialFormFn) = .{},
     macro_expander: MacroExpander = defaultMacroExpander,
     // Tail-position dispatch through these control forms reuses the caller's

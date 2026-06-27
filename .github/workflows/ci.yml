@@ -30,3 +30,10 @@ jobs:
 
       - name: zig build tests
         run: zig build tests --summary all
+
+      - name: ansi-test load rate
+        # Tracks how much of the ANSI suite loads and runs. The rt-based
+        # test play depends on layers still under construction, so this is
+        # expected to be incomplete and must not gate the build yet.
+        continue-on-error: true
+        run: zig build ansi-test
