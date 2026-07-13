@@ -34,9 +34,10 @@ const Parsed = struct {
     }
 };
 
-fn markerSection(name: []const u8) ?Section {
+fn markerSection(name: []const u8, macro: bool) ?Section {
     if (std.mem.eql(u8, name, "&OPTIONAL")) return .optional;
     if (std.mem.eql(u8, name, "&REST")) return .rest;
+    if (macro and std.mem.eql(u8, name, "&BODY")) return .rest;
     if (std.mem.eql(u8, name, "&KEY")) return .key;
     if (std.mem.eql(u8, name, "&AUX")) return .aux;
     return null;
@@ -65,7 +66,7 @@ fn parseInitSupplied(tail: Value) Error!struct { init: Value, supplied: Value } 
     return .{ .init = init, .supplied = supplied };
 }
 
-fn parse(ev: *Evaluator, params: Value) Error!Parsed {
+fn parse(ev: *Evaluator, params: Value, macro: bool) Error!Parsed {
     var p: Parsed = .{};
     errdefer p.deinit(ev.allocator);
 
@@ -85,7 +86,7 @@ fn parse(ev: *Evaluator, params: Value) Error!Parsed {
                 p.allow_other = true;
                 continue;
             }
-            if (markerSection(name)) |sec| {
+            if (markerSection(name, macro)) |sec| {
                 section = sec;
                 if (sec == .rest) rest_seen = true;
                 if (sec == .key) p.has_key = true;
@@ -165,15 +166,16 @@ fn parse(ev: *Evaluator, params: Value) Error!Parsed {
 }
 
 /// Structural validation only — no argument binding, no init evaluation.
-pub fn validate(ev: *Evaluator, params: Value) Error!void {
-    var p = try parse(ev, params);
+/// `macro` permits macro-lambda-list markers (`&body`).
+pub fn validate(ev: *Evaluator, params: Value, macro: bool) Error!void {
+    var p = try parse(ev, params, macro);
     p.deinit(ev.allocator);
 }
 
 /// Parse `params` and bind `args` into `frame`. Init forms are evaluated in
 /// the current environment, so they see parameters bound earlier in the list.
-pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Frame) Error!void {
-    var p = try parse(ev, params);
+pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Frame, macro: bool) Error!void {
+    var p = try parse(ev, params, macro);
     defer p.deinit(ev.allocator);
 
     if (args.len < p.required.items.len) return Error.WrongArgCount;

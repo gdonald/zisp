@@ -42,9 +42,17 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("WHEN", &whenForm);
     try ev.registerSpecialForm("UNLESS", &unlessForm);
     try ev.registerSpecialForm("COND", &condForm);
+    try ev.registerSpecialForm("DEFMACRO", &defmacro);
+    try ev.registerSpecialForm("MACROEXPAND-1", &macroexpand1Form);
+    try ev.registerSpecialForm("MACROEXPAND", &macroexpandForm);
 
     ev.sym_if = try ev.interner.intern("IF");
     ev.sym_progn = try ev.interner.intern("PROGN");
+
+    const hook_sym = try ev.interner.intern("*MACROEXPAND-HOOK*");
+    if (symbol_mod.symbol(hook_sym).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
+        symbol_mod.symbol(hook_sym).value_cell = try ev.interner.intern("FUNCALL");
+    }
 }
 
 fn quote(ev: *Evaluator, args: Value) Error!Value {
@@ -129,7 +137,62 @@ fn functionForm(ev: *Evaluator, args: Value) Error!Value {
 }
 
 fn validateParams(ev: *Evaluator, params: Value) Error!void {
-    try lambda_list.validate(ev, params);
+    try lambda_list.validate(ev, params, false);
+}
+
+fn defmacro(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const name = heap.car(args);
+    if (!name.isSymbol()) return Error.TypeError;
+    const after_name = heap.cdr(args);
+    if (!after_name.isCons()) return Error.BadArgList;
+    const params = heap.car(after_name);
+    const body = heap.cdr(after_name);
+    try lambda_list.validate(ev, params, true);
+
+    const expander = try function.allocMacro(
+        ev.heap.allocator,
+        symbol_mod.symbol(name).name,
+        params,
+        body,
+        ev.env.top_value,
+        ev.env.top_function,
+    );
+    ev.env.defineGlobalFunction(name, expander);
+    return ev.set1(name);
+}
+
+fn macroexpand1Form(ev: *Evaluator, args: Value) Error!Value {
+    const form = try evalMacroexpandArgs(ev, args);
+    if (try ev.macroexpand1(form)) |expansion| {
+        return ev.setValues(&.{ expansion, value.T });
+    }
+    return ev.setValues(&.{ form, value.NIL });
+}
+
+fn macroexpandForm(ev: *Evaluator, args: Value) Error!Value {
+    var form = try evalMacroexpandArgs(ev, args);
+    var expanded = false;
+    while (try ev.macroexpand1(form)) |expansion| {
+        form = expansion;
+        expanded = true;
+    }
+    return ev.setValues(&.{ form, if (expanded) value.T else value.NIL });
+}
+
+/// Both macroexpand forms take `form` plus an optional environment argument,
+/// which is evaluated and ignored.
+fn evalMacroexpandArgs(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const form = try ev.eval(heap.car(args));
+    const after_form = heap.cdr(args);
+    if (after_form.isCons()) {
+        if (!heap.cdr(after_form).equalsRaw(value.NIL)) return Error.BadArgList;
+        _ = try ev.eval(heap.car(after_form));
+    } else if (!after_form.equalsRaw(value.NIL)) {
+        return Error.BadArgList;
+    }
+    return form;
 }
 
 fn ifForm(ev: *Evaluator, args: Value) Error!Value {

@@ -38,6 +38,9 @@ pub const Closure = struct {
     body: Value,
     captured_env: ?*env_mod.Frame,
     captured_fenv: ?*env_mod.Frame,
+    // Macro expander closure. Called with the two-argument macro-function
+    // protocol (form env), where the lambda list destructures the form's cdr.
+    is_macro: bool = false,
 };
 
 pub const HeapFunction = struct {
@@ -92,6 +95,25 @@ pub fn allocClosure(
         } },
     };
     return Value.fromHeapAddr(@intFromPtr(obj));
+}
+
+pub fn allocMacro(
+    allocator: std.mem.Allocator,
+    name: ?[]const u8,
+    params: Value,
+    body: Value,
+    captured_env: ?*env_mod.Frame,
+    captured_fenv: ?*env_mod.Frame,
+) !Value {
+    const v = try allocClosure(allocator, name, params, body, captured_env, captured_fenv);
+    asFunction(v).payload.closure.is_macro = true;
+    return v;
+}
+
+pub fn isMacro(v: Value) bool {
+    if (!isFunction(v)) return false;
+    const f = asFunction(v);
+    return f.kind == .closure and f.payload.closure.is_macro;
 }
 
 pub fn asFunction(v: Value) *HeapFunction {

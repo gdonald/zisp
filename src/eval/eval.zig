@@ -22,9 +22,7 @@ pub const SpecialFormFn = *const fn (ev: *Evaluator, args: Value) Error!Value;
 pub const MacroExpander = *const fn (ev: *Evaluator, form: Value) Error!?Value;
 
 fn defaultMacroExpander(ev: *Evaluator, form: Value) Error!?Value {
-    _ = ev;
-    _ = form;
-    return null;
+    return ev.macroexpand1(form);
 }
 
 const BlockEntry = struct { name: Value, id: u64 };
@@ -282,6 +280,33 @@ pub const Evaluator = struct {
         return self.callFunction(fn_v, args.items);
     }
 
+    /// Expand `form` once if its head names a macro. Returns null when the
+    /// form is not a macro call. Expansion goes through `*macroexpand-hook*`
+    /// when one is set (the `funcall` designator short-circuits to a direct
+    /// call, matching its default value).
+    pub fn macroexpand1(self: *Evaluator, form: Value) Error!?Value {
+        if (!form.isCons()) return null;
+        const head = heap_mod.car(form);
+        if (!head.isSymbol()) return null;
+        if (self.lookupSpecialForm(head) != null) return null;
+        const expander = self.env.lookupFunction(head) orelse return null;
+        if (!function.isMacro(expander)) return null;
+
+        const hook_sym = try self.interner.intern("*MACROEXPAND-HOOK*");
+        const funcall_sym = try self.interner.intern("FUNCALL");
+        const hook = self.env.lookupValue(hook_sym) orelse funcall_sym;
+        if (hook.equalsRaw(funcall_sym) or hook.equalsRaw(value.NIL)) {
+            return try self.callFunction(expander, &.{ form, value.NIL });
+        }
+        const hook_fn = if (isFunction(hook))
+            hook
+        else if (hook.isSymbol())
+            self.env.lookupFunction(hook) orelse return Error.UnboundFunction
+        else
+            return Error.TypeError;
+        return try self.callFunction(hook_fn, &.{ expander, form, value.NIL });
+    }
+
     pub fn callFunction(self: *Evaluator, fn_v: Value, args: []const Value) Error!Value {
         if (!isFunction(fn_v)) return Error.NotCallable;
         const f = asFunction(fn_v);
@@ -317,6 +342,8 @@ pub const Evaluator = struct {
         var cur_args: []const Value = args0;
         var use_a = true;
         var frame: ?*env_mod.Frame = null;
+        var macro_args: std.ArrayList(Value) = .empty;
+        defer macro_args.deinit(self.allocator);
 
         while (true) {
             self.env.top_function = cur.captured_fenv;
@@ -328,7 +355,22 @@ pub const Evaluator = struct {
                 self.env.top_value = cur.captured_env;
                 frame = try self.env.pushValueFrame();
             }
-            try lambda_list.bindInto(self, cur.params, cur_args, frame.?);
+            var bind_args = cur_args;
+            if (cur.is_macro) {
+                // Macro-function protocol: (form env). The lambda list
+                // destructures the form's cdr, and env is ignored for now.
+                if (cur_args.len != 2) return Error.WrongArgCount;
+                if (!cur_args[0].isCons()) return Error.TypeError;
+                macro_args.clearRetainingCapacity();
+                var rest = heap_mod.cdr(cur_args[0]);
+                while (!rest.equalsRaw(value.NIL)) {
+                    if (!rest.isCons()) return Error.BadArgList;
+                    try macro_args.append(self.allocator, heap_mod.car(rest));
+                    rest = heap_mod.cdr(rest);
+                }
+                bind_args = macro_args.items;
+            }
+            try lambda_list.bindInto(self, cur.params, bind_args, frame.?, cur.is_macro);
 
             if (!cur.body.isCons()) return self.set1(value.NIL);
 
