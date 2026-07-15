@@ -3,6 +3,7 @@ const value = @import("../runtime/value.zig");
 const heap_mod = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const env_mod = @import("env.zig");
+const source_pos = @import("../runtime/source_pos.zig");
 const function = @import("function.zig");
 const lambda_list = @import("lambda_list.zig");
 
@@ -39,6 +40,8 @@ pub const Evaluator = struct {
     // value of `*standard-output*`. The host wires this to a real writer; it
     // stays null in unit fixtures that never print.
     out: ?*std.Io.Writer = null,
+    // Warning sink. The CLI wires this to stderr; null suppresses warnings.
+    warn_out: ?*std.Io.Writer = null,
     // Filesystem access for `load`. Null where no file I/O is expected.
     io: ?std.Io = null,
     // Set by `quit` / `exit`; the driver reads it to choose the process exit
@@ -67,6 +70,14 @@ pub const Evaluator = struct {
     // Value list carried by an in-flight return-from / throw, read by the
     // catching block / catch frame.
     transfer_values: std.ArrayList(Value) = .empty,
+    // Source-position side-table shared with the reader. When bound,
+    // macroexpansion stamps synthesized conses with the defining macro's
+    // position; verbatim subforms keep theirs through structure sharing.
+    positions: ?*source_pos.PositionTable = null,
+    // The full form whose special-form handler is currently running.
+    // `defmacro` reads it to record the definition form's position.
+    // Fixnum zero until the first dispatch; never a cons before then.
+    current_form: Value = .{ .raw = 0 },
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -251,6 +262,7 @@ pub const Evaluator = struct {
 
         if (head.isSymbol()) {
             if (self.lookupSpecialForm(head)) |handler| {
+                self.current_form = form;
                 return handler(self, tail);
             }
             if (try self.macro_expander(self, form)) |expanded| {
@@ -296,7 +308,9 @@ pub const Evaluator = struct {
         const funcall_sym = try self.interner.intern("FUNCALL");
         const hook = self.env.lookupValue(hook_sym) orelse funcall_sym;
         if (hook.equalsRaw(funcall_sym) or hook.equalsRaw(value.NIL)) {
-            return try self.callFunction(expander, &.{ form, value.NIL });
+            const expansion = try self.callFunction(expander, &.{ form, value.NIL });
+            try self.stampMacroExpansion(expander, expansion);
+            return expansion;
         }
         const hook_fn = if (isFunction(hook))
             hook
@@ -304,16 +318,43 @@ pub const Evaluator = struct {
             self.env.lookupFunction(hook) orelse return Error.UnboundFunction
         else
             return Error.TypeError;
-        return try self.callFunction(hook_fn, &.{ expander, form, value.NIL });
+        const expansion = try self.callFunction(hook_fn, &.{ expander, form, value.NIL });
+        try self.stampMacroExpansion(expander, expansion);
+        return expansion;
+    }
+
+    /// Give every expansion cons that lacks a source position the defining
+    /// macro's position. Conses passed through verbatim from the call form
+    /// already have entries and keep them.
+    fn stampMacroExpansion(self: *Evaluator, expander: Value, expansion: Value) Error!void {
+        const table = self.positions orelse return;
+        const def_pos = asFunction(expander).payload.closure.def_pos orelse return;
+        try stampExpansion(table, expansion, def_pos);
+    }
+
+    fn stampExpansion(
+        table: *source_pos.PositionTable,
+        v: Value,
+        pos: source_pos.SourcePosition,
+    ) std.mem.Allocator.Error!void {
+        if (!v.isCons()) return;
+        if (table.lookup(v) != null) return;
+        try table.record(v, pos);
+        try stampExpansion(table, heap_mod.car(v), pos);
+        try stampExpansion(table, heap_mod.cdr(v), pos);
     }
 
     pub fn callFunction(self: *Evaluator, fn_v: Value, args: []const Value) Error!Value {
         if (!isFunction(fn_v)) return Error.NotCallable;
         const f = asFunction(fn_v);
         switch (f.kind) {
-            // Natives are single-valued; multiple-value producers are special
-            // forms, so collapsing the channel here is always correct.
-            .native => return self.set1(try f.payload.native(@ptrCast(self), args)),
+            // Natives are single-valued unless flagged; multiple-value
+            // producers are special forms or pass-through natives.
+            .native => {
+                const result = try f.payload.native(@ptrCast(self), args);
+                if (f.preserves_values) return result;
+                return self.set1(result);
+            },
             .closure => return self.applyClosure(&f.payload.closure, args),
         }
     }
@@ -342,8 +383,6 @@ pub const Evaluator = struct {
         var cur_args: []const Value = args0;
         var use_a = true;
         var frame: ?*env_mod.Frame = null;
-        var macro_args: std.ArrayList(Value) = .empty;
-        defer macro_args.deinit(self.allocator);
 
         while (true) {
             self.env.top_function = cur.captured_fenv;
@@ -355,22 +394,15 @@ pub const Evaluator = struct {
                 self.env.top_value = cur.captured_env;
                 frame = try self.env.pushValueFrame();
             }
-            var bind_args = cur_args;
             if (cur.is_macro) {
                 // Macro-function protocol: (form env). The lambda list
-                // destructures the form's cdr, and env is ignored for now.
+                // destructures the form's cdr; &whole sees the whole form
+                // and &environment binds env.
                 if (cur_args.len != 2) return Error.WrongArgCount;
-                if (!cur_args[0].isCons()) return Error.TypeError;
-                macro_args.clearRetainingCapacity();
-                var rest = heap_mod.cdr(cur_args[0]);
-                while (!rest.equalsRaw(value.NIL)) {
-                    if (!rest.isCons()) return Error.BadArgList;
-                    try macro_args.append(self.allocator, heap_mod.car(rest));
-                    rest = heap_mod.cdr(rest);
-                }
-                bind_args = macro_args.items;
+                try lambda_list.bindMacro(self, cur.params, cur_args[0], cur_args[1], frame.?);
+            } else {
+                try lambda_list.bindInto(self, cur.params, cur_args, frame.?);
             }
-            try lambda_list.bindInto(self, cur.params, bind_args, frame.?, cur.is_macro);
 
             if (!cur.body.isCons()) return self.set1(value.NIL);
 
@@ -410,6 +442,7 @@ pub const Evaluator = struct {
         if (self.lookupSpecialForm(head)) |handler| {
             if (head.equalsRaw(self.sym_if)) return self.tailIf(tail, out_buf);
             if (head.equalsRaw(self.sym_progn)) return self.tailProgn(tail, out_buf);
+            self.current_form = form;
             return .{ .value = try handler(self, tail) };
         }
 

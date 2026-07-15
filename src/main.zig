@@ -51,6 +51,9 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
     var repl = try zisp.repl.Repl.init(gpa, out, io);
     defer repl.deinit();
 
+    var stderr_writer = std.Io.File.Writer.init(std.Io.File.stderr(), io, &.{});
+    repl.ev.warn_out = &stderr_writer.interface;
+
     for (plan.ops) |op| {
         const result = switch (op) {
             .eval => |expr| repl.evalForms(expr, true),
@@ -118,6 +121,9 @@ fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
 
     var repl = try zisp.repl.Repl.init(gpa, out, io);
     defer repl.deinit();
+
+    var stderr_writer = std.Io.File.Writer.init(std.Io.File.stderr(), io, &.{});
+    repl.ev.warn_out = &stderr_writer.interface;
 
     try runInteractive(gpa, io, repl, out);
     try out.flush();

@@ -47,6 +47,21 @@ pub const Interner = struct {
         return Value.fromSymbolAddr(@intFromPtr(sym));
     }
 
+    /// Allocate a fresh symbol that is not entered in the intern table.
+    /// Two uninterned symbols are never eq, even with equal names.
+    pub fn makeUninterned(self: *Interner, sym_name: []const u8) !Value {
+        const arena_alloc = self.arena.allocator();
+        const name_copy = try arena_alloc.dupe(u8, sym_name);
+        const sym = try arena_alloc.create(Symbol);
+        sym.* = .{
+            .name = name_copy,
+            .value_cell = value.SPECIAL_UNBOUND,
+            .function_cell = value.SPECIAL_UNBOUND,
+            .plist = value.NIL,
+        };
+        return Value.fromSymbolAddr(@intFromPtr(sym));
+    }
+
     pub fn lookup(self: *Interner, sym_name: []const u8) ?Value {
         if (self.table.get(sym_name)) |sym| {
             return Value.fromSymbolAddr(@intFromPtr(sym));

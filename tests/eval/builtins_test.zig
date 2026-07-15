@@ -386,22 +386,22 @@ test "mapcar mapc mapcan" {
     try fx.expectErr(Error.WrongArgCount, "(mapcar #'1+)");
 }
 
-test "and special form" {
+test "and macro" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try fx.expectT("(and)");
     try fx.expectFix("(and 1 2 3)", 3);
     try fx.expectNil("(and 1 nil 3)");
-    try fx.expectErr(Error.BadArgList, "(and 1 . 2)");
+    try fx.expectErr(Error.TypeError, "(and 1 . 2)");
 }
 
-test "or special form" {
+test "or macro" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try fx.expectNil("(or)");
     try fx.expectFix("(or nil 2 3)", 2);
     try fx.expectNil("(or nil nil)");
-    try fx.expectErr(Error.BadArgList, "(or nil . 2)");
+    try fx.expectErr(Error.TypeError, "(or nil . 2)");
 }
 
 test "when and unless" {
@@ -411,8 +411,8 @@ test "when and unless" {
     try fx.expectNil("(when nil 1)");
     try fx.expectFix("(unless nil 1 2)", 2);
     try fx.expectNil("(unless t 1)");
-    try fx.expectErr(Error.BadArgList, "(when)");
-    try fx.expectErr(Error.BadArgList, "(unless)");
+    try fx.expectErr(Error.WrongArgCount, "(when)");
+    try fx.expectErr(Error.WrongArgCount, "(unless)");
 }
 
 test "cond" {
@@ -422,6 +422,114 @@ test "cond" {
     try fx.expectFix("(cond (5))", 5);
     try fx.expectNil("(cond (nil 1))");
     try fx.expectFix("(cond ((= 1 1) 10 20))", 20);
-    try fx.expectErr(Error.TypeError, "(cond 5)");
-    try fx.expectErr(Error.BadArgList, "(cond (nil 1) . 5)");
+    try fx.expectErr(Error.ProgramError, "(cond 5)");
+    try fx.expectErr(Error.TypeError, "(cond (nil 1) . 5)");
+}
+
+test "gensym returns distinct uninterned symbols" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    const a = try fx.evalStr("(gensym)");
+    const b = try fx.evalStr("(gensym)");
+    try testing.expect(a.isSymbol());
+    try testing.expect(!a.equalsRaw(b));
+    // Uninterned: the intern table maps the name to a different symbol,
+    // or to nothing at all.
+    const looked = fx.interner.lookup(symbol_mod.symbol(a).name);
+    try testing.expect(looked == null or !looked.?.equalsRaw(a));
+}
+
+test "gensym is never eq to the interned symbol of the same name" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectNil(
+        \\(progn (setq *gensym-counter* 100) (if (eq (gensym) 'g100) t nil))
+    );
+}
+
+test "gensym reads and increments *gensym-counter*" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(progn (setq *gensym-counter* 42) (gensym) (= *gensym-counter* 43))
+    );
+}
+
+test "gensym with a string prefix still increments the counter" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    const v = try fx.evalStr(
+        \\(progn (setq *gensym-counter* 7) (gensym "FOO"))
+    );
+    try testing.expectEqualStrings("FOO7", symbol_mod.symbol(v).name);
+    try fx.expectT("(= *gensym-counter* 8)");
+}
+
+test "gensym with a fixnum uses it without touching the counter" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    const v = try fx.evalStr(
+        \\(progn (setq *gensym-counter* 7) (gensym 55))
+    );
+    try testing.expectEqualStrings("G55", symbol_mod.symbol(v).name);
+    try fx.expectT("(= *gensym-counter* 7)");
+}
+
+test "gensym argument errors" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectErr(Error.TypeError, "(gensym 'sym)");
+    try fx.expectErr(Error.TypeError, "(gensym -1)");
+    try fx.expectErr(Error.WrongArgCount, "(gensym \"A\" \"B\")");
+}
+
+test "gentemp interns fresh distinct symbols" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    const a = try fx.evalStr("(gentemp)");
+    const b = try fx.evalStr("(gentemp)");
+    try testing.expect(a.isSymbol());
+    try testing.expect(!a.equalsRaw(b));
+    // Interned: the table's entry for the name is the symbol itself.
+    const looked = fx.interner.lookup(symbol_mod.symbol(a).name) orelse
+        return error.TestUnexpectedResult;
+    try testing.expect(looked.equalsRaw(a));
+}
+
+test "gentemp skips names that are already interned" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    _ = try fx.interner.intern("PFX1");
+    const v = try fx.evalStr("(gentemp \"PFX\")");
+    try testing.expectEqualStrings("PFX2", symbol_mod.symbol(v).name);
+}
+
+test "gentemp argument errors" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectErr(Error.TypeError, "(gentemp 5)");
+    try fx.expectErr(Error.WrongArgCount, "(gentemp \"A\" \"B\")");
+}
+
+test "gensym supports the classic macro hygiene pattern" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    // The expansion's temporary variable cannot capture the user's TMP.
+    try fx.expectFix(
+        \\(progn
+        \\  (defmacro swap-order (a b)
+        \\    (let ((tmp (gensym)))
+        \\      `(let ((,tmp ,a)) (+ (* 100 ,b) ,tmp))))
+        \\  (let ((tmp 7)) (swap-order tmp 3)))
+    , 307);
 }

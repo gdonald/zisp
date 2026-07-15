@@ -384,14 +384,345 @@ test "funcall of a macro function with a non-cons form errors" {
     ));
 }
 
-test "funcall of a macro function with a dotted form errors" {
+test "funcall of a macro function binds &body to a dotted tail" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr(
+        \\(defmacro my-mac (&body b) (list 'quote b))
+        \\(equal (funcall (function my-mac) '(my-mac 1 . 2) nil) ''(1 . 2))
+    );
+    try std.testing.expect(r.equalsRaw(value.T));
+}
+
+test "funcall of a macro function with &key rejects a dotted form" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
     try std.testing.expectError(Error.BadArgList, fx.evalStr(
-        \\(defmacro my-mac (&body b) 1)
-        \\(funcall (function my-mac) '(my-mac 1 . 2) nil)
+        \\(defmacro my-mac (&key a) 1)
+        \\(funcall (function my-mac) '(my-mac :a 1 . 2) nil)
     ));
+}
+
+test "dotted macro lambda list binds the tail like &rest" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr(
+        \\(defmacro dotted (a . r) (list 'quote (list a r)))
+        \\(equal (dotted x y z) '(x (y z)))
+    );
+    try std.testing.expect(r.equalsRaw(value.T));
+}
+
+test "macro &aux evaluates its init at expansion time" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr(
+        \\(defmacro with-aux (a &aux (b 5)) (list 'quote (list a b)))
+        \\(equal (with-aux x) '(x 5))
+    );
+    try std.testing.expect(r.equalsRaw(value.T));
+}
+
+test "defmacro rejects &whole after the first position" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (a &whole w) 1)"));
+}
+
+test "defmacro rejects &whole with no variable" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (&whole) 1)"));
+}
+
+test "defmacro rejects a non-variable &whole target" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.TypeError, fx.evalStr("(defmacro bad (&whole 5) 1)"));
+}
+
+test "defmacro rejects &environment with no variable" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (a &environment) 1)"));
+}
+
+test "defmacro rejects a non-symbol &environment variable" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.TypeError, fx.evalStr("(defmacro bad (&environment 5) 1)"));
+}
+
+test "defmacro rejects a duplicate &environment" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr(
+        "(defmacro bad (&environment e1 &environment e2) 1)",
+    ));
+}
+
+test "defmacro rejects &environment inside a nested pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad ((a &environment e)) 1)"));
+}
+
+test "defmacro rejects a non-symbol dotted tail" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (a . 5) 1)"));
+}
+
+test "defmacro rejects a dotted tail after &key" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (&key k . r) 1)"));
+}
+
+test "defmacro rejects a malformed nested pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad ((a . 5)) 1)"));
+}
+
+test "defmacro rejects a malformed &whole pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (&whole (a . 5) b) 1)"));
+}
+
+test "defmacro rejects a malformed &rest pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (&rest (a . 5)) 1)"));
+}
+
+test "defmacro rejects a malformed &key pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(defmacro bad (&key ((:k (a . 5)))) 1)"));
+}
+
+test "defmacro rejects a non-symbol keyword name in a key pattern spec" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.TypeError, fx.evalStr("(defmacro bad (&key ((5 x))) 1)"));
+}
+
+test "lambda rejects a destructuring pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.TypeError, fx.evalStr("(lambda ((a b)) a)"));
+}
+
+test "lambda rejects a dotted lambda list" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(lambda (a . r) a)"));
+}
+
+test "macro call with a non-list where a pattern expects one errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.WrongArgCount, fx.evalStr(
+        \\(defmacro pat ((a b)) (list 'quote (list a b)))
+        \\(pat 5)
+    ));
+}
+
+test "macro call with too many elements for a pattern errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.WrongArgCount, fx.evalStr(
+        \\(defmacro pat ((a b)) (list 'quote (list a b)))
+        \\(pat (1 2 3))
+    ));
+}
+
+test "macro call with an unknown keyword errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.ProgramError, fx.evalStr(
+        \\(defmacro kw (&key a) a)
+        \\(kw :b 1)
+    ));
+}
+
+test "macro call with an odd keyword segment errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.ProgramError, fx.evalStr(
+        \\(defmacro kw (&key a) a)
+        \\(kw :a)
+    ));
+}
+
+test "macro call with a non-symbol keyword errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.ProgramError, fx.evalStr(
+        \\(defmacro kw (&key a) a)
+        \\(kw 5 6)
+    ));
+}
+
+test "macro call honors :allow-other-keys from the caller" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr(
+        \\(defmacro kw (&key a) (list 'quote a))
+        \\(kw :a x :b y :allow-other-keys t)
+    );
+    try std.testing.expect(r.equalsRaw(try fx.interner.intern("X")));
+}
+
+test "destructuring-bind binds patterns, dotted pairs, and keys" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr(
+        \\(equal (destructuring-bind (a (b . c) &key k) '(1 (2 3) :k 4) (list a b c k))
+        \\       '(1 2 (3) 4))
+    );
+    try std.testing.expect(r.equalsRaw(value.T));
+}
+
+test "destructuring-bind accepts an empty pattern for an empty list" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr("(destructuring-bind () nil 'ok)");
+    try std.testing.expect(r.equalsRaw(try fx.interner.intern("OK")));
+}
+
+test "destructuring-bind treats nil as an empty pattern that must match nil" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.WrongArgCount, fx.evalStr(
+        "(destructuring-bind (a nil) '(1 2) a)",
+    ));
+}
+
+test "destructuring-bind with an empty body returns nil" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr("(destructuring-bind (x) (list 1))");
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "destructuring-bind rejects a missing expression" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(destructuring-bind (a))"));
+}
+
+test "destructuring-bind rejects a non-list pattern" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr("(destructuring-bind 5 nil)"));
+}
+
+test "destructuring-bind rejects &environment" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.BadArgList, fx.evalStr(
+        "(destructuring-bind (&environment e) nil e)",
+    ));
+}
+
+test "return exits the nil block with a value" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr("(block nil (return 5) 9)");
+    try std.testing.expectEqual(@as(i64, 5), r.toFixnum());
+}
+
+test "return with no value exits with nil" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr("(block nil (return) 9)");
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "return outside a nil block errors" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.ControlError, fx.evalStr("(return 5)"));
+}
+
+test "macro-function returns the expander for a macro" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr(
+        \\(defmacro my-mac (x) (list 'quote x))
+        \\(equal (funcall (macro-function 'my-mac) '(my-mac hello) nil) ''hello)
+    );
+    try std.testing.expect(r.equalsRaw(value.T));
+}
+
+test "macro-function returns nil for a non-macro function" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr("(macro-function 'list)");
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "macro-function returns nil for an undefined symbol" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    const r = try fx.evalStr("(macro-function 'no-such-macro-here)");
+    try std.testing.expect(r.equalsRaw(value.NIL));
+}
+
+test "macro-function rejects a non-symbol argument" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.TypeError, fx.evalStr("(macro-function 5)"));
+}
+
+test "macro-function rejects zero arguments" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+
+    try std.testing.expectError(Error.WrongArgCount, fx.evalStr("(macro-function)"));
 }
 
 test "funcall of a macro function uses the (form env) protocol" {

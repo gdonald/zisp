@@ -26,7 +26,15 @@ comptime {
     _ = @import("eval/tail_call_test.zig");
     _ = @import("eval/builtins_test.zig");
     _ = @import("eval/macro_test.zig");
+    _ = @import("eval/destructuring_corpus_test.zig");
+    _ = @import("eval/ansi_destructuring_bind_test.zig");
+    _ = @import("eval/macroexpand_positions_test.zig");
+    _ = @import("eval/quasiquote_test.zig");
+    _ = @import("eval/backquote_corpus_test.zig");
+    _ = @import("eval/prelude_macros_test.zig");
+    _ = @import("eval/setf_test.zig");
     _ = @import("builtins/system_test.zig");
+    _ = @import("builtins/compile_file_test.zig");
     _ = @import("repl/repl_test.zig");
     _ = @import("cli_test.zig");
 }

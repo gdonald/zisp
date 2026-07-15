@@ -5,6 +5,7 @@ const symbol_mod = @import("../runtime/symbol.zig");
 const eval_mod = @import("eval.zig");
 const function = @import("function.zig");
 const lambda_list = @import("lambda_list.zig");
+const quasiquote = @import("quasiquote.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -23,6 +24,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("LABELS", &labels);
     try ev.registerSpecialForm("BLOCK", &block);
     try ev.registerSpecialForm("RETURN-FROM", &returnFrom);
+    try ev.registerSpecialForm("RETURN", &returnForm);
     try ev.registerSpecialForm("TAGBODY", &tagbody);
     try ev.registerSpecialForm("GO", &goForm);
     try ev.registerSpecialForm("CATCH", &catchForm);
@@ -37,12 +39,12 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("MULTIPLE-VALUE-PROG1", &multipleValueProg1);
     try ev.registerSpecialForm("MULTIPLE-VALUE-BIND", &multipleValueBind);
     try ev.registerSpecialForm("EVAL-WHEN", &evalWhen);
-    try ev.registerSpecialForm("AND", &andForm);
-    try ev.registerSpecialForm("OR", &orForm);
-    try ev.registerSpecialForm("WHEN", &whenForm);
-    try ev.registerSpecialForm("UNLESS", &unlessForm);
-    try ev.registerSpecialForm("COND", &condForm);
+    try ev.registerSpecialForm("DEFUN", &defun);
     try ev.registerSpecialForm("DEFMACRO", &defmacro);
+    try ev.registerSpecialForm("DESTRUCTURING-BIND", &destructuringBind);
+    try ev.registerSpecialForm("QUASIQUOTE", &quasiquoteForm);
+    try ev.registerSpecialForm("UNQUOTE", &unquoteForm);
+    try ev.registerSpecialForm("UNQUOTE-SPLICING", &unquoteForm);
     try ev.registerSpecialForm("MACROEXPAND-1", &macroexpand1Form);
     try ev.registerSpecialForm("MACROEXPAND", &macroexpandForm);
 
@@ -140,7 +142,32 @@ fn validateParams(ev: *Evaluator, params: Value) Error!void {
     try lambda_list.validate(ev, params, false);
 }
 
+fn defun(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const name = heap.car(args);
+    if (!name.isSymbol()) return Error.TypeError;
+    const after_name = heap.cdr(args);
+    if (!after_name.isCons()) return Error.BadArgList;
+    const params = heap.car(after_name);
+    const body = heap.cdr(after_name);
+    try lambda_list.validate(ev, params, false);
+
+    const closure = try function.allocClosure(
+        ev.heap.allocator,
+        symbol_mod.symbol(name).name,
+        params,
+        body,
+        ev.env.top_value,
+        ev.env.top_function,
+    );
+    ev.env.defineGlobalFunction(name, closure);
+    return ev.set1(name);
+}
+
 fn defmacro(ev: *Evaluator, args: Value) Error!Value {
+    // The dispatcher stashed the full (defmacro ...) form before calling
+    // this handler; its position becomes the macro's definition position.
+    const def_form = ev.current_form;
     if (!args.isCons()) return Error.BadArgList;
     const name = heap.car(args);
     if (!name.isSymbol()) return Error.TypeError;
@@ -150,6 +177,7 @@ fn defmacro(ev: *Evaluator, args: Value) Error!Value {
     const body = heap.cdr(after_name);
     try lambda_list.validate(ev, params, true);
 
+    const def_pos = if (ev.positions) |table| table.lookup(def_form) else null;
     const expander = try function.allocMacro(
         ev.heap.allocator,
         symbol_mod.symbol(name).name,
@@ -157,9 +185,38 @@ fn defmacro(ev: *Evaluator, args: Value) Error!Value {
         body,
         ev.env.top_value,
         ev.env.top_function,
+        def_pos,
     );
     ev.env.defineGlobalFunction(name, expander);
     return ev.set1(name);
+}
+
+fn quasiquoteForm(ev: *Evaluator, args: Value) Error!Value {
+    const template = try expectOneArg(args);
+    const expansion = try quasiquote.expand(ev, template);
+    return ev.eval(expansion);
+}
+
+/// `unquote` / `unquote-splicing` outside a backquote template.
+fn unquoteForm(ev: *Evaluator, args: Value) Error!Value {
+    _ = ev;
+    _ = args;
+    return Error.ProgramError;
+}
+
+fn destructuringBind(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const pattern = heap.car(args);
+    if (!pattern.isCons() and !pattern.equalsRaw(value.NIL)) return Error.BadArgList;
+    const rest = heap.cdr(args);
+    if (!rest.isCons()) return Error.BadArgList;
+    const expr_val = try ev.eval(heap.car(rest));
+    const body = heap.cdr(rest);
+
+    _ = try ev.env.pushValueFrame();
+    defer ev.env.popValueFrame();
+    try lambda_list.bindPattern(ev, pattern, expr_val, ev.env.top_value.?);
+    return prognBody(ev, body);
 }
 
 fn macroexpand1Form(ev: *Evaluator, args: Value) Error!Value {
@@ -361,6 +418,11 @@ fn returnFrom(ev: *Evaluator, args: Value) Error!Value {
     return Error.BlockReturn;
 }
 
+/// `(return [value])` is `(return-from nil [value])`.
+fn returnForm(ev: *Evaluator, args: Value) Error!Value {
+    return returnFrom(ev, try ev.heap.allocCons(value.NIL, args));
+}
+
 fn tagbody(ev: *Evaluator, args: Value) Error!Value {
     var v = args;
     while (!v.equalsRaw(value.NIL)) {
@@ -474,28 +536,59 @@ fn declareForm(ev: *Evaluator, args: Value) Error!Value {
     return ev.set1(value.NIL);
 }
 
-fn evalWhen(ev: *Evaluator, args: Value) Error!Value {
-    if (!args.isCons()) return Error.BadArgList;
-    const situations = heap.car(args);
-    const body = heap.cdr(args);
+pub const Situations = struct {
+    compile_toplevel: bool = false,
+    load_toplevel: bool = false,
+    execute: bool = false,
+};
 
-    // Without a compiler, only the :execute (and deprecated eval) situation
-    // is meaningful; :compile-toplevel / :load-toplevel are accepted and
-    // skipped here.
-    var execute = false;
-    var rest = situations;
+/// Parse an `eval-when` situation list. The deprecated `compile` / `load` /
+/// `eval` names map to their modern equivalents with a warning; unknown
+/// situations are an error.
+pub fn parseSituations(ev: *Evaluator, list: Value) Error!Situations {
+    var s: Situations = .{};
+    var rest = list;
     while (rest.isCons()) {
-        const s = heap.car(rest);
-        if (!s.isSymbol()) return Error.TypeError;
-        const name = symbol_mod.symbol(s).name;
-        if (std.mem.eql(u8, name, ":EXECUTE") or std.mem.eql(u8, name, "EVAL")) {
-            execute = true;
+        const item = heap.car(rest);
+        if (!item.isSymbol()) return Error.TypeError;
+        const name = symbol_mod.symbol(item).name;
+        if (std.mem.eql(u8, name, ":COMPILE-TOPLEVEL")) {
+            s.compile_toplevel = true;
+        } else if (std.mem.eql(u8, name, ":LOAD-TOPLEVEL")) {
+            s.load_toplevel = true;
+        } else if (std.mem.eql(u8, name, ":EXECUTE")) {
+            s.execute = true;
+        } else if (std.mem.eql(u8, name, "COMPILE")) {
+            s.compile_toplevel = true;
+            warnDeprecated(ev, name, ":COMPILE-TOPLEVEL");
+        } else if (std.mem.eql(u8, name, "LOAD")) {
+            s.load_toplevel = true;
+            warnDeprecated(ev, name, ":LOAD-TOPLEVEL");
+        } else if (std.mem.eql(u8, name, "EVAL")) {
+            s.execute = true;
+            warnDeprecated(ev, name, ":EXECUTE");
+        } else {
+            return Error.ProgramError;
         }
         rest = heap.cdr(rest);
     }
     if (!rest.equalsRaw(value.NIL)) return Error.BadArgList;
+    return s;
+}
 
-    if (execute) return prognBody(ev, body);
+fn warnDeprecated(ev: *Evaluator, old: []const u8, new: []const u8) void {
+    const w = ev.warn_out orelse return;
+    w.print("; WARNING: deprecated EVAL-WHEN situation {s}; use {s}\n", .{ old, new }) catch {};
+}
+
+/// Runtime `eval-when`: reached by `eval` for non-top-level occurrences and
+/// at the REPL, where only the `:execute` situation applies. Top-level
+/// occurrences during `compile-file` are intercepted by the file compiler's
+/// top-level processor instead.
+fn evalWhen(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const s = try parseSituations(ev, heap.car(args));
+    if (s.execute) return prognBody(ev, heap.cdr(args));
     return ev.set1(value.NIL);
 }
 
@@ -603,65 +696,6 @@ fn multipleValueBind(ev: *Evaluator, args: Value) Error!Value {
         rest = heap.cdr(rest);
     }
     return prognBody(ev, body);
-}
-
-fn andForm(ev: *Evaluator, args: Value) Error!Value {
-    if (args.equalsRaw(value.NIL)) return ev.set1(value.T);
-    var rest = args;
-    while (true) {
-        if (!rest.isCons()) return Error.BadArgList;
-        const this = heap.car(rest);
-        const next = heap.cdr(rest);
-        const result = try ev.eval(this);
-        if (next.equalsRaw(value.NIL)) return result;
-        if (result.equalsRaw(value.NIL)) return ev.set1(value.NIL);
-        rest = next;
-    }
-}
-
-fn orForm(ev: *Evaluator, args: Value) Error!Value {
-    var rest = args;
-    while (!rest.equalsRaw(value.NIL)) {
-        if (!rest.isCons()) return Error.BadArgList;
-        const this = heap.car(rest);
-        const next = heap.cdr(rest);
-        const result = try ev.eval(this);
-        if (!result.equalsRaw(value.NIL)) return result;
-        if (next.equalsRaw(value.NIL)) return result;
-        rest = next;
-    }
-    return ev.set1(value.NIL);
-}
-
-fn whenForm(ev: *Evaluator, args: Value) Error!Value {
-    if (!args.isCons()) return Error.BadArgList;
-    const test_val = try ev.eval(heap.car(args));
-    if (test_val.equalsRaw(value.NIL)) return ev.set1(value.NIL);
-    return prognBody(ev, heap.cdr(args));
-}
-
-fn unlessForm(ev: *Evaluator, args: Value) Error!Value {
-    if (!args.isCons()) return Error.BadArgList;
-    const test_val = try ev.eval(heap.car(args));
-    if (!test_val.equalsRaw(value.NIL)) return ev.set1(value.NIL);
-    return prognBody(ev, heap.cdr(args));
-}
-
-fn condForm(ev: *Evaluator, args: Value) Error!Value {
-    var rest = args;
-    while (!rest.equalsRaw(value.NIL)) {
-        if (!rest.isCons()) return Error.BadArgList;
-        const clause = heap.car(rest);
-        if (!clause.isCons()) return Error.TypeError;
-        const test_val = try ev.eval(heap.car(clause));
-        if (!test_val.equalsRaw(value.NIL)) {
-            const forms = heap.cdr(clause);
-            if (forms.equalsRaw(value.NIL)) return ev.set1(test_val);
-            return prognBody(ev, forms);
-        }
-        rest = heap.cdr(rest);
-    }
-    return ev.set1(value.NIL);
 }
 
 fn expectOneArg(args: Value) Error!Value {

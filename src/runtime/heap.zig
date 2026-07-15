@@ -111,6 +111,14 @@ pub const HeapVector = extern struct {
     }
 };
 
+/// Minimal eql hash table: keys compare by raw value identity, which is
+/// eql for fixnums, characters, symbols, and heap objects. `:test` choices
+/// beyond eql come with the full hash-table work.
+pub const HeapHashTable = struct {
+    header: HeapHeader,
+    map: std.AutoHashMapUnmanaged(u64, Value),
+};
+
 /// All allocation flows through this. For now a bump arena is supplied from
 /// outside; a real GC heap will replace the underlying allocator later.
 pub const Heap = struct {
@@ -167,6 +175,15 @@ pub const Heap = struct {
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
 
+    pub fn allocHashTable(self: *Heap) !Value {
+        const obj = try self.allocator.create(HeapHashTable);
+        obj.* = .{
+            .header = .{ .type_tag = .hash_table, .size = @sizeOf(HeapHashTable) },
+            .map = .{},
+        };
+        return Value.fromHeapAddr(@intFromPtr(obj));
+    }
+
     pub fn allocVector(self: *Heap, elements: []const Value) !Value {
         const total = @sizeOf(HeapVector) + elements.len * @sizeOf(Value);
         const buf = try self.allocator.alignedAlloc(u8, .of(HeapVector), total);
@@ -203,6 +220,10 @@ pub fn asRatio(v: Value) *HeapRatio {
 }
 
 pub fn asVector(v: Value) *HeapVector {
+    return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn asHashTable(v: Value) *HeapHashTable {
     return @ptrFromInt(v.toHeapAddr());
 }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
+const source_pos = @import("../runtime/source_pos.zig");
 const env_mod = @import("env.zig");
 const Value = value.Value;
 
@@ -41,12 +42,19 @@ pub const Closure = struct {
     // Macro expander closure. Called with the two-argument macro-function
     // protocol (form env), where the lambda list destructures the form's cdr.
     is_macro: bool = false,
+    // Position of the defining form. Macroexpansion stamps synthesized
+    // conses with it when a position table is bound.
+    def_pos: ?source_pos.SourcePosition = null,
 };
 
 pub const HeapFunction = struct {
     header: heap.HeapHeader,
     kind: Kind,
     name: ?[]const u8,
+    // Natives are normally single-valued: the dispatcher collapses the
+    // values channel to the returned value. Pass-through natives (funcall,
+    // apply, eval, gethash) set this to keep the channel they produced.
+    preserves_values: bool = false,
     payload: union {
         native: NativeFn,
         closure: Closure,
@@ -104,9 +112,11 @@ pub fn allocMacro(
     body: Value,
     captured_env: ?*env_mod.Frame,
     captured_fenv: ?*env_mod.Frame,
+    def_pos: ?source_pos.SourcePosition,
 ) !Value {
     const v = try allocClosure(allocator, name, params, body, captured_env, captured_fenv);
     asFunction(v).payload.closure.is_macro = true;
+    asFunction(v).payload.closure.def_pos = def_pos;
     return v;
 }
 
