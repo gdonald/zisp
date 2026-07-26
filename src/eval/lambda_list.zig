@@ -48,10 +48,7 @@ fn markerSection(name: []const u8, macro: bool) ?Section {
 }
 
 fn keywordOf(ev: *Evaluator, name_sym: Value) Error!Value {
-    const name = symbol_mod.symbol(name_sym).name;
-    const kw_name = try std.fmt.allocPrint(ev.allocator, ":{s}", .{name});
-    defer ev.allocator.free(kw_name);
-    return ev.interner.intern(kw_name);
+    return ev.interner.internKeyword(symbol_mod.symbol(name_sym).name);
 }
 
 /// A binding target is a symbol, or — in macro lambda lists — a nested
@@ -238,6 +235,13 @@ fn validateInner(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!vo
 
 /// Parse `params` and bind `args` into `frame`. Init forms are evaluated in
 /// the current environment, so they see parameters bound earlier in the list.
+/// Bind one parameter. A symbol proclaimed special takes a dynamic binding
+/// on the evaluator's shallow-binding stack instead of a frame slot.
+fn bindVar(ev: *Evaluator, frame: *Frame, sym: Value, val: Value) Error!void {
+    if (symbol_mod.symbol(sym).special) return ev.bindSpecial(sym, val);
+    return frame.bind(ev.allocator, sym, val);
+}
+
 pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Frame) Error!void {
     var p = try parse(ev, params, false, true);
     defer p.deinit(ev.allocator);
@@ -245,18 +249,18 @@ pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Fram
     if (args.len < p.required.items.len) return Error.WrongArgCount;
     var pos: usize = 0;
     for (p.required.items) |sym| {
-        try frame.bind(ev.allocator, sym, args[pos]);
+        try bindVar(ev, frame, sym, args[pos]);
         pos += 1;
     }
 
     for (p.optional.items) |opt| {
         if (pos < args.len) {
-            try frame.bind(ev.allocator, opt.name, args[pos]);
+            try bindVar(ev, frame, opt.name, args[pos]);
             pos += 1;
-            if (!opt.supplied.equalsRaw(value.NIL)) try frame.bind(ev.allocator, opt.supplied, value.T);
+            if (!opt.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, opt.supplied, value.T);
         } else {
-            try frame.bind(ev.allocator, opt.name, try ev.eval(opt.init));
-            if (!opt.supplied.equalsRaw(value.NIL)) try frame.bind(ev.allocator, opt.supplied, value.NIL);
+            try bindVar(ev, frame, opt.name, try ev.eval(opt.init));
+            if (!opt.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, opt.supplied, value.NIL);
         }
     }
 
@@ -269,7 +273,7 @@ pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Fram
             i -= 1;
             list = try ev.heap.allocCons(remaining[i], list);
         }
-        try frame.bind(ev.allocator, p.rest, list);
+        try bindVar(ev, frame, p.rest, list);
     }
 
     if (p.has_key) {
@@ -283,14 +287,14 @@ pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Fram
     }
 
     for (p.aux.items) |a| {
-        try frame.bind(ev.allocator, a.name, try ev.eval(a.init));
+        try bindVar(ev, frame, a.name, try ev.eval(a.init));
     }
 }
 
 /// Match parsed `&key` parameters against `pairs` (a flat keyword/value
 /// sequence) and bind them into `frame`. Duplicate keywords: first wins.
 fn bindKeys(ev: *Evaluator, p: *const Parsed, pairs: []const Value, frame: *Frame) Error!void {
-    const aok = try ev.interner.intern(":ALLOW-OTHER-KEYS");
+    const aok = try ev.interner.internKeyword("ALLOW-OTHER-KEYS");
 
     var allow = p.allow_other;
     var j: usize = 0;
@@ -304,14 +308,14 @@ fn bindKeys(ev: *Evaluator, p: *const Parsed, pairs: []const Value, frame: *Fram
         while (jj < pairs.len) : (jj += 2) {
             if (pairs[jj].equalsRaw(k.kw)) {
                 try bindTarget(ev, k.name, pairs[jj + 1], frame);
-                if (!k.supplied.equalsRaw(value.NIL)) try frame.bind(ev.allocator, k.supplied, value.T);
+                if (!k.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, k.supplied, value.T);
                 found = true;
                 break;
             }
         }
         if (!found) {
             try bindTarget(ev, k.name, try ev.eval(k.init), frame);
-            if (!k.supplied.equalsRaw(value.NIL)) try frame.bind(ev.allocator, k.supplied, value.NIL);
+            if (!k.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, k.supplied, value.NIL);
         }
     }
 
@@ -354,7 +358,7 @@ fn bindTarget(ev: *Evaluator, target: Value, val: Value, frame: *Frame) Error!vo
         if (!val.equalsRaw(value.NIL)) return Error.WrongArgCount;
         return;
     }
-    if (target.isSymbol()) return frame.bind(ev.allocator, target, val);
+    if (target.isSymbol()) return bindVar(ev, frame, target, val);
     if (target.isCons()) return destructure(ev, target, val, val, value.NIL, false, frame);
     return Error.TypeError;
 }
@@ -364,7 +368,7 @@ fn destructure(ev: *Evaluator, params: Value, whole: Value, args: Value, env: Va
     defer p.deinit(ev.allocator);
 
     if (p.has_whole) try bindTarget(ev, p.whole, whole, frame);
-    if (p.has_env) try frame.bind(ev.allocator, p.env_var, env);
+    if (p.has_env) try bindVar(ev, frame, p.env_var, env);
 
     var list = args;
     for (p.required.items) |r| {
@@ -377,10 +381,10 @@ fn destructure(ev: *Evaluator, params: Value, whole: Value, args: Value, env: Va
         if (list.isCons()) {
             try bindTarget(ev, opt.name, heap.car(list), frame);
             list = heap.cdr(list);
-            if (!opt.supplied.equalsRaw(value.NIL)) try frame.bind(ev.allocator, opt.supplied, value.T);
+            if (!opt.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, opt.supplied, value.T);
         } else {
             try bindTarget(ev, opt.name, try ev.eval(opt.init), frame);
-            if (!opt.supplied.equalsRaw(value.NIL)) try frame.bind(ev.allocator, opt.supplied, value.NIL);
+            if (!opt.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, opt.supplied, value.NIL);
         }
     }
 
@@ -406,6 +410,6 @@ fn destructure(ev: *Evaluator, params: Value, whole: Value, args: Value, env: Va
     }
 
     for (p.aux.items) |a| {
-        try frame.bind(ev.allocator, a.name, try ev.eval(a.init));
+        try bindVar(ev, frame, a.name, try ev.eval(a.init));
     }
 }

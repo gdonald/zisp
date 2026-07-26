@@ -57,7 +57,46 @@ pub const Error = error{
     /// unterminated literal, unknown character name, dot in a non-dotted
     /// position, etc.
     BadToken,
+    /// A `pkg:name` prefix named a package that does not exist.
+    NoSuchPackage,
+    /// `pkg:name` where `name` is not external in `pkg`.
+    SymbolNotExternal,
 } || std.mem.Allocator.Error;
+
+/// Location of the `:` or `::` separating a package prefix from a symbol
+/// name. Escaped and `|..|`-quoted colons are not markers.
+const PackageMarker = struct { start: usize, end: usize, colons: u2 };
+
+fn findPackageMarker(text: []const u8) ?PackageMarker {
+    var i: usize = 0;
+    while (i < text.len) {
+        const c = text[i];
+        if (c == '\\') {
+            i += 2;
+            continue;
+        }
+        if (c == '|') {
+            i += 1;
+            while (i < text.len and text[i] != '|') {
+                i += if (text[i] == '\\') 2 else 1;
+            }
+            i += 1;
+            continue;
+        }
+        if (c == ':') {
+            const start = i;
+            var end = i + 1;
+            var colons: u2 = 1;
+            if (end < text.len and text[end] == ':') {
+                end += 1;
+                colons = 2;
+            }
+            return .{ .start = start, .end = end, .colons = colons };
+        }
+        i += 1;
+    }
+    return null;
+}
 
 /// Default readtable shared by every reader that doesn't supply its own.
 /// Initialized lazily on first `Reader.init` so the standard handlers
@@ -99,8 +138,7 @@ pub const Reader = struct {
     file: []const u8 = "",
     /// Active feature symbols for `#+` / `#-`. Empty by default.
     /// Borrowed: the caller keeps the slice alive. Names match feature
-    /// expressions case-sensitively after stripping a leading `:` from
-    /// either side, mirroring CL's "feature names compare by symbol-name".
+    /// expressions by `symbol-name`, case-sensitively.
     features: []const Value = &.{},
     /// One-token lookahead. The reader peeks when it needs to decide
     /// between dotted-pair and final-element in a list, and to detect
@@ -271,6 +309,7 @@ pub const Reader = struct {
             .character => ReadStep{ .value = try self.parseCharacterAt(t.text, t.pos) },
             .symbol => ReadStep{ .value = try self.parseSymbolAt(t.text, t.pos) },
             .keyword => ReadStep{ .value = try self.parseKeywordAt(t.text, t.pos) },
+            .uninterned => ReadStep{ .value = try self.parseUninternedAt(t.text, t.pos) },
             .eof => self.errAt(t.pos, Error.EndOfInput),
             // Reader-macro kinds without a handler shouldn't reach here —
             // the standard readtable populates them. A null means user code
@@ -385,15 +424,13 @@ pub const Reader = struct {
         return ReadStep.skipped;
     }
 
-    /// True if any feature in `self.features` shares a name with `query`,
-    /// stripping a leading `:` from either side. This will be replaced with
-    /// a real `KEYWORD::name` package lookup once packages exist.
+    /// True if any feature in `self.features` shares a name with `query`.
+    /// Feature names are compared by text, so a feature written as a plain
+    /// symbol matches the keyword of the same name.
     pub fn hasFeature(self: *const Reader, query_name: []const u8) bool {
-        const q = stripLeadingColon(query_name);
         for (self.features) |f| {
             if (!f.isSymbol()) continue;
-            const fname = stripLeadingColon(symbol.name(f));
-            if (std.mem.eql(u8, fname, q)) return true;
+            if (std.mem.eql(u8, symbol.name(f), query_name)) return true;
         }
         return false;
     }
@@ -409,7 +446,7 @@ pub const Reader = struct {
         if (!expr.isCons()) return Error.BadToken;
         const op_v = heap_mod.car(expr);
         if (!op_v.isSymbol()) return Error.BadToken;
-        const op_name = stripLeadingColon(symbol.name(op_v));
+        const op_name = symbol.name(op_v);
         var args = heap_mod.cdr(expr);
 
         if (eqlIgnoreCase(op_name, "OR")) {
@@ -436,21 +473,42 @@ pub const Reader = struct {
     }
 
     fn parseSymbolAt(self: *Reader, text: []const u8, p: Position) Error!Value {
-        var buf: [256]u8 = undefined;
-        const name = foldSymbolName(text, &buf) catch |e| return self.errAt(p, e);
-        return try self.interner.intern(name);
+        var name_buf: [256]u8 = undefined;
+        if (findPackageMarker(text)) |marker| {
+            var pkg_buf: [256]u8 = undefined;
+            const pkg_name = foldSymbolName(text[0..marker.start], &pkg_buf) catch |e|
+                return self.errAt(p, e);
+            const sym_name = foldSymbolName(text[marker.end..], &name_buf) catch |e|
+                return self.errAt(p, e);
+            if (pkg_name.len == 0) {
+                return try self.interner.internKeyword(sym_name);
+            }
+            const pkg = self.interner.registry.find(pkg_name) orelse
+                return self.errAt(p, Error.NoSuchPackage);
+            if (marker.colons == 1) {
+                const found = pkg.findSymbol(sym_name) orelse
+                    return self.errAt(p, Error.SymbolNotExternal);
+                if (found.status != .external) return self.errAt(p, Error.SymbolNotExternal);
+                return found.sym;
+            }
+            return try self.interner.internIn(pkg, sym_name);
+        }
+        const name = foldSymbolName(text, &name_buf) catch |e| return self.errAt(p, e);
+        return try self.interner.internCurrent(name);
     }
 
-    /// Keyword stub: until packages exist, intern with a leading `:` so
-    /// `:FOO` and `FOO` are distinct symbols. The printer
-    /// reads the leading `:` back out for free.
     fn parseKeywordAt(self: *Reader, text: []const u8, p: Position) Error!Value {
         var buf: [256]u8 = undefined;
-        if (text.len + 1 > buf.len) return self.errAt(p, Error.BadToken);
-        buf[0] = ':';
-        const folded = foldSymbolName(text, buf[1..]) catch |e| return self.errAt(p, e);
-        const name = buf[0 .. folded.len + 1];
-        return try self.interner.intern(name);
+        // `::foo` reaches here with the first colon already consumed.
+        const body = if (text.len != 0 and text[0] == ':') text[1..] else text;
+        const name = foldSymbolName(body, &buf) catch |e| return self.errAt(p, e);
+        return try self.interner.internKeyword(name);
+    }
+
+    fn parseUninternedAt(self: *Reader, text: []const u8, p: Position) Error!Value {
+        var buf: [256]u8 = undefined;
+        const name = foldSymbolName(text, &buf) catch |e| return self.errAt(p, e);
+        return try self.interner.makeUninterned(name);
     }
 
     fn parseStringAt(self: *Reader, text: []const u8, p: Position) Error!Value {
@@ -727,11 +785,6 @@ fn decodeCharLiteral(text: []const u8) CharLiteralError!u21 {
     }
 
     return CharLiteralError.Bad;
-}
-
-fn stripLeadingColon(name_str: []const u8) []const u8 {
-    if (name_str.len > 0 and name_str[0] == ':') return name_str[1..];
-    return name_str;
 }
 
 fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {

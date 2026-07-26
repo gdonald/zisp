@@ -28,7 +28,7 @@ test "print negative fixnum" {
 
 test "print NIL" {
     const a = std.testing.allocator;
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -39,7 +39,7 @@ test "print NIL" {
 
 test "print T" {
     const a = std.testing.allocator;
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -50,7 +50,7 @@ test "print T" {
 
 test "print symbol" {
     const a = std.testing.allocator;
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
 
     const sym = try interner.intern("FOO");
@@ -63,7 +63,7 @@ test "print proper list (1 2 3)" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -85,7 +85,7 @@ test "print dotted pair (1 . 2)" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -101,7 +101,7 @@ test "print nested list (1 (2 3) 4)" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -152,7 +152,7 @@ test "print is cycle-safe" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -174,7 +174,7 @@ test "print is cycle-safe when a cons appears in its own car" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -191,7 +191,7 @@ test "print emits #<deep> when nesting exceeds MAX_DEPTH" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var interner = Interner.init(a);
+    var interner = try Interner.init(a);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
@@ -499,7 +499,7 @@ test "readably forces escape even when escape=false" {
 
 test "prin1 escapes lowercase symbol" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("HiThere");
     const s = try fmtValue(a, sym);
@@ -509,7 +509,7 @@ test "prin1 escapes lowercase symbol" {
 
 test "prin1 escapes symbol with embedded pipe" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("a|b");
     const s = try fmtValue(a, sym);
@@ -519,7 +519,7 @@ test "prin1 escapes symbol with embedded pipe" {
 
 test "prin1 escapes symbol that starts with digit" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("1A");
     const s = try fmtValue(a, sym);
@@ -529,7 +529,7 @@ test "prin1 escapes symbol that starts with digit" {
 
 test "prin1 escapes symbol with sign-then-digit" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("+1");
     const s = try fmtValue(a, sym);
@@ -539,7 +539,7 @@ test "prin1 escapes symbol with sign-then-digit" {
 
 test "prin1 leaves bare uppercase symbol unescaped" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("FOO-BAR");
     const s = try fmtValue(a, sym);
@@ -549,9 +549,9 @@ test "prin1 leaves bare uppercase symbol unescaped" {
 
 test "prin1 leaves keyword symbol unescaped" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
-    const sym = try interner.intern(":KEY");
+    const sym = try interner.internKeyword("KEY");
     const s = try fmtValue(a, sym);
     defer a.free(s);
     try std.testing.expectEqualStrings(":KEY", s);
@@ -559,7 +559,7 @@ test "prin1 leaves keyword symbol unescaped" {
 
 test "prin1 leaves bare + symbol unescaped" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("+");
     const s = try fmtValue(a, sym);
@@ -569,7 +569,7 @@ test "prin1 leaves bare + symbol unescaped" {
 
 test "prin1 escapes empty symbol name" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("");
     const s = try fmtValue(a, sym);
@@ -579,7 +579,7 @@ test "prin1 escapes empty symbol name" {
 
 test "prin1 escapes symbol with whitespace inside" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("HAS SPACE");
     const s = try fmtValue(a, sym);
@@ -589,7 +589,7 @@ test "prin1 escapes symbol with whitespace inside" {
 
 test "prin1 escapes symbol with embedded backslash" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("a\\b");
     const s = try fmtValue(a, sym);
@@ -599,7 +599,7 @@ test "prin1 escapes symbol with embedded backslash" {
 
 test "princ does not escape lowercase symbol" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern("HiThere");
     const s = try princOwned(a, sym);
@@ -609,7 +609,7 @@ test "princ does not escape lowercase symbol" {
 
 test "prin1 leaves dot-prefixed name unescaped" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern(".FOO");
     const s = try fmtValue(a, sym);
@@ -619,7 +619,7 @@ test "prin1 leaves dot-prefixed name unescaped" {
 
 test "prin1 escapes name that starts with .digit" {
     const a = std.testing.allocator;
-    var interner = symbol.Interner.init(a);
+    var interner = try symbol.Interner.init(a);
     defer interner.deinit();
     const sym = try interner.intern(".5A");
     const s = try fmtValue(a, sym);

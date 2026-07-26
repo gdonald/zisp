@@ -5,12 +5,14 @@ comptime {
     _ = @import("runtime/value_test.zig");
     _ = @import("runtime/heap_test.zig");
     _ = @import("runtime/symbol_test.zig");
+    _ = @import("runtime/package_test.zig");
     _ = @import("runtime/printer_test.zig");
     _ = @import("runtime/log_test.zig");
     _ = @import("runtime/read_all_test.zig");
     _ = @import("reader/tokenizer_test.zig");
     _ = @import("reader/float_parse_test.zig");
     _ = @import("reader/reader_test.zig");
+    _ = @import("reader/package_syntax_test.zig");
     _ = @import("reader/feature_expr_test.zig");
     _ = @import("reader/golden_test.zig");
     _ = @import("reader/roundtrip_test.zig");
@@ -33,7 +35,10 @@ comptime {
     _ = @import("eval/backquote_corpus_test.zig");
     _ = @import("eval/prelude_macros_test.zig");
     _ = @import("eval/setf_test.zig");
+    _ = @import("eval/special_vars_test.zig");
     _ = @import("builtins/system_test.zig");
+    _ = @import("builtins/packages_test.zig");
+    _ = @import("builtins/ansi_rt_package_test.zig");
     _ = @import("builtins/compile_file_test.zig");
     _ = @import("repl/repl_test.zig");
     _ = @import("cli_test.zig");

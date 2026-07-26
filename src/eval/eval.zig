@@ -27,6 +27,8 @@ fn defaultMacroExpander(ev: *Evaluator, form: Value) Error!?Value {
 }
 
 const BlockEntry = struct { name: Value, id: u64 };
+/// One saved value cell, restored when the establishing form unwinds.
+const DynamicEntry = struct { sym: Value, saved: Value };
 const TagbodyEntry = struct { body: Value, id: u64 };
 const CatchEntry = struct { tag: Value, id: u64 };
 pub const GoTarget = struct { id: u64, pos: Value };
@@ -78,6 +80,10 @@ pub const Evaluator = struct {
     // `defmacro` reads it to record the definition form's position.
     // Fixnum zero until the first dispatch; never a cons before then.
     current_form: Value = .{ .raw = 0 },
+    // Shallow-binding stack for special variables. `let`, `let*`, and
+    // lambda-list binding push the old value cell here and restore on exit,
+    // so a native function reading the cell sees the innermost binding.
+    dynamic_stack: std.ArrayList(DynamicEntry) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -99,6 +105,27 @@ pub const Evaluator = struct {
         self.catch_stack.deinit(self.allocator);
         self.values.deinit(self.allocator);
         self.transfer_values.deinit(self.allocator);
+        self.dynamic_stack.deinit(self.allocator);
+    }
+
+    /// Rebind `sym`'s value cell, remembering the previous contents.
+    pub fn bindSpecial(self: *Evaluator, sym: Value, val: Value) Error!void {
+        const cell = &symbol_mod.symbol(sym).value_cell;
+        try self.dynamic_stack.append(self.allocator, .{ .sym = sym, .saved = cell.* });
+        cell.* = val;
+    }
+
+    /// Depth of the dynamic stack, to be handed back to `unwindSpecials`.
+    pub fn dynamicMark(self: *const Evaluator) usize {
+        return self.dynamic_stack.items.len;
+    }
+
+    /// Restore every value cell bound since `mark`, innermost first.
+    pub fn unwindSpecials(self: *Evaluator, mark: usize) void {
+        while (self.dynamic_stack.items.len > mark) {
+            const entry = self.dynamic_stack.pop().?;
+            symbol_mod.symbol(entry.sym).value_cell = entry.saved;
+        }
     }
 
     /// Record `v` as the sole value of the current form and return it.
@@ -251,8 +278,7 @@ pub const Evaluator = struct {
     }
 
     fn evalSymbol(self: *Evaluator, sym: Value) Error!Value {
-        const s = symbol_mod.symbol(sym);
-        if (s.name.len > 0 and s.name[0] == ':') return sym;
+        if (symbol_mod.isKeyword(sym, self.interner)) return sym;
         return self.env.lookupValue(sym) orelse Error.UnboundVariable;
     }
 
@@ -379,6 +405,9 @@ pub const Evaluator = struct {
         defer buf_a.deinit(self.allocator);
         defer buf_b.deinit(self.allocator);
 
+        const call_mark = self.dynamicMark();
+        defer self.unwindSpecials(call_mark);
+
         var cur = c0;
         var cur_args: []const Value = args0;
         var use_a = true;
@@ -387,6 +416,9 @@ pub const Evaluator = struct {
         while (true) {
             self.env.top_function = cur.captured_fenv;
             if (frame) |f| {
+                // A tail jump leaves the previous iteration's dynamic
+                // bindings behind before rebinding into the reused frame.
+                self.unwindSpecials(call_mark);
                 f.reset();
                 f.parent = cur.captured_env;
                 self.env.top_value = f;
@@ -394,6 +426,7 @@ pub const Evaluator = struct {
                 self.env.top_value = cur.captured_env;
                 frame = try self.env.pushValueFrame();
             }
+            const frame_mark = self.dynamicMark();
             if (cur.is_macro) {
                 // Macro-function protocol: (form env). The lambda list
                 // destructures the form's cdr; &whole sees the whole form
@@ -416,6 +449,10 @@ pub const Evaluator = struct {
                 body = next;
             }
             const last = heap_mod.car(body);
+
+            // A frame that established dynamic bindings must outlive the
+            // call in its tail position, so that call is not a tail call.
+            if (self.dynamicMark() > frame_mark) return self.eval(last);
 
             const out_buf = if (use_a) &buf_a else &buf_b;
             switch (try self.evalTail(last, out_buf)) {

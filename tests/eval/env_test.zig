@@ -10,7 +10,7 @@ const ScratchSym = struct {
     interner: symbol_mod.Interner,
 
     fn init(allocator: std.mem.Allocator) !ScratchSym {
-        var s: ScratchSym = .{ .interner = symbol_mod.Interner.init(allocator) };
+        var s: ScratchSym = .{ .interner = try symbol_mod.Interner.init(allocator) };
         try symbol_mod.initStandardSymbols(&s.interner);
         return s;
     }
@@ -20,6 +20,7 @@ const ScratchSym = struct {
     }
 
     fn sym(self: *ScratchSym, name: []const u8) !value.Value {
+        if (name.len > 0 and name[0] == ':') return self.interner.internKeyword(name[1..]);
         return self.interner.intern(name);
     }
 };

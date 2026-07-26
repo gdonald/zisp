@@ -19,6 +19,7 @@ const std = @import("std");
 const value = @import("value.zig");
 const heap = @import("heap.zig");
 const symbol = @import("symbol.zig");
+const package = @import("package.zig");
 const Value = value.Value;
 
 const MAX_DEPTH: u32 = 1024;
@@ -38,6 +39,10 @@ pub const Settings = struct {
     /// `*print-radix*` — when true, prefix radix indicator (`#b`, `#o`,
     /// `#x`, or `#nnR`) ahead of integers and ratios.
     radix: bool = false,
+    /// Value of `*package*`. Symbols accessible in it print unqualified;
+    /// everything else gets a `pkg:` or `pkg::` prefix. When null there is
+    /// no package context and no symbol is qualified.
+    current_package: ?*package.Package = null,
 };
 
 /// `prin1` defaults: `*print-escape*` T.
@@ -183,16 +188,45 @@ fn digitChar(d: u8) u8 {
 
 fn printSymbol(ctx: *PrintCtx, v: Value) PrintError!void {
     const name = symbol.name(v);
-    if (ctx.effectiveEscape() and needsSymbolEscape(name)) {
-        try ctx.writer.writeByte('|');
-        for (name) |c| {
-            if (c == '|' or c == '\\') try ctx.writer.writeByte('\\');
-            try ctx.writer.writeByte(c);
-        }
-        try ctx.writer.writeByte('|');
+    if (!ctx.effectiveEscape()) {
+        try ctx.writer.writeAll(name);
         return;
     }
-    try ctx.writer.writeAll(name);
+    try printSymbolPrefix(ctx, v, name);
+    try printNamePart(ctx, name);
+}
+
+/// Emit whatever package qualification `v` needs to read back as itself
+/// from `ctx.settings.current_package`.
+fn printSymbolPrefix(ctx: *PrintCtx, v: Value, name: []const u8) PrintError!void {
+    const home = symbol.homePackage(v) orelse {
+        try ctx.writer.writeAll("#:");
+        return;
+    };
+    if (std.mem.eql(u8, home.name, symbol.KEYWORD_PACKAGE_NAME)) {
+        try ctx.writer.writeByte(':');
+        return;
+    }
+    const current = ctx.settings.current_package orelse return;
+    if (current == home) return;
+    if (current.findSymbol(name)) |found| {
+        if (found.sym.equalsRaw(v)) return;
+    }
+    try printNamePart(ctx, home.name);
+    try ctx.writer.writeAll(if (home.external.contains(name)) ":" else "::");
+}
+
+fn printNamePart(ctx: *PrintCtx, part: []const u8) PrintError!void {
+    if (!needsSymbolEscape(part)) {
+        try ctx.writer.writeAll(part);
+        return;
+    }
+    try ctx.writer.writeByte('|');
+    for (part) |c| {
+        if (c == '|' or c == '\\') try ctx.writer.writeByte('\\');
+        try ctx.writer.writeByte(c);
+    }
+    try ctx.writer.writeByte('|');
 }
 
 /// True if `name` needs `|...|` escaping to round-trip through the
@@ -222,7 +256,7 @@ fn looksLikeNumber(name: []const u8) bool {
 fn isSafeSymbolChar(c: u8) bool {
     return switch (c) {
         'A'...'Z', '0'...'9' => true,
-        '!', '$', '%', '&', '*', '+', '-', '.', '/', ':', '<', '=', '>', '?', '@', '^', '_', '~' => true,
+        '!', '$', '%', '&', '*', '+', '-', '.', '/', '<', '=', '>', '?', '@', '^', '_', '~' => true,
         else => false,
     };
 }
@@ -251,6 +285,7 @@ fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
             }
             try ctx.writer.writeByte(')');
         },
+        .package => try ctx.writer.print("#<PACKAGE \"{s}\">", .{package.asPackage(v).name}),
         else => try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()}),
     }
 }

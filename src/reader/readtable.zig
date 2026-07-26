@@ -27,6 +27,8 @@ pub const HandlerError = error{
     EndOfInput,
     UnbalancedParens,
     BadToken,
+    NoSuchPackage,
+    SymbolNotExternal,
 } || std.mem.Allocator.Error;
 
 /// Result of one dispatch step. `value` is the form just read; `skipped`

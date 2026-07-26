@@ -32,6 +32,8 @@ pub const NativeError = error{
     FileError,
     NoOutputStream,
     Quit,
+    NoSuchPackage,
+    PackageError,
 } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 pub const Closure = struct {

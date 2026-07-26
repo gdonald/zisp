@@ -21,7 +21,7 @@ const Fixture = struct {
         const fx = try allocator.create(Fixture);
         fx.* = .{
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .interner = symbol_mod.Interner.init(allocator),
+            .interner = try symbol_mod.Interner.init(allocator),
             .heap = undefined,
             .ev = undefined,
         };
@@ -53,6 +53,7 @@ const Fixture = struct {
     }
 
     fn sym(self: *Fixture, name: []const u8) !value.Value {
+        if (name.len > 0 and name[0] == ':') return self.interner.internKeyword(name[1..]);
         return self.interner.intern(name);
     }
 

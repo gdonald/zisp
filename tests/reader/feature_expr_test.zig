@@ -40,7 +40,7 @@ fn newSetup(test_allocator: std.mem.Allocator) !*Setup {
     s.* = .{
         .arena = std.heap.ArenaAllocator.init(test_allocator),
         .h = undefined,
-        .interner = symbol.Interner.init(test_allocator),
+        .interner = try symbol.Interner.init(test_allocator),
         .allocator = test_allocator,
     };
     s.h = heap.Heap.init(s.arena.allocator());
@@ -53,9 +53,8 @@ fn newSetup(test_allocator: std.mem.Allocator) !*Setup {
 fn buildFeatures(out: *std.ArrayList(Value), interner: *symbol.Interner, allocator: std.mem.Allocator, csv: []const u8) ![]Value {
     var iter = std.mem.tokenizeScalar(u8, csv, ',');
     while (iter.next()) |raw| {
-        // The corpus always begins each token with `:`; intern verbatim
-        // so the keyword stub layout (`:FOO`) is preserved.
-        const sym = try interner.intern(raw);
+        // The corpus always begins each token with `:`.
+        const sym = try interner.internKeyword(raw[1..]);
         try out.append(allocator, sym);
     }
     return out.items;
@@ -238,19 +237,19 @@ fn readWithFeatures(s: *Setup, features: []const Value, src: []const u8) !?Value
 test "#+ keeps form when feature is present" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    const sbcl = try s.interner.intern(":SBCL");
+    const sbcl = try s.interner.internKeyword("SBCL");
     const features = [_]Value{sbcl};
     const v = (try readWithFeatures(s, &features, "#+sbcl :yes :nope")).?;
-    try std.testing.expectEqualStrings(":YES", symbol.name(v));
+    try std.testing.expectEqualStrings("YES", symbol.name(v));
 }
 
 test "#- discards form when feature is present" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    const sbcl = try s.interner.intern(":SBCL");
+    const sbcl = try s.interner.internKeyword("SBCL");
     const features = [_]Value{sbcl};
     const v = (try readWithFeatures(s, &features, "#-sbcl :no :ok")).?;
-    try std.testing.expectEqualStrings(":OK", symbol.name(v));
+    try std.testing.expectEqualStrings("OK", symbol.name(v));
 }
 
 test "#+ inside list elides element when feature absent" {
@@ -287,7 +286,7 @@ test "#+ inside vector elides element when feature absent" {
 test "#+ inside vector keeps element when feature present" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    const sbcl = try s.interner.intern(":SBCL");
+    const sbcl = try s.interner.internKeyword("SBCL");
     const features = [_]Value{sbcl};
     const v = (try readWithFeatures(s, &features, "#(1 #+sbcl 2 3)")).?;
     const items = heap.asVector(v).constSlice();
@@ -297,34 +296,34 @@ test "#+ inside vector keeps element when feature present" {
 test "nested #+#+ requires both features" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    const a = try s.interner.intern(":A");
-    const b = try s.interner.intern(":B");
+    const a = try s.interner.internKeyword("A");
+    const b = try s.interner.internKeyword("B");
     const both = [_]Value{ a, b };
     const v = (try readWithFeatures(s, &both, "#+a #+b :both :fallback")).?;
-    try std.testing.expectEqualStrings(":BOTH", symbol.name(v));
+    try std.testing.expectEqualStrings("BOTH", symbol.name(v));
 
     const only_a = [_]Value{a};
     const v2 = (try readWithFeatures(s, &only_a, "#+a #+b :both :fallback")).?;
-    try std.testing.expectEqualStrings(":FALLBACK", symbol.name(v2));
+    try std.testing.expectEqualStrings("FALLBACK", symbol.name(v2));
 }
 
 test "#+ feature expr (or ...) " {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    const ccl = try s.interner.intern(":CCL");
+    const ccl = try s.interner.internKeyword("CCL");
     const features = [_]Value{ccl};
     const v = (try readWithFeatures(s, &features, "#+(or sbcl ccl) :picked :rejected")).?;
-    try std.testing.expectEqualStrings(":PICKED", symbol.name(v));
+    try std.testing.expectEqualStrings("PICKED", symbol.name(v));
 }
 
 test "#+ feature expr (and (not ...)) " {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    const sbcl = try s.interner.intern(":SBCL");
+    const sbcl = try s.interner.internKeyword("SBCL");
     const features = [_]Value{sbcl};
     // (and sbcl (not aix)) → TRUE → keep yes
     const v = (try readWithFeatures(s, &features, "#+(and sbcl (not aix)) :yes :no")).?;
-    try std.testing.expectEqualStrings(":YES", symbol.name(v));
+    try std.testing.expectEqualStrings("YES", symbol.name(v));
 }
 
 test "#+ all-skipped at top level returns null" {
@@ -389,15 +388,15 @@ test "dotted feature expression is BadToken" {
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
 
-test "features compare case-sensitively after stripping colon" {
+test "features compare case-sensitively by symbol name" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    // Plain `sbcl` in expr → SBCL after upcase. Feature `:SBCL` strips
-    // colon → "SBCL". Match.
-    const sbcl = try s.interner.intern(":SBCL");
+    // Plain `sbcl` in the expression upcases to SBCL, which is the
+    // symbol-name of the `:SBCL` feature keyword.
+    const sbcl = try s.interner.internKeyword("SBCL");
     const features = [_]Value{sbcl};
     const v = (try readWithFeatures(s, &features, "#+sbcl :yes :no")).?;
-    try std.testing.expectEqualStrings(":YES", symbol.name(v));
+    try std.testing.expectEqualStrings("YES", symbol.name(v));
 }
 
 test "non-symbol value in features list is ignored" {
@@ -411,5 +410,5 @@ test "non-symbol value in features list is ignored" {
     var rd = Reader.init(&tk, &s.h, &s.interner);
     rd.setFeatures(&features);
     const v = (try rd.read()).?;
-    try std.testing.expectEqualStrings(":NO", symbol.name(v));
+    try std.testing.expectEqualStrings("NO", symbol.name(v));
 }

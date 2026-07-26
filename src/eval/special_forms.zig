@@ -6,6 +6,7 @@ const eval_mod = @import("eval.zig");
 const function = @import("function.zig");
 const lambda_list = @import("lambda_list.zig");
 const quasiquote = @import("quasiquote.zig");
+const package_mod = @import("../runtime/package.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -45,6 +46,11 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("QUASIQUOTE", &quasiquoteForm);
     try ev.registerSpecialForm("UNQUOTE", &unquoteForm);
     try ev.registerSpecialForm("UNQUOTE-SPLICING", &unquoteForm);
+    try ev.registerSpecialForm("DEFVAR", &defvar);
+    try ev.registerSpecialForm("DEFPARAMETER", &defparameter);
+    try ev.registerSpecialForm("DEFCONSTANT", &defconstant);
+    try ev.registerSpecialForm("DECLAIM", &declaim);
+    try ev.registerSpecialForm("IN-PACKAGE", &inPackage);
     try ev.registerSpecialForm("MACROEXPAND-1", &macroexpand1Form);
     try ev.registerSpecialForm("MACROEXPAND", &macroexpandForm);
 
@@ -55,6 +61,81 @@ pub fn registerStandard(ev: *Evaluator) !void {
     if (symbol_mod.symbol(hook_sym).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
         symbol_mod.symbol(hook_sym).value_cell = try ev.interner.intern("FUNCALL");
     }
+}
+
+/// `(defvar name [init [doc]])` — proclaim special, assign only when the
+/// variable has no value yet.
+fn defvar(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const name_sym = heap.car(args);
+    if (!name_sym.isSymbol()) return Error.TypeError;
+    symbol_mod.symbol(name_sym).special = true;
+    const rest = heap.cdr(args);
+    if (rest.isCons() and symbol_mod.symbol(name_sym).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
+        symbol_mod.symbol(name_sym).value_cell = try ev.eval(heap.car(rest));
+    }
+    return ev.set1(name_sym);
+}
+
+/// `(defparameter name init [doc])` — proclaim special and always assign.
+fn defparameter(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const name_sym = heap.car(args);
+    if (!name_sym.isSymbol()) return Error.TypeError;
+    const rest = heap.cdr(args);
+    if (!rest.isCons()) return Error.BadArgList;
+    symbol_mod.symbol(name_sym).special = true;
+    symbol_mod.symbol(name_sym).value_cell = try ev.eval(heap.car(rest));
+    return ev.set1(name_sym);
+}
+
+fn defconstant(ev: *Evaluator, args: Value) Error!Value {
+    const result = try defparameter(ev, args);
+    symbol_mod.symbol(result).constant = true;
+    return ev.set1(result);
+}
+
+/// `(declaim decl...)`. Only `special` changes anything; the rest are
+/// accepted and ignored, matching `declare`.
+fn declaim(ev: *Evaluator, args: Value) Error!Value {
+    var rest = args;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) {
+        const decl = heap.car(rest);
+        if (!decl.isCons()) continue;
+        const head = heap.car(decl);
+        if (!head.isSymbol()) continue;
+        if (!std.mem.eql(u8, symbol_mod.symbol(head).name, "SPECIAL")) continue;
+        var names = heap.cdr(decl);
+        while (names.isCons()) : (names = heap.cdr(names)) {
+            const n = heap.car(names);
+            if (!n.isSymbol()) return Error.TypeError;
+            symbol_mod.symbol(n).special = true;
+        }
+    }
+    return ev.set1(value.NIL);
+}
+
+/// `(in-package name)` — name is a string, symbol, or keyword designator.
+fn inPackage(ev: *Evaluator, args: Value) Error!Value {
+    const designator = try expectOneArg(args);
+    const pkg = try resolvePackage(ev, designator);
+    ev.interner.setCurrentPackage(pkg);
+    return ev.set1(pkg.toValue());
+}
+
+/// Text of a string designator: a string, a symbol (its name), or a
+/// character. Returns a slice borrowed from the value itself.
+pub fn stringDesignator(v: Value) Error![]const u8 {
+    if (v.isSymbol()) return symbol_mod.symbol(v).name;
+    if (v.isHeap() and heap.heapType(v) == .string) return heap.asString(v).constSlice();
+    return Error.TypeError;
+}
+
+/// Resolve a package designator to a live package, or signal.
+pub fn resolvePackage(ev: *Evaluator, v: Value) Error!*package_mod.Package {
+    if (package_mod.isPackage(v)) return package_mod.asPackage(v);
+    const name = try stringDesignator(v);
+    return ev.interner.registry.find(name) orelse Error.NoSuchPackage;
 }
 
 fn quote(ev: *Evaluator, args: Value) Error!Value {
@@ -336,10 +417,19 @@ fn letForm(ev: *Evaluator, args: Value) Error!Value {
 
     _ = try ev.env.pushValueFrame();
     defer ev.env.popValueFrame();
+    const mark = ev.dynamicMark();
+    defer ev.unwindSpecials(mark);
     for (syms.items, vals.items) |s, v| {
-        try ev.env.top_value.?.bind(ev.allocator, s, v);
+        try bindVariable(ev, s, v);
     }
     return prognBody(ev, body);
+}
+
+/// Bind one variable in the innermost value frame, or dynamically when the
+/// symbol has been proclaimed special.
+pub fn bindVariable(ev: *Evaluator, sym: Value, val: Value) Error!void {
+    if (symbol_mod.symbol(sym).special) return ev.bindSpecial(sym, val);
+    try ev.env.top_value.?.bind(ev.allocator, sym, val);
 }
 
 fn letStar(ev: *Evaluator, args: Value) Error!Value {
@@ -349,13 +439,15 @@ fn letStar(ev: *Evaluator, args: Value) Error!Value {
 
     _ = try ev.env.pushValueFrame();
     defer ev.env.popValueFrame();
+    const mark = ev.dynamicMark();
+    defer ev.unwindSpecials(mark);
 
     var bind_rest = bindings;
     while (!bind_rest.equalsRaw(value.NIL)) {
         if (!bind_rest.isCons()) return Error.BadArgList;
         const pair = try parseBinding(heap.car(bind_rest));
         const init_val = if (pair.has_init) try ev.eval(pair.init) else value.NIL;
-        try ev.env.top_value.?.bind(ev.allocator, pair.sym, init_val);
+        try bindVariable(ev, pair.sym, init_val);
         bind_rest = heap.cdr(bind_rest);
     }
 
@@ -552,11 +644,12 @@ pub fn parseSituations(ev: *Evaluator, list: Value) Error!Situations {
         const item = heap.car(rest);
         if (!item.isSymbol()) return Error.TypeError;
         const name = symbol_mod.symbol(item).name;
-        if (std.mem.eql(u8, name, ":COMPILE-TOPLEVEL")) {
+        const keyword_situation = symbol_mod.isKeyword(item, ev.interner);
+        if (keyword_situation and std.mem.eql(u8, name, "COMPILE-TOPLEVEL")) {
             s.compile_toplevel = true;
-        } else if (std.mem.eql(u8, name, ":LOAD-TOPLEVEL")) {
+        } else if (keyword_situation and std.mem.eql(u8, name, "LOAD-TOPLEVEL")) {
             s.load_toplevel = true;
-        } else if (std.mem.eql(u8, name, ":EXECUTE")) {
+        } else if (keyword_situation and std.mem.eql(u8, name, "EXECUTE")) {
             s.execute = true;
         } else if (std.mem.eql(u8, name, "COMPILE")) {
             s.compile_toplevel = true;

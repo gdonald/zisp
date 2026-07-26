@@ -33,6 +33,7 @@ pub const TokenKind = enum {
     character, // text excludes the leading "#\"; reader resolves the name
     symbol, // text holds the printed name (case-folded if not |..|-quoted)
     keyword, // leading ':' stripped from text
+    uninterned, // `#:name`; text holds the name without the `#:`
 
     eof,
 };
@@ -51,6 +52,7 @@ pub const Token = struct {
     ///   character — after the "#\\", e.g. "Space" or "A" or "U+03BB"
     ///   symbol — the printed name as it appeared, pipes included if any
     ///   keyword — after the leading ':'
+    ///   uninterned — after the leading "#:"
     ///   structural / reader-macro tokens — the source covering the token
     text: []const u8,
 };

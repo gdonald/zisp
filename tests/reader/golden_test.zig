@@ -70,7 +70,7 @@ fn newSetup(test_allocator: std.mem.Allocator) !*Setup {
     s.* = .{
         .arena = std.heap.ArenaAllocator.init(test_allocator),
         .h = undefined,
-        .interner = symbol.Interner.init(test_allocator),
+        .interner = try symbol.Interner.init(test_allocator),
         .allocator = test_allocator,
     };
     s.h = heap.Heap.init(s.arena.allocator());

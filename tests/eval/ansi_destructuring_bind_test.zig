@@ -32,7 +32,7 @@ const Fixture = struct {
         const fx = try allocator.create(Fixture);
         fx.* = .{
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .interner = symbol_mod.Interner.init(allocator),
+            .interner = try symbol_mod.Interner.init(allocator),
             .heap = undefined,
             .ev = undefined,
         };

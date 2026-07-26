@@ -38,7 +38,7 @@ fn newSetup(test_allocator: std.mem.Allocator) !*Setup {
     s.* = .{
         .arena = std.heap.ArenaAllocator.init(test_allocator),
         .h = undefined,
-        .interner = symbol.Interner.init(test_allocator),
+        .interner = try symbol.Interner.init(test_allocator),
         .allocator = test_allocator,
     };
     s.h = heap.Heap.init(s.arena.allocator());
@@ -154,12 +154,13 @@ test "read float and ratio" {
     try std.testing.expectEqual(@as(i64, 4), ratio.denominator);
 }
 
-test "read keyword stub" {
+test "read keyword interns into the KEYWORD package" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, ":foo");
     try std.testing.expect(v.isSymbol());
-    try std.testing.expectEqualStrings(":FOO", symbol.name(v));
+    try std.testing.expectEqualStrings("FOO", symbol.name(v));
+    try std.testing.expect(symbol.homePackage(v).? == s.interner.keyword);
 }
 
 // --- lists / dotted pairs ----------------------------------------

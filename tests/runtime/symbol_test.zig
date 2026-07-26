@@ -5,7 +5,7 @@ const symbol_mod = zisp.symbol;
 const Interner = symbol_mod.Interner;
 
 test "intern returns same value for same name" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     const a = try interner.intern("FOO");
@@ -14,7 +14,7 @@ test "intern returns same value for same name" {
 }
 
 test "intern returns different values for different names" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     const foo = try interner.intern("FOO");
@@ -23,7 +23,7 @@ test "intern returns different values for different names" {
 }
 
 test "interned symbol carries its name" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     const v = try interner.intern("HELLO");
@@ -31,7 +31,7 @@ test "interned symbol carries its name" {
 }
 
 test "intern is case-sensitive (case folding is the reader's job)" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     const upper = try interner.intern("FOO");
@@ -40,7 +40,7 @@ test "intern is case-sensitive (case folding is the reader's job)" {
 }
 
 test "name is copied so caller can free" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     const buf = try std.testing.allocator.alloc(u8, 3);
@@ -52,7 +52,7 @@ test "name is copied so caller can free" {
 }
 
 test "lookup returns null for missing name" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     try std.testing.expect(interner.lookup("MISSING") == null);
@@ -61,7 +61,7 @@ test "lookup returns null for missing name" {
 }
 
 test "initStandardSymbols sets NIL and T" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
     try symbol_mod.initStandardSymbols(&interner);
 
@@ -73,7 +73,7 @@ test "initStandardSymbols sets NIL and T" {
 }
 
 test "NIL and T are self-evaluating after init" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
     try symbol_mod.initStandardSymbols(&interner);
 
@@ -82,7 +82,7 @@ test "NIL and T are self-evaluating after init" {
 }
 
 test "lambda-list keywords pre-interned" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
     try symbol_mod.initStandardSymbols(&interner);
 
@@ -93,7 +93,7 @@ test "lambda-list keywords pre-interned" {
 }
 
 test "interner survives many distinct names" {
-    var interner = Interner.init(std.testing.allocator);
+    var interner = try Interner.init(std.testing.allocator);
     defer interner.deinit();
 
     var buf: [32]u8 = undefined;

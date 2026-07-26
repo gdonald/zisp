@@ -107,6 +107,8 @@ test "reader fuzz: deterministic mass invocation" {
                 const ok = (e == ReaderError.EndOfInput) or
                     (e == ReaderError.UnbalancedParens) or
                     (e == ReaderError.BadToken) or
+                    (e == ReaderError.NoSuchPackage) or
+                    (e == ReaderError.SymbolNotExternal) or
                     (e == ReaderError.OutOfMemory);
                 try std.testing.expect(ok);
             },

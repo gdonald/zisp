@@ -22,6 +22,14 @@ fn evaluator(p: *anyopaque) *Evaluator {
     return Evaluator.fromOpaque(p);
 }
 
+pub fn prin1Settings(ev: *Evaluator) printer.Settings {
+    return .{ .escape = true, .current_package = ev.interner.currentPackage() };
+}
+
+pub fn princSettings(ev: *Evaluator) printer.Settings {
+    return .{ .escape = false, .current_package = ev.interner.currentPackage() };
+}
+
 pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORMAT", &formatFn);
     _ = try ev.defineNative("LOAD", &loadFn);
@@ -54,22 +62,22 @@ pub fn registerSystem(ev: *Evaluator) !void {
 
 fn installFeatures(ev: *Evaluator) !void {
     const os_feature = switch (builtin.os.tag) {
-        .linux => ":LINUX",
-        .macos => ":DARWIN",
-        else => ":UNIX",
+        .linux => "LINUX",
+        .macos => "DARWIN",
+        else => "UNIX",
     };
     const arch_feature = switch (builtin.cpu.arch) {
-        .x86_64 => ":X86-64",
-        .aarch64 => ":ARM64",
-        else => ":UNKNOWN-ARCH",
+        .x86_64 => "X86-64",
+        .aarch64 => "ARM64",
+        else => "UNKNOWN-ARCH",
     };
-    const names = [_][]const u8{ ":ZISP", ":ANSI-CL", ":COMMON-LISP", os_feature, arch_feature };
+    const names = [_][]const u8{ "ZISP", "ANSI-CL", "COMMON-LISP", os_feature, arch_feature };
 
     var list = value.NIL;
     var i: usize = names.len;
     while (i > 0) {
         i -= 1;
-        const sym = try ev.interner.intern(names[i]);
+        const sym = try ev.interner.internKeyword(names[i]);
         list = try ev.heap.allocCons(sym, list);
     }
     const features = try ev.interner.intern("*FEATURES*");
@@ -117,10 +125,10 @@ fn formatTo(ev: *Evaluator, writer: *std.Io.Writer, ctrl: []const u8, fmt_args: 
         if (i >= ctrl.len) return Error.ProgramError;
         switch (std.ascii.toUpper(ctrl[i])) {
             'A' => {
-                try printer.princ(ev.allocator, writer, try nextArg(fmt_args, &arg_index));
+                try printer.write(ev.allocator, writer, try nextArg(fmt_args, &arg_index), princSettings(ev));
             },
             'S' => {
-                try printer.prin1(ev.allocator, writer, try nextArg(fmt_args, &arg_index));
+                try printer.write(ev.allocator, writer, try nextArg(fmt_args, &arg_index), prin1Settings(ev));
             },
             'D' => {
                 const v = try nextArg(fmt_args, &arg_index);
@@ -359,7 +367,7 @@ fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value)
     const w = &file_writer.interface;
     w.print(";; zisp fasl (readable load-time forms)\n", .{}) catch return Error.FileError;
     for (forms) |f| {
-        printer.prin1(ev.allocator, w, f) catch return Error.FileError;
+        printer.write(ev.allocator, w, f, prin1Settings(ev)) catch return Error.FileError;
         w.writeByte('\n') catch return Error.FileError;
     }
     w.flush() catch return Error.FileError;

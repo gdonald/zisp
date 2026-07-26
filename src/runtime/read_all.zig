@@ -41,7 +41,7 @@ pub fn parseAll(allocator: std.mem.Allocator, source: []const u8, file_name: []c
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var heap_inst = Heap.init(arena.allocator());
-    var interner = Interner.init(allocator);
+    var interner = try Interner.init(allocator);
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 

@@ -7,6 +7,7 @@ const function = @import("../eval/function.zig");
 
 pub const system = @import("system.zig");
 pub const registerSystem = system.registerSystem;
+pub const packages = @import("packages.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -154,6 +155,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
     function.asFunction(apply_v).preserves_values = true;
     const eval_v = ev.env.lookupFunction(try ev.interner.intern("EVAL")).?;
     function.asFunction(eval_v).preserves_values = true;
+
+    try packages.registerPackages(ev);
 
     try system.evalSource(ev, prelude_source);
 }
@@ -379,8 +382,8 @@ fn memberFn(p: *anyopaque, args: []const Value) Error!Value {
 
     var test_fn: ?Value = null;
     var key_fn: ?Value = null;
-    const test_kw = try ev.interner.intern(":TEST");
-    const key_kw = try ev.interner.intern(":KEY");
+    const test_kw = try ev.interner.internKeyword("TEST");
+    const key_kw = try ev.interner.internKeyword("KEY");
     var i: usize = 2;
     while (i < args.len) : (i += 2) {
         if (args[i].equalsRaw(test_kw)) {
@@ -420,7 +423,7 @@ fn errorFn(p: *anyopaque, args: []const Value) Error!Value {
 /// specifiers and unknown type names are an error until the full type
 /// system lands.
 fn typepFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
     const v = args[0];
     const spec = args[1];
@@ -442,7 +445,7 @@ fn typepFn(p: *anyopaque, args: []const Value) Error!Value {
     else if (std.mem.eql(u8, n, "SYMBOL"))
         v.isSymbol()
     else if (std.mem.eql(u8, n, "KEYWORD"))
-        v.isSymbol() and symbol_mod.symbol(v).name.len > 0 and symbol_mod.symbol(v).name[0] == ':'
+        v.isSymbol() and symbol_mod.isKeyword(v, ev.interner)
     else if (std.mem.eql(u8, n, "BOOLEAN"))
         v.equalsRaw(value.NIL) or v.equalsRaw(value.T)
     else if (std.mem.eql(u8, n, "INTEGER") or std.mem.eql(u8, n, "FIXNUM"))

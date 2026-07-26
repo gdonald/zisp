@@ -18,7 +18,7 @@ const Fixture = struct {
         const fx = try allocator.create(Fixture);
         fx.* = .{
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .interner = symbol_mod.Interner.init(allocator),
+            .interner = try symbol_mod.Interner.init(allocator),
             .heap = undefined,
             .aw = std.Io.Writer.Allocating.init(allocator),
             .ev = undefined,
@@ -231,8 +231,8 @@ test "features holds zisp and ansi-cl keywords" {
     var cur = features;
     while (cur.isCons()) : (cur = heap_mod.cdr(cur)) {
         const name = symbol_mod.name(heap_mod.car(cur));
-        if (std.mem.eql(u8, name, ":ZISP")) saw_zisp = true;
-        if (std.mem.eql(u8, name, ":ANSI-CL")) saw_ansi = true;
+        if (std.mem.eql(u8, name, "ZISP")) saw_zisp = true;
+        if (std.mem.eql(u8, name, "ANSI-CL")) saw_ansi = true;
     }
     try testing.expect(saw_zisp);
     try testing.expect(saw_ansi);

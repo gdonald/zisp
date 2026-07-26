@@ -100,7 +100,7 @@ test "macroexpansion preserves and stamps source positions" {
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    var interner = symbol_mod.Interner.init(gpa);
+    var interner = try symbol_mod.Interner.init(gpa);
     defer interner.deinit();
     try symbol_mod.initStandardSymbols(&interner);
     var heap = zisp.Heap.init(arena.allocator());

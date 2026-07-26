@@ -50,7 +50,7 @@ pub const Repl = struct {
         self.* = .{
             .gpa = gpa,
             .arena = std.heap.ArenaAllocator.init(gpa),
-            .interner = symbol_mod.Interner.init(gpa),
+            .interner = try symbol_mod.Interner.init(gpa),
             .heap = undefined,
             .ev = undefined,
             .out = out,
@@ -176,7 +176,10 @@ pub const Repl = struct {
     }
 
     fn printResult(self: *Repl, result: Value) Error!void {
-        try printer.prin1(self.gpa, self.out, result);
+        try printer.write(self.gpa, self.out, result, .{
+            .escape = true,
+            .current_package = self.interner.currentPackage(),
+        });
         try self.out.writeByte('\n');
     }
 
@@ -195,6 +198,8 @@ fn getVal(sym: Value) Value {
 
 fn isResumeCommand(form: Value) bool {
     if (!form.isSymbol()) return false;
+    const home = symbol_mod.homePackage(form) orelse return false;
+    if (!std.mem.eql(u8, home.name, symbol_mod.KEYWORD_PACKAGE_NAME)) return false;
     const name = symbol_mod.symbol(form).name;
-    return std.mem.eql(u8, name, ":ABORT") or std.mem.eql(u8, name, ":CONTINUE");
+    return std.mem.eql(u8, name, "ABORT") or std.mem.eql(u8, name, "CONTINUE");
 }

@@ -1,6 +1,7 @@
 pub const value = @import("runtime/value.zig");
 pub const heap = @import("runtime/heap.zig");
 pub const symbol = @import("runtime/symbol.zig");
+pub const package = @import("runtime/package.zig");
 pub const printer = @import("runtime/printer.zig");
 pub const log = @import("runtime/log.zig");
 pub const source_pos = @import("runtime/source_pos.zig");
@@ -16,6 +17,7 @@ pub const Cons = heap.Cons;
 pub const Heap = heap.Heap;
 pub const Symbol = symbol.Symbol;
 pub const Interner = symbol.Interner;
+pub const Package = package.Package;
 pub const SourcePosition = source_pos.SourcePosition;
 pub const PositionTable = source_pos.PositionTable;
 pub const Env = eval.Env;

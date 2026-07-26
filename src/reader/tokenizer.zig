@@ -9,7 +9,7 @@
 //! reader, which has a 100-value SBCL-diffed corpus gate.
 //!
 //! Keyword tokens are reported with the leading `:` stripped from `text`;
-//! the reader will intern into the KEYWORD package once packages exist.
+//! the reader interns them into the KEYWORD package.
 
 const std = @import("std");
 const tok = @import("token.zig");
@@ -256,8 +256,20 @@ pub const Tokenizer = struct {
     fn pipeSymbol(self: *Tokenizer, start_pos: Position) Error!Token {
         // `|...|` runs verbatim, with backslash escape for embedded `|` or `\`.
         // Tokenizer keeps the pipes in `text` so the reader knows to skip case
-        // folding for this name.
+        // folding for that run. A quoted run may be followed by more symbol
+        // text (`|Odd|::name`), so keep scanning until a terminator.
         const start_idx = self.idx;
+        try self.scanQuotedRun();
+        self.scanSymbolBody();
+        return .{
+            .kind = .symbol,
+            .pos = start_pos,
+            .text = self.src[start_idx..self.idx],
+        };
+    }
+
+    /// Consume one `|...|` run, leaving `idx` just past the closing pipe.
+    fn scanQuotedRun(self: *Tokenizer) Error!void {
         self.advance(); // opening pipe
         while (true) {
             const c = self.peek() orelse return Error.UnexpectedEndOfInput;
@@ -271,11 +283,6 @@ pub const Tokenizer = struct {
             self.advance();
         }
         self.advance(); // closing pipe
-        return .{
-            .kind = .symbol,
-            .pos = start_pos,
-            .text = self.src[start_idx..self.idx],
-        };
     }
 
     fn keyword(self: *Tokenizer, start_pos: Position) Error!Token {
@@ -313,6 +320,10 @@ pub const Tokenizer = struct {
     fn scanSymbolBody(self: *Tokenizer) void {
         while (self.peek()) |c| {
             if (isTerminator(c)) break;
+            if (c == '|') {
+                self.scanQuotedRun() catch return;
+                continue;
+            }
             if (c == '\\') {
                 self.advance();
                 if (self.peek() == null) return;
@@ -360,6 +371,16 @@ pub const Tokenizer = struct {
                 };
             },
             '\\' => self.charLiteral(start_pos),
+            ':' => blk: {
+                self.advance(); // ':'
+                const name_start = self.idx;
+                self.scanSymbolBody();
+                break :blk .{
+                    .kind = .uninterned,
+                    .pos = start_pos,
+                    .text = self.src[name_start..self.idx],
+                };
+            },
             'b', 'B', 'o', 'O', 'x', 'X' => self.radixIntegerSingleChar(start_pos, start_idx),
             '0'...'9' => self.radixIntegerExplicit(start_pos, start_idx),
             // `#|` is consumed by skipTrivia at the top of next(), so we never

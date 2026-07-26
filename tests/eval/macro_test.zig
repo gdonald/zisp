@@ -21,7 +21,7 @@ const Fixture = struct {
         const fx = try allocator.create(Fixture);
         fx.* = .{
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .interner = symbol_mod.Interner.init(allocator),
+            .interner = try symbol_mod.Interner.init(allocator),
             .heap = undefined,
             .ev = undefined,
         };
@@ -63,7 +63,7 @@ test "defmacro returns the macro name" {
     defer fx.deinit(std.testing.allocator);
 
     const r = try fx.evalStr("(defmacro my-mac (x) x)");
-    try std.testing.expect(r.equalsRaw(try fx.interner.intern("MY-MAC")));
+    try std.testing.expect(r.equalsRaw(try fx.interner.internCurrent("MY-MAC")));
 }
 
 test "macro call expands and evaluates the expansion" {
@@ -205,7 +205,7 @@ test "*macroexpand-hook* defaults to the funcall designator" {
     defer fx.deinit(std.testing.allocator);
 
     const r = try fx.evalStr("*macroexpand-hook*");
-    try std.testing.expect(r.equalsRaw(try fx.interner.intern("FUNCALL")));
+    try std.testing.expect(r.equalsRaw(try fx.interner.internCurrent("FUNCALL")));
 }
 
 test "*macroexpand-hook* replaces the expansion when overridden" {
@@ -217,7 +217,7 @@ test "*macroexpand-hook* replaces the expansion when overridden" {
         \\(setq *macroexpand-hook* (lambda (expander form env) ''hooked))
         \\(my-mac)
     );
-    try std.testing.expect(r.equalsRaw(try fx.interner.intern("HOOKED")));
+    try std.testing.expect(r.equalsRaw(try fx.interner.internCurrent("HOOKED")));
 }
 
 test "*macroexpand-hook* can delegate to the expander" {
@@ -301,7 +301,7 @@ test "unbound *macroexpand-hook* falls back to a direct call" {
     defer fx.deinit(std.testing.allocator);
 
     _ = try fx.evalStr("(defmacro my-mac () 1)");
-    const hook_sym = try fx.interner.intern("*MACROEXPAND-HOOK*");
+    const hook_sym = try fx.interner.internCurrent("*MACROEXPAND-HOOK*");
     symbol_mod.symbol(hook_sym).value_cell = value.SPECIAL_UNBOUND;
 
     const r = try fx.evalStr("(my-mac)");
@@ -318,7 +318,7 @@ test "*macroexpand-hook* as a symbol designator resolves through the function na
         \\(flet ((my-hook (expander form env) ''sym-hooked))
         \\  (my-mac))
     );
-    try std.testing.expect(r.equalsRaw(try fx.interner.intern("SYM-HOOKED")));
+    try std.testing.expect(r.equalsRaw(try fx.interner.internCurrent("SYM-HOOKED")));
 }
 
 test "*macroexpand-hook* bound to an undefined function symbol errors" {
@@ -599,7 +599,7 @@ test "macro call honors :allow-other-keys from the caller" {
         \\(defmacro kw (&key a) (list 'quote a))
         \\(kw :a x :b y :allow-other-keys t)
     );
-    try std.testing.expect(r.equalsRaw(try fx.interner.intern("X")));
+    try std.testing.expect(r.equalsRaw(try fx.interner.internCurrent("X")));
 }
 
 test "destructuring-bind binds patterns, dotted pairs, and keys" {
@@ -618,7 +618,7 @@ test "destructuring-bind accepts an empty pattern for an empty list" {
     defer fx.deinit(std.testing.allocator);
 
     const r = try fx.evalStr("(destructuring-bind () nil 'ok)");
-    try std.testing.expect(r.equalsRaw(try fx.interner.intern("OK")));
+    try std.testing.expect(r.equalsRaw(try fx.interner.internCurrent("OK")));
 }
 
 test "destructuring-bind treats nil as an empty pattern that must match nil" {
