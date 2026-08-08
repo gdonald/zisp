@@ -114,6 +114,7 @@ pub const standard_handlers: readtable_mod.StandardHandlers = .{
     .hash_lparen = handleHashLparen,
     .hash_plus = handleHashPlus,
     .hash_minus = handleHashMinus,
+    .hash_p = handleHashP,
 };
 
 /// Process-wide standard readtable, lazily initialized. Every `Reader.init`
@@ -140,6 +141,10 @@ pub const Reader = struct {
     /// Borrowed: the caller keeps the slice alive. Names match feature
     /// expressions by `symbol-name`, case-sensitively.
     features: []const Value = &.{},
+    /// True while reading the discarded branch of `#+` / `#-`, matching
+    /// `*read-suppress*`. Symbols are not interned and package prefixes
+    /// naming absent packages read as NIL instead of signaling.
+    suppress: bool = false,
     /// One-token lookahead. The reader peeks when it needs to decide
     /// between dotted-pair and final-element in a list, and to detect
     /// EOF without consuming.
@@ -314,7 +319,7 @@ pub const Reader = struct {
             // Reader-macro kinds without a handler shouldn't reach here —
             // the standard readtable populates them. A null means user code
             // explicitly cleared an entry; surface as BadToken.
-            .quote, .backquote, .comma, .comma_at, .hash_quote, .hash_lparen, .hash_plus, .hash_minus => self.errAt(t.pos, Error.BadToken),
+            .quote, .backquote, .comma, .comma_at, .hash_quote, .hash_lparen, .hash_plus, .hash_minus, .hash_p => self.errAt(t.pos, Error.BadToken),
         };
     }
 
@@ -366,6 +371,17 @@ pub const Reader = struct {
         }
     }
 
+    /// `#P"..."` reads the following string and wraps it in a pathname.
+    /// Under suppression the namestring is discarded like any other atom.
+    fn readPathname(self: *Reader) Error!Value {
+        const t = try self.nextToken();
+        if (t.kind == .eof) return self.errAt(t.pos, Error.EndOfInput);
+        if (t.kind != .string) return self.errAt(t.pos, Error.BadToken);
+        if (self.suppress) return value.NIL;
+        const namestring = try self.parseStringAt(t.text, t.pos);
+        return self.heap.allocPathname(namestring);
+    }
+
     /// Helper: lower a reader-macro form into `(SYM x)`.
     /// The handlers below all funnel through this; the readtable picks
     /// which symbol to splice in.
@@ -415,11 +431,11 @@ pub const Reader = struct {
         if (present == want) {
             return ReadStep{ .value = try self.readForm() };
         }
-        // Read and discard the form. We don't bind `*read-suppress*` yet
-        // (that waits for special-variable plumbing); instead we read
-        // normally and throw away the result. Bad input inside a discarded
-        // form still raises errors — strictly less permissive than
-        // `*read-suppress* T`, but matches "fail loud" for now.
+        // Read and discard the form under suppression, so a branch written
+        // for another implementation may name packages this image lacks.
+        const outer = self.suppress;
+        self.suppress = true;
+        defer self.suppress = outer;
         _ = try self.readForm();
         return ReadStep.skipped;
     }
@@ -473,6 +489,7 @@ pub const Reader = struct {
     }
 
     fn parseSymbolAt(self: *Reader, text: []const u8, p: Position) Error!Value {
+        if (self.suppress) return value.NIL;
         var name_buf: [256]u8 = undefined;
         if (findPackageMarker(text)) |marker| {
             var pkg_buf: [256]u8 = undefined;
@@ -498,6 +515,7 @@ pub const Reader = struct {
     }
 
     fn parseKeywordAt(self: *Reader, text: []const u8, p: Position) Error!Value {
+        if (self.suppress) return value.NIL;
         var buf: [256]u8 = undefined;
         // `::foo` reaches here with the first colon already consumed.
         const body = if (text.len != 0 and text[0] == ':') text[1..] else text;
@@ -506,6 +524,7 @@ pub const Reader = struct {
     }
 
     fn parseUninternedAt(self: *Reader, text: []const u8, p: Position) Error!Value {
+        if (self.suppress) return value.NIL;
         var buf: [256]u8 = undefined;
         const name = foldSymbolName(text, &buf) catch |e| return self.errAt(p, e);
         return try self.interner.makeUninterned(name);
@@ -599,6 +618,11 @@ fn handleHashPlus(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
 fn handleHashMinus(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
     const self: *Reader = @ptrCast(@alignCast(ctx));
     return self.readConditional(false);
+}
+
+fn handleHashP(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
+    const self: *Reader = @ptrCast(@alignCast(ctx));
+    return ReadStep{ .value = try self.readPathname() };
 }
 
 /// Apply readtable-case `:upcase` to a symbol's source text. `|..|` runs

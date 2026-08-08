@@ -412,3 +412,50 @@ test "non-symbol value in features list is ignored" {
     const v = (try rd.read()).?;
     try std.testing.expectEqualStrings("NO", symbol.name(v));
 }
+
+test "skipped branch may name a package that does not exist" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = (try readWithFeatures(s, &.{}, "#+sbcl (sb-ext:exit :code 1) :kept")).?;
+    try std.testing.expectEqualStrings("KEPT", symbol.name(v));
+}
+
+test "skipped branch may name a symbol that is not external" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = (try readWithFeatures(s, &.{}, "#+abcl cl:no-such-external-symbol :kept")).?;
+    try std.testing.expectEqualStrings("KEPT", symbol.name(v));
+}
+
+test "suppression does not intern the symbols it reads" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    // The feature expression itself is read normally; only the discarded
+    // form is suppressed, so intern NOPE before taking the baseline.
+    _ = try s.interner.intern("NOPE");
+    const before = s.interner.count();
+    _ = try readWithFeatures(s, &.{}, "#+nope (never-interned-name #:also-not :nor-this)");
+    try std.testing.expectEqual(before, s.interner.count());
+}
+
+test "suppression ends with the discarded form" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    var tk = Tokenizer.init("#+nope skipped kept:no-such-package");
+    var rd = Reader.init(&tk, &s.h, &s.interner);
+    try std.testing.expectError(ReaderError.NoSuchPackage, rd.read());
+}
+
+test "nested #+ inside a discarded form stays suppressed" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = (try readWithFeatures(s, &.{}, "#+nope (a #+other absent:sym b) :kept")).?;
+    try std.testing.expectEqualStrings("KEPT", symbol.name(v));
+}
+
+test "a discarded #P is consumed without allocating a pathname" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = (try readWithFeatures(s, &.{}, "#+nope #P\"gone\" :kept")).?;
+    try std.testing.expectEqualStrings("KEPT", symbol.name(v));
+}

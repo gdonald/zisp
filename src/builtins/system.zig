@@ -34,6 +34,9 @@ pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORMAT", &formatFn);
     _ = try ev.defineNative("LOAD", &loadFn);
     _ = try ev.defineNative("COMPILE-FILE", &compileFileFn);
+    _ = try ev.defineNative("PATHNAME", &pathnameFn);
+    _ = try ev.defineNative("NAMESTRING", &namestringFn);
+    _ = try ev.defineNative("TRUENAME", &truenameFn);
     _ = try ev.defineNative("QUIT", &quitFn);
     _ = try ev.defineNative("EXIT", &quitFn);
 
@@ -176,6 +179,11 @@ pub fn loadPath(ev: *Evaluator, path: []const u8) Error!void {
     var bindings = try PathVarBindings.bind(ev, "*LOAD-PATHNAME*", "*LOAD-TRUENAME*", path, truename);
     defer bindings.restore();
 
+    // CLHS 24.1: `load` binds `*package*`, so an `in-package` in the file
+    // does not leak into whatever loaded it.
+    const saved_package = ev.interner.currentPackage();
+    defer ev.interner.setCurrentPackage(saved_package);
+
     try evalSource(ev, source);
 }
 
@@ -193,6 +201,37 @@ fn readFileAlloc(ev: *Evaluator, io: std.Io, path: []const u8) Error![]u8 {
 
 fn truenameOf(ev: *Evaluator, io: std.Io, path: []const u8) ![:0]u8 {
     return std.Io.Dir.cwd().realPathFileAlloc(io, path, ev.allocator);
+}
+
+/// Namestring behind a pathname designator: a string, or a pathname.
+fn namestringOf(v: Value) Error![]const u8 {
+    if (heap.isPathname(v)) return heap.asString(heap.asPathname(v).namestring).constSlice();
+    if (v.tag() == .heap and heap.heapType(v) == .string) return heap.asString(v).constSlice();
+    return Error.TypeError;
+}
+
+fn pathnameFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (heap.isPathname(args[0])) return args[0];
+    const text = try namestringOf(args[0]);
+    return ev.heap.allocPathname(try ev.heap.allocString(text));
+}
+
+fn namestringFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    return ev.heap.allocString(try namestringOf(args[0]));
+}
+
+fn truenameFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    const io = ev.io orelse return Error.FileError;
+    const path = try namestringOf(args[0]);
+    const resolved = truenameOf(ev, io, path) catch return Error.FileError;
+    defer ev.allocator.free(resolved);
+    return ev.heap.allocPathname(try ev.heap.allocString(resolved));
 }
 
 /// Saved global cells for a pathname/truename variable pair, rebound for

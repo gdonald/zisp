@@ -31,6 +31,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("CATCH", &catchForm);
     try ev.registerSpecialForm("THROW", &throwForm);
     try ev.registerSpecialForm("UNWIND-PROTECT", &unwindProtect);
+    try ev.registerSpecialForm("IGNORE-ERRORS", &ignoreErrors);
     try ev.registerSpecialForm("THE", &theForm);
     try ev.registerSpecialForm("DECLARE", &declareForm);
     try ev.registerSpecialForm("VALUES", &valuesForm);
@@ -612,6 +613,20 @@ fn unwindProtect(ev: *Evaluator, args: Value) Error!Value {
     _ = try prognBody(ev, cleanup);
 
     return ev.setValues(saved_vals.items);
+}
+
+/// `(ignore-errors form*)` — evaluate the body, and on an error return
+/// `(values nil <error-name>)`. Non-local exits (`return-from`, `go`,
+/// `throw`) and `quit` pass through untouched. The second value becomes a
+/// real condition object once the condition system exists.
+fn ignoreErrors(ev: *Evaluator, args: Value) Error!Value {
+    return prognBody(ev, args) catch |err| switch (err) {
+        Error.BlockReturn, Error.Go, Error.Throw, Error.Quit, Error.OutOfMemory => err,
+        else => {
+            const name = try ev.interner.internKeyword(@errorName(err));
+            return ev.setValues(&.{ value.NIL, name });
+        },
+    };
 }
 
 fn theForm(ev: *Evaluator, args: Value) Error!Value {

@@ -323,3 +323,85 @@ test "evalSource evaluates each form" {
     try zisp.builtins.system.evalSource(&fx.ev, "(setq m 3) (setq n (* m m))");
     try testing.expectEqual(@as(i64, 9), fx.symValue("N").toFixnum());
 }
+
+// --- pathnames ---
+
+fn namestringOf(fx: *Fixture, src: []const u8) ![]const u8 {
+    const v = try fx.evalStr(src);
+    return heap_mod.asString(heap_mod.asPathname(v).namestring).constSlice();
+}
+
+test "#P reads a pathname carrying its namestring" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectEqualStrings("sandbox/", try namestringOf(fx, "#P\"sandbox/\""));
+}
+
+test "a pathname prints readably with prin1 and bare with princ" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    _ = try fx.evalStr("(format t \"~S ~A\" #P\"a/b\" #P\"a/b\")");
+    try testing.expectEqualStrings("#P\"a/b\" a/b", fx.console());
+}
+
+test "pathname coerces a string and passes a pathname through" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectEqualStrings("x/y", try namestringOf(fx, "(pathname \"x/y\")"));
+    try testing.expect((try fx.evalStr("(let ((p #P\"z\")) (eq p (pathname p)))")).equalsRaw(value.T));
+}
+
+test "namestring returns the text of either designator" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    const v = try fx.evalStr("(namestring #P\"a/b\")");
+    try testing.expectEqualStrings("a/b", heap_mod.asString(v).constSlice());
+    const w = try fx.evalStr("(namestring \"c/d\")");
+    try testing.expectEqualStrings("c/d", heap_mod.asString(w).constSlice());
+}
+
+test "pathname functions reject non-designators" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectError(error.TypeError, fx.evalStr("(pathname 5)"));
+    try testing.expectError(error.TypeError, fx.evalStr("(namestring 5)"));
+    try testing.expectError(error.TypeError, fx.evalStr("(truename 5)"));
+}
+
+test "pathname functions take exactly one argument" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectError(error.WrongArgCount, fx.evalStr("(pathname)"));
+    try testing.expectError(error.WrongArgCount, fx.evalStr("(namestring)"));
+    try testing.expectError(error.WrongArgCount, fx.evalStr("(truename)"));
+}
+
+test "truename resolves an existing file to an absolute pathname" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    const resolved = try namestringOf(fx, "(truename \"build.zig\")");
+    try testing.expect(std.mem.startsWith(u8, resolved, "/"));
+    try testing.expect(std.mem.endsWith(u8, resolved, "build.zig"));
+}
+
+test "truename on a missing file is a file error" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectError(error.FileError, fx.evalStr("(truename \"no-such-file-here\")"));
+}
+
+test "truename errors when no io is wired" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    fx.ev.io = null;
+    try testing.expectError(error.FileError, fx.evalStr("(truename \"build.zig\")"));
+}
+
+test "load restores the package the file changed" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    const before = fx.interner.currentPackage();
+    _ = try fx.evalStr("(load \"vendor/ansi-test/rt-package.lsp\")");
+    _ = try fx.evalStr("(load \"tests/lisp/in-package-only.lisp\")");
+    try testing.expect(fx.interner.currentPackage() == before);
+}

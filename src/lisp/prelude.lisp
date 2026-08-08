@@ -1,6 +1,12 @@
 ;; Boot prelude: standard macros defined in Lisp, loaded after the native
 ;; builtins are registered. Expansions bottom out in the if / progn / let
 ;; special forms.
+;;
+;; Everything here is read in COMMON-LISP so the standard names it defines
+;; are inherited by every package that uses CL. The export list at the end
+;; keeps the `%`-prefixed helpers internal.
+
+(in-package "COMMON-LISP")
 
 (defmacro when (test &body body)
   `(if ,test (progn ,@body) nil))
@@ -276,3 +282,83 @@
         `(let* (,@(%pair-lists temps vals)
                 (,(car stores) (- ,access-form ,delta)))
            ,store-form))))
+
+;; --- defstruct ---
+
+(defun %struct-string (x)
+  (format nil "~A" x))
+
+(defun %struct-symbol (prefix suffix)
+  (intern (format nil "~A~A" prefix suffix)))
+
+(defun %struct-option (options key default)
+  (labels ((scan (rest)
+             (cond ((null rest) default)
+                   ((eq (car rest) key) default)
+                   ((and (consp (car rest)) (eq (car (car rest)) key))
+                    (if (consp (cdr (car rest))) (car (cdr (car rest))) default))
+                   (t (scan (cdr rest))))))
+    (scan options)))
+
+(defun %struct-check-options (options)
+  (labels ((scan (rest)
+             (unless (null rest)
+               (let ((key (if (consp (car rest)) (car (car rest)) (car rest))))
+                 (unless (member key '(:conc-name :constructor :predicate :copier))
+                   (error "defstruct option ~S is not supported" key)))
+               (scan (cdr rest)))))
+    (scan options)))
+
+(defun %struct-slot-name (slot)
+  (if (consp slot) (car slot) slot))
+
+(defun %struct-slot-initform (slot)
+  (if (consp slot) (car (cdr slot)) nil))
+
+(defun %struct-accessors (conc slot-names)
+  (mapcar (lambda (slot) (%struct-symbol conc slot)) slot-names))
+
+(defun %struct-accessor-forms (accessors index)
+  (if (null accessors)
+      nil
+      (list* `(defun ,(car accessors) (%struct) (%structure-ref %struct ,index))
+             `(defsetf ,(car accessors) (%obj) (%new)
+                (list '%set-structure-ref %obj ,index %new))
+             (%struct-accessor-forms (cdr accessors) (+ index 1)))))
+
+(defmacro defstruct (name-and-options &rest slots)
+  (let* ((name (if (consp name-and-options) (car name-and-options) name-and-options))
+         (options (if (consp name-and-options) (cdr name-and-options) nil))
+         (raw-conc (%struct-option options :conc-name (format nil "~A-" name)))
+         (conc (if raw-conc (%struct-string raw-conc) ""))
+         (constructor (%struct-option options :constructor (%struct-symbol "MAKE-" name)))
+         (predicate (%struct-option options :predicate (%struct-symbol name "-P")))
+         (copier (%struct-option options :copier (%struct-symbol "COPY-" name)))
+         (slot-names (mapcar #'%struct-slot-name slots))
+         (accessors (%struct-accessors conc slot-names)))
+    (%struct-check-options options)
+    `(progn
+       (%put ',name '%structure-slots ',slot-names)
+       ,@(when constructor
+           (list `(defun ,constructor
+                      (&key ,@(mapcar (lambda (slot)
+                                        (list (%struct-slot-name slot)
+                                              (%struct-slot-initform slot)))
+                                      slots))
+                    (%make-structure ',name ,@slot-names))))
+       ,@(when predicate
+           (list `(defun ,predicate (%struct)
+                    (and (%structure-p %struct)
+                         (eq (%structure-name %struct) ',name)))))
+       ,@(when copier
+           (list `(defun ,copier (%struct) (%copy-structure %struct))))
+       ,@(%struct-accessor-forms accessors 0)
+       ',name)))
+
+(export '(when unless cond and or prog1 prog2 case ecase ccase
+          typecase etypecase ctypecase
+          get-setf-expansion setf defsetf define-setf-expander
+          push pop pushnew incf decf
+          defstruct otherwise))
+
+(in-package "COMMON-LISP-USER")

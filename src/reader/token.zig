@@ -24,6 +24,7 @@ pub const TokenKind = enum {
     hash_lparen, // #(
     hash_plus, // #+
     hash_minus, // #-
+    hash_p, // #P
 
     // Literals
     integer, // text holds the digit run (with optional sign / radix prefix)

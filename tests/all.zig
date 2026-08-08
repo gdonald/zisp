@@ -35,10 +35,13 @@ comptime {
     _ = @import("eval/backquote_corpus_test.zig");
     _ = @import("eval/prelude_macros_test.zig");
     _ = @import("eval/setf_test.zig");
+    _ = @import("eval/defstruct_test.zig");
+    _ = @import("eval/ignore_errors_test.zig");
     _ = @import("eval/special_vars_test.zig");
     _ = @import("builtins/system_test.zig");
     _ = @import("builtins/packages_test.zig");
     _ = @import("builtins/ansi_rt_package_test.zig");
+    _ = @import("builtins/ansi_rt_test.zig");
     _ = @import("builtins/compile_file_test.zig");
     _ = @import("repl/repl_test.zig");
     _ = @import("cli_test.zig");

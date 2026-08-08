@@ -27,6 +27,7 @@ pub const HeapType = enum(u8) {
     double_float = 11,
     weak_pointer = 12,
     closure = 13,
+    structure = 14,
     _,
 };
 
@@ -107,6 +108,35 @@ pub const HeapVector = extern struct {
         const base: [*]const u8 = @ptrCast(self);
         const offset = @sizeOf(HeapVector);
         const ptr: [*]const Value = @ptrCast(@alignCast(base + offset));
+        return ptr[0..self.len];
+    }
+};
+
+/// Physical pathname carrying only its namestring. The six-component
+/// model (host/device/directory/name/type/version) arrives with the
+/// pathname functions; the reader and `truename` need identity and text.
+pub const HeapPathname = extern struct {
+    header: HeapHeader,
+    namestring: Value,
+};
+
+/// `defstruct` instance: the structure name symbol plus a flat slot array.
+/// Slot names and their order live on the name symbol's plist, so an
+/// instance carries only its values.
+pub const HeapStructure = extern struct {
+    header: HeapHeader,
+    name: Value,
+    len: u64,
+    pub fn data(self: *HeapStructure) [*]Value {
+        const base: [*]u8 = @ptrCast(self);
+        return @ptrCast(@alignCast(base + @sizeOf(HeapStructure)));
+    }
+    pub fn slice(self: *HeapStructure) []Value {
+        return self.data()[0..self.len];
+    }
+    pub fn constSlice(self: *const HeapStructure) []const Value {
+        const base: [*]const u8 = @ptrCast(self);
+        const ptr: [*]const Value = @ptrCast(@alignCast(base + @sizeOf(HeapStructure)));
         return ptr[0..self.len];
     }
 };
@@ -195,6 +225,28 @@ pub const Heap = struct {
         if (elements.len != 0) @memcpy(obj.slice(), elements);
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
+
+    pub fn allocPathname(self: *Heap, namestring: Value) !Value {
+        const obj = try self.allocator.create(HeapPathname);
+        obj.* = .{
+            .header = .{ .type_tag = .pathname, .size = @sizeOf(HeapPathname) },
+            .namestring = namestring,
+        };
+        return Value.fromHeapAddr(@intFromPtr(obj));
+    }
+
+    pub fn allocStructure(self: *Heap, name: Value, slots: []const Value) !Value {
+        const total = @sizeOf(HeapStructure) + slots.len * @sizeOf(Value);
+        const buf = try self.allocator.alignedAlloc(u8, .of(HeapStructure), total);
+        const obj: *HeapStructure = @ptrCast(buf.ptr);
+        obj.* = .{
+            .header = .{ .type_tag = .structure, .size = @intCast(total) },
+            .name = name,
+            .len = slots.len,
+        };
+        if (slots.len != 0) @memcpy(obj.slice(), slots);
+        return Value.fromHeapAddr(@intFromPtr(obj));
+    }
 };
 
 /// Inspect the type tag of a heap-allocated value.
@@ -221,6 +273,22 @@ pub fn asRatio(v: Value) *HeapRatio {
 
 pub fn asVector(v: Value) *HeapVector {
     return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn asPathname(v: Value) *HeapPathname {
+    return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn isPathname(v: Value) bool {
+    return v.tag() == .heap and heapType(v) == .pathname;
+}
+
+pub fn asStructure(v: Value) *HeapStructure {
+    return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn isStructure(v: Value) bool {
+    return v.tag() == .heap and heapType(v) == .structure;
 }
 
 pub fn asHashTable(v: Value) *HeapHashTable {

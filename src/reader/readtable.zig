@@ -5,7 +5,7 @@
 //! The tokenizer bakes the spec's default syntax into a fast pre-pass,
 //! so the dispatch the user can extend lives one layer up — it's keyed on
 //! the *reader-macro tokens* the tokenizer emits (`'`, `` ` ``, `,`, `,@`,
-//! `#'`, `#(`, `#+`, `#-`).
+//! `#'`, `#(`, `#+`, `#-`, `#P`).
 //!
 //! The user-facing `set-macro-character` / `set-dispatch-macro-character`
 //! APIs wait for Lisp-callable functions to exist; for now this
@@ -54,6 +54,7 @@ const MACRO_TOKEN_KINDS = [_]TokenKind{
     .hash_lparen,
     .hash_plus,
     .hash_minus,
+    .hash_p,
 };
 
 /// Compile-time index of a token kind in `MACRO_TOKEN_KINDS`. Used to size
@@ -85,6 +86,7 @@ pub const Readtable = struct {
         t.set(.hash_lparen, vtable.hash_lparen);
         t.set(.hash_plus, vtable.hash_plus);
         t.set(.hash_minus, vtable.hash_minus);
+        t.set(.hash_p, vtable.hash_p);
         return t;
     }
 
@@ -111,4 +113,5 @@ pub const StandardHandlers = struct {
     hash_lparen: MacroHandler,
     hash_plus: MacroHandler,
     hash_minus: MacroHandler,
+    hash_p: MacroHandler,
 };

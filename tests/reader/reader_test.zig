@@ -392,6 +392,7 @@ test "dispatch goes through the readtable" {
         .hash_lparen = overrideQuoteHandler,
         .hash_plus = overrideQuoteHandler,
         .hash_minus = overrideQuoteHandler,
+        .hash_p = overrideQuoteHandler,
     });
     var tk = Tokenizer.init("'foo");
     var rd = zisp.reader.Reader.initFull(&tk, &s.h, &s.interner, &rt, null, "");
@@ -784,4 +785,31 @@ test "readtable with nulled handler surfaces BadToken on macro char" {
     var tk = Tokenizer.init("'foo");
     var rd = zisp.reader.Reader.initFull(&tk, &s.h, &s.interner, &rt, null, "");
     try std.testing.expectError(ReaderError.BadToken, rd.read());
+}
+
+test "#P reads a pathname and round-trips through the printer" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "#p\"a/b.txt\"");
+    try std.testing.expect(heap.isPathname(v));
+    try expectPrints(std.testing.allocator, v, "#P\"a/b.txt\"");
+}
+
+test "#P inside a list reads as one element" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "(load #P\"x\")");
+    try std.testing.expect(heap.isPathname(heap.car(heap.cdr(v))));
+}
+
+test "#P without a string is a bad token" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    try std.testing.expectError(ReaderError.BadToken, readOne(s, "#P(a b)"));
+}
+
+test "#P at end of input is EndOfInput" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    try std.testing.expectError(ReaderError.EndOfInput, readOne(s, "#P"));
 }

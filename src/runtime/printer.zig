@@ -285,9 +285,54 @@ fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
             }
             try ctx.writer.writeByte(')');
         },
+        .structure => try printStructure(ctx, v, depth),
+        .pathname => {
+            if (ctx.effectiveEscape()) try ctx.writer.writeAll("#P");
+            try printString(ctx, heap.asString(heap.asPathname(v).namestring).constSlice());
+        },
         .package => try ctx.writer.print("#<PACKAGE \"{s}\">", .{package.asPackage(v).name}),
         else => try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()}),
     }
+}
+
+/// Slot names live on the structure name's plist under `%STRUCTURE-SLOTS`,
+/// written there by `defstruct`. Matching the indicator by name keeps the
+/// printer free of an interner reference.
+const STRUCTURE_SLOTS = "%STRUCTURE-SLOTS";
+
+fn structureSlotNames(name: Value) Value {
+    var plist = symbol.symbol(name).plist;
+    while (plist.isCons()) {
+        const rest = heap.cdr(plist);
+        if (!rest.isCons()) return value.NIL;
+        const key = heap.car(plist);
+        if (key.isSymbol() and std.mem.eql(u8, symbol.name(key), STRUCTURE_SLOTS)) {
+            return heap.car(rest);
+        }
+        plist = heap.cdr(rest);
+    }
+    return value.NIL;
+}
+
+fn printStructure(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
+    const obj = heap.asStructure(v);
+    try ctx.writer.writeAll("#S(");
+    try printValue(ctx, obj.name, depth + 1);
+    var names = structureSlotNames(obj.name);
+    for (obj.constSlice()) |slot| {
+        try ctx.writer.writeByte(' ');
+        if (names.isCons()) {
+            const slot_name = heap.car(names);
+            names = heap.cdr(names);
+            if (slot_name.isSymbol()) {
+                try ctx.writer.writeByte(':');
+                try ctx.writer.writeAll(symbol.name(slot_name));
+                try ctx.writer.writeByte(' ');
+            }
+        }
+        try printValue(ctx, slot, depth + 1);
+    }
+    try ctx.writer.writeByte(')');
 }
 
 fn printString(ctx: *PrintCtx, s: []const u8) PrintError!void {

@@ -57,9 +57,13 @@ partial runs are meaningful early in the project.
 
 ## Status
 
-Until `--eval` and `load` exist, the harness can't actually drive the
-suite. Today it prints `STUB: would run <cat> (N .lsp files)` per category
-to prove the submodule and binary are wired up end-to-end.
+The harness drives the suite in two modes. `--read-only` parses every
+`.lsp` without evaluating and reports the parse rate. The default mode
+loads each file and counts the ones that load and run to completion; when
+a file emits a `do-tests` tally the harness accumulates those per-test
+counts instead.
 
-The TODO marker in `run_category()` is where the real `--eval` invocation
-goes.
+The framework itself loads: `rt-package.lsp` defines the package and
+`rt.lsp` defines `deftest`, `do-tests`, and the entry structure. Driving
+the suite through `(do-tests)` additionally needs `gclload1.lsp`, which
+pulls in the pathname functions, the condition system, and `loop`.

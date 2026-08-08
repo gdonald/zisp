@@ -146,6 +146,13 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("%PUTHASH", &puthashFn);
     _ = try ev.defineNative("MEMBER", &memberFn);
 
+    _ = try ev.defineNative("%MAKE-STRUCTURE", &makeStructureFn);
+    _ = try ev.defineNative("%STRUCTURE-P", &structurePFn);
+    _ = try ev.defineNative("%STRUCTURE-NAME", &structureNameFn);
+    _ = try ev.defineNative("%STRUCTURE-REF", &structureRefFn);
+    _ = try ev.defineNative("%SET-STRUCTURE-REF", &setStructureRefFn);
+    _ = try ev.defineNative("%COPY-STRUCTURE", &copyStructureFn);
+
     // Pass-through natives keep the values channel of the call they make
     // (or the values they set themselves).
     function.asFunction(try ev.defineNative("GETHASH", &gethashFn)).preserves_values = true;
@@ -157,6 +164,10 @@ pub fn registerStandard(ev: *Evaluator) !void {
     function.asFunction(eval_v).preserves_values = true;
 
     try packages.registerPackages(ev);
+    // Ahead of the prelude: reading the prelude interns every symbol it
+    // mentions in the current package, so a name the prelude uses before
+    // its native exists would shadow the later definition.
+    try system.registerSystem(ev);
 
     try system.evalSource(ev, prelude_source);
 }
@@ -338,6 +349,58 @@ fn setArefFn(p: *anyopaque, args: []const Value) Error!Value {
     return args[2];
 }
 
+// --- structures (the runtime half of `defstruct`) ---
+
+fn makeStructureFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len == 0) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return Error.TypeError;
+    return ev.heap.allocStructure(args[0], args[1..]);
+}
+
+fn structurePFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    return if (heap.isStructure(args[0])) value.T else value.NIL;
+}
+
+fn structureNameFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!heap.isStructure(args[0])) return Error.TypeError;
+    return heap.asStructure(args[0]).name;
+}
+
+fn structureSlot(args: []const Value) Error!*Value {
+    if (!heap.isStructure(args[0])) return Error.TypeError;
+    const i = try eltIndex(args[1]);
+    const obj = heap.asStructure(args[0]);
+    if (i >= obj.len) return Error.TypeError;
+    return &obj.slice()[i];
+}
+
+fn structureRefFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 2) return Error.WrongArgCount;
+    return (try structureSlot(args)).*;
+}
+
+fn setStructureRefFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 3) return Error.WrongArgCount;
+    const cell = try structureSlot(args[0..2]);
+    cell.* = args[2];
+    return args[2];
+}
+
+fn copyStructureFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!heap.isStructure(args[0])) return Error.TypeError;
+    const obj = heap.asStructure(args[0]);
+    return ev.heap.allocStructure(obj.name, obj.slice());
+}
+
 // --- hash tables (minimal eql tables) ---
 
 fn isHashTable(v: Value) bool {
@@ -458,6 +521,10 @@ fn typepFn(p: *anyopaque, args: []const Value) Error!Value {
         v.tag() == .heap and heap.heapType(v) == .string
     else if (std.mem.eql(u8, n, "FUNCTION"))
         function.isFunction(v)
+    else if (std.mem.eql(u8, n, "STRUCTURE-OBJECT"))
+        heap.isStructure(v)
+    else if (heap.isStructure(v))
+        heap.asStructure(v).name.equalsRaw(spec)
     else
         return Error.ProgramError;
 
