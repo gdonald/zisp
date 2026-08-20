@@ -64,12 +64,7 @@ fn packageArg(ev: *Evaluator, args: []const Value, idx: usize) Error!*Package {
 }
 
 fn listOfValues(ev: *Evaluator, items: []const Value) Error!Value {
-    var list = value.NIL;
-    var i = items.len;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(items[i], list);
-    }
+    const list = try ev.heap.list(items);
     return list;
 }
 
@@ -159,12 +154,11 @@ fn packageNicknamesFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const pkg = try special_forms.resolvePackage(ev, args[0]);
-    var list = value.NIL;
-    var i = pkg.nicknames.items.len;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(try ev.heap.allocString(pkg.nicknames.items[i]), list);
+    var builder = ev.heap.listBuilder();
+    for (pkg.nicknames.items) |nickname| {
+        try builder.append(try ev.heap.allocString(nickname));
     }
+    const list = builder.finish();
     return list;
 }
 
@@ -183,12 +177,9 @@ fn packageUsedByListFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn packageListToValue(ev: *Evaluator, packages: []const *Package) Error!Value {
-    var list = value.NIL;
-    var i = packages.len;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(packages[i].toValue(), list);
-    }
+    var builder = ev.heap.listBuilder();
+    for (packages) |pkg| try builder.append(pkg.toValue());
+    const list = builder.finish();
     return list;
 }
 
@@ -196,23 +187,22 @@ fn packageShadowingFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const pkg = try special_forms.resolvePackage(ev, args[0]);
-    var list = value.NIL;
+    var builder = ev.heap.listBuilder();
     var it = pkg.shadowing.valueIterator();
-    while (it.next()) |sym| list = try ev.heap.allocCons(sym.*, list);
+    while (it.next()) |sym| try builder.append(sym.*);
+    const list = builder.finish();
     return list;
 }
 
 fn listAllPackagesFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 0) return Error.WrongArgCount;
-    var list = value.NIL;
-    var i = ev.interner.registry.list.items.len;
-    while (i > 0) {
-        i -= 1;
-        const pkg = ev.interner.registry.list.items[i];
+    var builder = ev.heap.listBuilder();
+    for (ev.interner.registry.list.items) |pkg| {
         if (pkg.deleted) continue;
-        list = try ev.heap.allocCons(pkg.toValue(), list);
+        try builder.append(pkg.toValue());
     }
+    const list = builder.finish();
     return list;
 }
 

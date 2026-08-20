@@ -43,17 +43,23 @@ pub fn imagpartOf(h: *Heap, v: Value) Error!Value {
 /// and a float in either part makes both parts floats of that format.
 pub fn make(h: *Heap, realpart: Value, imagpart: Value) Error!Value {
     if (!isReal(realpart) or !isReal(imagpart)) return Error.TypeError;
+    // Both parts, and each boxed result, are held while the other part
+    // is boxed.
+    var held = h.protect();
+    defer held.close();
+    try held.push(realpart);
+    try held.push(imagpart);
     if (heap.isDoubleFloat(realpart) or heap.isDoubleFloat(imagpart)) {
-        return h.allocComplex(
-            try h.allocDoubleFloat(equality.toF64(realpart)),
-            try h.allocDoubleFloat(equality.toF64(imagpart)),
-        );
+        const boxed_real = try h.allocDoubleFloat(equality.toF64(realpart));
+        try held.push(boxed_real);
+        const boxed_imag = try h.allocDoubleFloat(equality.toF64(imagpart));
+        return h.allocComplex(boxed_real, boxed_imag);
     }
     if (heap.isSingleFloat(realpart) or heap.isSingleFloat(imagpart)) {
-        return h.allocComplex(
-            try h.allocSingleFloat(@floatCast(equality.toF64(realpart))),
-            try h.allocSingleFloat(@floatCast(equality.toF64(imagpart))),
-        );
+        const boxed_real = try h.allocSingleFloat(@floatCast(equality.toF64(realpart)));
+        try held.push(boxed_real);
+        const boxed_imag = try h.allocSingleFloat(@floatCast(equality.toF64(imagpart)));
+        return h.allocComplex(boxed_real, boxed_imag);
     }
     if (bignum.isZero(bignum.numeratorOf(imagpart))) return realpart;
     return h.allocComplex(realpart, imagpart);

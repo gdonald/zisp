@@ -100,6 +100,10 @@ pub const Env = struct {
     top_value: ?*Frame = null,
     top_function: ?*Frame = null,
     all_frames: std.ArrayList(*Frame) = .empty,
+    /// Chains a call in flight set aside while it runs. They are not
+    /// reachable from `top_value` or `top_function` for as long as the
+    /// call lasts, so a root scan reads them from here.
+    saved_chains: std.ArrayList(?*Frame) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Env {
         return .{ .allocator = allocator };
@@ -111,8 +115,24 @@ pub const Env = struct {
             self.allocator.destroy(f);
         }
         self.all_frames.deinit(self.allocator);
+        self.saved_chains.deinit(self.allocator);
         self.top_value = null;
         self.top_function = null;
+    }
+
+    /// Set a chain aside for the duration of a call, and remember it
+    /// where a root scan can find it.
+    pub fn saveChains(self: *Env) !usize {
+        const mark = self.saved_chains.items.len;
+        try self.saved_chains.append(self.allocator, self.top_value);
+        try self.saved_chains.append(self.allocator, self.top_function);
+        return mark;
+    }
+
+    pub fn restoreChains(self: *Env, mark: usize) void {
+        self.top_value = self.saved_chains.items[mark];
+        self.top_function = self.saved_chains.items[mark + 1];
+        self.saved_chains.shrinkRetainingCapacity(mark);
     }
 
     fn allocFrame(self: *Env, parent: ?*Frame) !*Frame {

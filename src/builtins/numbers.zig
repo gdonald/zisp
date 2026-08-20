@@ -539,9 +539,17 @@ const DivideKind = enum { floor, ceiling, truncate, round };
 /// Round `num/den` to an integer, with `den` positive.
 fn roundQuotient(ev: *Evaluator, kind: DivideKind, num: Value, den: Value) Error!Value {
     const h = ev.heap;
+    // Each step's result feeds the next one, and every step allocates.
+    var held = h.protect();
+    defer held.close();
+    try held.push(num);
+    try held.push(den);
     const truncated = try bignum.divTrunc(h, num, den);
+    try held.push(truncated);
     const product = try bignum.mul(h, truncated, den);
+    try held.push(product);
     const remainder = try bignum.sub(h, num, product);
+    try held.push(remainder);
     if (bignum.isZero(remainder)) return truncated;
 
     const remainder_negative = bignum.isNegative(remainder);
@@ -583,23 +591,39 @@ fn divideFn(comptime kind: DivideKind) function.NativeFn {
 
             // The quotient is an integer whatever the operands are, so it
             // is computed on the exact rationals the floats denote.
+            var held = ev.heap.protect();
+            defer held.close();
             const dividend = try Rational.of(try exactly(ev, args[0]));
+            try held.push(dividend.num);
+            try held.push(dividend.den);
             const divisor = try Rational.of(try exactly(ev, divisor_value));
+            try held.push(divisor.num);
+            try held.push(divisor.den);
             if (bignum.isZero(divisor.num)) return Error.DivisionByZero;
 
             // x/y as a single fraction, with the sign on the numerator.
             var num = try bignum.mul(ev.heap, dividend.num, divisor.den);
+            try held.push(num);
             var den = try bignum.mul(ev.heap, dividend.den, divisor.num);
+            try held.push(den);
             if (bignum.isNegative(den)) {
                 num = try bignum.negate(ev.heap, num);
+                held.setItem(4, num);
                 den = try bignum.negate(ev.heap, den);
+                held.setItem(5, den);
             }
             const quotient = try roundQuotient(ev, kind, num, den);
+            try held.push(quotient);
 
             // remainder = dividend - quotient * divisor
             const scaled = try combine(ev, .mul, .{ .num = quotient, .den = ONE }, divisor);
+            try held.push(scaled.num);
+            try held.push(scaled.den);
             const difference = try combine(ev, .sub, dividend, scaled);
+            try held.push(difference.num);
+            try held.push(difference.den);
             const exact_remainder = try bignum.makeRatio(ev.heap, difference.num, difference.den);
+            try held.push(exact_remainder);
             const remainder = switch (contagion) {
                 .rational => exact_remainder,
                 .single => try boxFloat(ev, f32, @floatCast(asF64(exact_remainder))),
@@ -813,29 +837,65 @@ fn realDiv(ev: *Evaluator, a: Value, b: Value) Error!Value {
 
 const ComplexOp = enum { add, sub, mul, quotient };
 
+/// Both operands and every intermediate stay on the Lisp stack: each
+/// arithmetic step allocates.
 fn combineComplex(ev: *Evaluator, op: ComplexOp, a: Parts, b: Parts) Error!Parts {
-    return switch (op) {
-        .add => .{ .re = try realAdd(ev, a.re, b.re), .im = try realAdd(ev, a.im, b.im) },
-        .sub => .{ .re = try realSub(ev, a.re, b.re), .im = try realSub(ev, a.im, b.im) },
-        .mul => .{
-            .re = try realSub(ev, try realMul(ev, a.re, b.re), try realMul(ev, a.im, b.im)),
-            .im = try realAdd(ev, try realMul(ev, a.re, b.im), try realMul(ev, a.im, b.re)),
+    var held = ev.heap.protect();
+    defer held.close();
+    for ([_]Value{ a.re, a.im, b.re, b.im }) |part| try held.push(part);
+
+    switch (op) {
+        .add => {
+            const re = try realAdd(ev, a.re, b.re);
+            try held.push(re);
+            return .{ .re = re, .im = try realAdd(ev, a.im, b.im) };
         },
-        .quotient => blk: {
+        .sub => {
+            const re = try realSub(ev, a.re, b.re);
+            try held.push(re);
+            return .{ .re = re, .im = try realSub(ev, a.im, b.im) };
+        },
+        .mul => {
+            const re_product = try realMul(ev, a.re, b.re);
+            try held.push(re_product);
+            const im_product = try realMul(ev, a.im, b.im);
+            try held.push(im_product);
+            const re = try realSub(ev, re_product, im_product);
+            try held.push(re);
+            const cross_one = try realMul(ev, a.re, b.im);
+            try held.push(cross_one);
+            const cross_two = try realMul(ev, a.im, b.re);
+            try held.push(cross_two);
+            return .{ .re = re, .im = try realAdd(ev, cross_one, cross_two) };
+        },
+        .quotient => {
             // Multiply through by the conjugate of the divisor.
-            const denominator = try realAdd(
-                ev,
-                try realMul(ev, b.re, b.re),
-                try realMul(ev, b.im, b.im),
-            );
-            const re = try realAdd(ev, try realMul(ev, a.re, b.re), try realMul(ev, a.im, b.im));
-            const im = try realSub(ev, try realMul(ev, a.im, b.re), try realMul(ev, a.re, b.im));
-            break :blk .{
-                .re = try realDiv(ev, re, denominator),
-                .im = try realDiv(ev, im, denominator),
-            };
+            const re_square = try realMul(ev, b.re, b.re);
+            try held.push(re_square);
+            const im_square = try realMul(ev, b.im, b.im);
+            try held.push(im_square);
+            const denominator = try realAdd(ev, re_square, im_square);
+            try held.push(denominator);
+
+            const re_one = try realMul(ev, a.re, b.re);
+            try held.push(re_one);
+            const re_two = try realMul(ev, a.im, b.im);
+            try held.push(re_two);
+            const re = try realAdd(ev, re_one, re_two);
+            try held.push(re);
+
+            const im_one = try realMul(ev, a.im, b.re);
+            try held.push(im_one);
+            const im_two = try realMul(ev, a.re, b.im);
+            try held.push(im_two);
+            const im = try realSub(ev, im_one, im_two);
+            try held.push(im);
+
+            const quotient_re = try realDiv(ev, re, denominator);
+            try held.push(quotient_re);
+            return .{ .re = quotient_re, .im = try realDiv(ev, im, denominator) };
         },
-    };
+    }
 }
 
 fn foldComplex(ev: *Evaluator, op: ComplexOp, args: []const Value) Error!Value {
@@ -845,9 +905,18 @@ fn foldComplex(ev: *Evaluator, op: ComplexOp, args: []const Value) Error!Value {
         .mul, .quotient => .{ .re = ONE, .im = ZERO },
     };
     // A single argument negates or takes the reciprocal.
+    // The running total is held: each step allocates both its parts.
+    var held = ev.heap.protect();
+    defer held.close();
     var acc = if (args.len == 1) identity else try Parts.of(ev, args[0]);
+    try held.push(acc.re);
+    try held.push(acc.im);
     const rest = if (args.len == 1) args else args[1..];
-    for (rest) |a| acc = try combineComplex(ev, op, acc, try Parts.of(ev, a));
+    for (rest) |a| {
+        acc = try combineComplex(ev, op, acc, try Parts.of(ev, a));
+        held.setItem(0, acc.re);
+        held.setItem(1, acc.im);
+    }
     return complex.make(ev.heap, acc.re, acc.im);
 }
 
@@ -917,7 +986,12 @@ fn boxReal(ev: *Evaluator, kind: Contagion, x: f64) Error!Value {
 /// Box a complex result, narrowing to a real when the imaginary part
 /// vanished and the argument was real to begin with.
 fn boxComplex(ev: *Evaluator, kind: Contagion, z: Cf64) Error!Value {
-    return complex.make(ev.heap, try boxReal(ev, kind, z.re), try boxReal(ev, kind, z.im));
+    var held = ev.heap.protect();
+    defer held.close();
+    const real = try boxReal(ev, kind, z.re);
+    try held.push(real);
+    const imaginary = try boxReal(ev, kind, z.im);
+    return complex.make(ev.heap, real, imaginary);
 }
 
 const UnaryKind = enum {
@@ -1145,6 +1219,13 @@ fn exptInteger(ev: *Evaluator, base: Value, power: Value) Error!Value {
         const raised = try exptInteger(ev, base, positive);
         return divideExactFn(ev.asOpaque(), &.{ ONE, raised });
     }
+    // Squaring works on results of the previous round, and each round
+    // allocates.
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(ONE);
+    try held.push(base);
+    try held.push(power);
     var result = ONE;
     var factor = base;
     var remaining = power;
@@ -1152,10 +1233,13 @@ fn exptInteger(ev: *Evaluator, base: Value, power: Value) Error!Value {
         var scratch = bignum.Scratch{};
         if (!scratch.view(remaining).isEven()) {
             result = try mulFn(ev.asOpaque(), &.{ result, factor });
+            held.setItem(0, result);
         }
         remaining = try bignum.divTrunc(ev.heap, remaining, Value.fromFixnum(2));
+        held.setItem(2, remaining);
         if (bignum.isZero(remaining)) break;
         factor = try mulFn(ev.asOpaque(), &.{ factor, factor });
+        held.setItem(1, factor);
     }
     return result;
 }

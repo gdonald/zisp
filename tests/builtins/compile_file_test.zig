@@ -73,6 +73,10 @@ const Fixture = struct {
     fn compileAndLoad(self: *Fixture, allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
         var load_forms: std.ArrayList(Value) = .empty;
         defer load_forms.deinit(allocator);
+        // The collected forms are pinned while they are compiled, and
+        // stay pinned until they have been evaluated.
+        const pin_mark = self.ev.pinMark();
+        defer self.ev.unpinTo(pin_mark);
 
         try self.aw.writer.print("== COMPILE ==\n", .{});
         try zisp.builtins.system.compileSource(&self.ev, source, &load_forms);

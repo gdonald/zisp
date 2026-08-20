@@ -8,6 +8,7 @@
 const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
+const stack_mod = @import("../runtime/stack.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const pathname_mod = @import("../runtime/pathname.zig");
 const equality = @import("../runtime/equality.zig");
@@ -93,6 +94,22 @@ fn emptyPathname() heap.Pathname {
 }
 
 /// Any pathname designator as a pathname's components.
+/// Put a pathname's six components where a root scan can see them. The
+/// components live in a Zig struct while they are merged, and merging
+/// allocates.
+fn holdParts(held: *stack_mod.Region, parts: heap.Pathname) !void {
+    for ([_]Value{
+        parts.host,
+        parts.device,
+        parts.directory,
+        parts.name,
+        parts.type_,
+        parts.version,
+    }) |component| {
+        try held.push(component);
+    }
+}
+
 fn componentsOf(ev: *Evaluator, v: Value) Error!heap.Pathname {
     if (heap.isPathname(v)) {
         const p = heap.asPathname(v);
@@ -249,12 +266,10 @@ fn validateDirectory(ev: *Evaluator, dir: Value) Error!void {
 fn normalizeDirectory(ev: *Evaluator, v: Value) Error!Value {
     if (v.equalsRaw(value.NIL) or v.isCons()) return v;
     if (try isKeyword(ev, v, "WILD")) {
-        const tail = try ev.heap.allocCons(try keyword(ev, "WILD-INFERIORS"), value.NIL);
-        return ev.heap.allocCons(try keyword(ev, "ABSOLUTE"), tail);
+        return ev.heap.list(&.{ try keyword(ev, "ABSOLUTE"), try keyword(ev, "WILD-INFERIORS") });
     }
     if (isString(v)) {
-        const tail = try ev.heap.allocCons(v, value.NIL);
-        return ev.heap.allocCons(try keyword(ev, "ABSOLUTE"), tail);
+        return ev.heap.list(&.{ try keyword(ev, "ABSOLUTE"), v });
     }
     return Error.TypeError;
 }
@@ -339,16 +354,22 @@ fn wildPathnamePFn(p: *anyopaque, args: []const Value) Error!Value {
 fn mergePathnamesFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len > 3) return Error.WrongArgCount;
+    var held = ev.heap.protect();
+    defer held.close();
+
     var parts = try componentsOf(ev, args[0]);
+    try holdParts(&held, parts);
     const defaults = if (args.len >= 2)
         try componentsOf(ev, args[1])
     else
         emptyPathname();
+    try holdParts(&held, defaults);
     const default_version = if (args.len == 3) args[2] else try keyword(ev, "NEWEST");
 
     if (parts.host.equalsRaw(value.NIL)) parts.host = defaults.host;
     if (parts.device.equalsRaw(value.NIL)) parts.device = defaults.device;
     parts.directory = try mergedDirectory(ev, parts.directory, defaults.directory);
+    held.setItem(2, parts.directory);
 
     const name_was_supplied = !parts.name.equalsRaw(value.NIL);
     if (!name_was_supplied) parts.name = defaults.name;
@@ -367,26 +388,22 @@ fn mergedDirectory(ev: *Evaluator, dir: Value, default_dir: Value) Error!Value {
     if (!dir.isCons()) return Error.TypeError;
     if (!try isKeyword(ev, heap.car(dir), "RELATIVE")) return dir;
 
-    var prefix: std.ArrayList(Value) = .empty;
-    defer prefix.deinit(ev.allocator);
+    var prefix = ev.heap.protect();
+    defer prefix.close();
     var rest = default_dir;
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
-        try prefix.append(ev.allocator, heap.car(rest));
+        try prefix.push(heap.car(rest));
     }
 
     var tail = heap.cdr(dir);
     // `:back` means "drop the component before me", so it cancels against
     // the tail of the default's directory rather than being kept.
-    while (tail.isCons() and try isKeyword(ev, heap.car(tail), "BACK") and prefix.items.len > 1) {
+    while (tail.isCons() and try isKeyword(ev, heap.car(tail), "BACK") and prefix.len > 1) {
         _ = prefix.pop();
         tail = heap.cdr(tail);
     }
 
-    var i: usize = prefix.items.len;
-    while (i > 0) {
-        i -= 1;
-        tail = try ev.heap.allocCons(prefix.items[i], tail);
-    }
+    tail = try ev.heap.listWithTail(prefix.items(), tail);
     return tail;
 }
 
@@ -608,13 +625,7 @@ fn matchSegments(ev: *Evaluator, pattern: []const Value, source: []const Value, 
 }
 
 fn listOf(ev: *Evaluator, items: []const Value) Error!Value {
-    var list = value.NIL;
-    var i: usize = items.len;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(items[i], list);
-    }
-    return list;
+    return ev.heap.list(items);
 }
 
 fn substituteComponent(ev: *Evaluator, pattern: Value, captured: ?Value) Error!Value {
@@ -656,9 +667,17 @@ fn translatePathnameFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn translate(ev: *Evaluator, source_v: Value, from_v: Value, to_v: Value) Error!?Value {
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(source_v);
+    try held.push(from_v);
+    try held.push(to_v);
     const source = try componentsOf(ev, source_v);
+    try holdParts(&held, source);
     const from = try componentsOf(ev, from_v);
+    try holdParts(&held, from);
     const to = try componentsOf(ev, to_v);
+    try holdParts(&held, to);
 
     var caps = Captures{};
     defer caps.deinit(ev);
@@ -671,8 +690,11 @@ fn translate(ev: *Evaluator, source_v: Value, from_v: Value, to_v: Value) Error!
     parts.device = to.device;
     parts.is_logical = to.is_logical;
     parts.directory = try substituteDirectory(ev, to.directory, &caps);
+    try held.push(parts.directory);
     parts.name = try substituteComponent(ev, to.name, caps.name);
+    try held.push(parts.name);
     parts.type_ = try substituteComponent(ev, to.type_, caps.type_);
+    try held.push(parts.type_);
     parts.version = if (try isWild(ev, to.version)) source.version else to.version;
     return try ev.heap.allocPathname(parts);
 }
@@ -688,21 +710,33 @@ fn translateLogicalPathnameFn(p: *anyopaque, args: []const Value) Error!Value {
 
     // A translation may itself be logical, so keep going until it is not.
     // The bound stops a rule set that translates in a circle.
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(current);
+
     var rounds: usize = 0;
     while (heap.asPathname(current).is_logical and rounds < 64) : (rounds += 1) {
         const key = try hostKeyOf(ev, heap.asPathname(current).host);
         const rules = ev.logical_hosts.get(key) orelse return Error.FileError;
         current = (try applyRules(ev, current, rules)) orelse return Error.FileError;
+        held.setItem(0, current);
     }
     return current;
 }
 
 fn applyRules(ev: *Evaluator, source: Value, rules: Value) Error!?Value {
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(source);
+    try held.push(rules);
+    try held.push(value.NIL);
+
     var rest = rules;
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
         const rule = heap.car(rest);
         if (!rule.isCons() or !heap.cdr(rule).isCons()) return Error.TypeError;
         const from = try asRulePathname(ev, heap.car(rule), true);
+        held.setItem(2, from);
         const to = try asRulePathname(ev, heap.car(heap.cdr(rule)), false);
         if (try translate(ev, source, from, to)) |result| return result;
     }

@@ -267,12 +267,7 @@ pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Fram
     const remaining = args[pos..];
 
     if (p.has_rest) {
-        var list = value.NIL;
-        var i = remaining.len;
-        while (i > 0) {
-            i -= 1;
-            list = try ev.heap.allocCons(remaining[i], list);
-        }
+        const list = try ev.heap.list(remaining);
         try bindVar(ev, frame, p.rest, list);
     }
 

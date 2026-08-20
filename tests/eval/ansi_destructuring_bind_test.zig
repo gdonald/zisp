@@ -101,6 +101,10 @@ test "ansi-test destructuring-bind.lsp deftests" {
     var rd = Reader.init(&tk, &fx.heap, &fx.interner);
     while (try rd.read()) |form| {
         if (!form.isCons() or !symbolNamed(heap_mod.car(form), "DEFTEST")) continue;
+        // The form is held across the evaluations below, which allocate.
+        var form_held = fx.heap.protect();
+        defer form_held.close();
+        try form_held.push(form);
         const name_cell = heap_mod.cdr(form);
         const name = heap_mod.car(name_cell);
         const body_cell = heap_mod.cdr(name_cell);
@@ -118,12 +122,13 @@ test "ansi-test destructuring-bind.lsp deftests" {
             }
         } else {
             // (equal (multiple-value-list <test-form>) '<expected>)
-            const mvl = try fx.heap.allocCons(mvl_sym, try fx.heap.allocCons(test_form, value.NIL));
-            const quoted = try fx.heap.allocCons(quote_sym, try fx.heap.allocCons(expected, value.NIL));
-            const cmp = try fx.heap.allocCons(
-                equal_sym,
-                try fx.heap.allocCons(mvl, try fx.heap.allocCons(quoted, value.NIL)),
-            );
+            var held = fx.heap.protect();
+            defer held.close();
+            const mvl = try fx.heap.list(&.{ mvl_sym, test_form });
+            try held.push(mvl);
+            const quoted = try fx.heap.list(&.{ quote_sym, expected });
+            try held.push(quoted);
+            const cmp = try fx.heap.list(&.{ equal_sym, mvl, quoted });
             if (fx.ev.eval(cmp)) |got| {
                 pass = got.equalsRaw(value.T);
             } else |_| {

@@ -208,13 +208,20 @@ fn entriesFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const table = try expectTable(args[0]);
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(value.NIL);
+    try held.push(value.NIL);
     var list = value.NIL;
     var i: usize = table.entries.items.len;
     while (i > 0) {
         i -= 1;
         const entry = table.entries.items[i];
         if (!entry.live) continue;
-        list = try ev.heap.allocCons(try ev.heap.allocCons(entry.key, entry.value), list);
+        const pair = try ev.heap.allocCons(entry.key, entry.value);
+        held.setItem(1, pair);
+        list = try ev.heap.allocCons(pair, list);
+        held.setItem(0, list);
     }
     return list;
 }

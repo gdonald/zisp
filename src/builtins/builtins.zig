@@ -18,6 +18,8 @@ pub const characters = @import("characters.zig");
 pub const streams = @import("streams.zig");
 pub const types = @import("types.zig");
 pub const pprint = @import("pprint.zig");
+pub const gc = @import("gc.zig");
+pub const registerGc = gc.registerGc;
 const equality = @import("../runtime/equality.zig");
 
 const Value = value.Value;
@@ -146,6 +148,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
 
     try packages.registerPackages(ev);
     try pathnames.registerPathnames(ev);
+    try gc.registerGc(ev);
     try strings.registerStrings(ev);
     try sequences.registerSequences(ev);
     try arrays.registerArrays(ev);
@@ -211,7 +214,7 @@ fn putFn(p: *anyopaque, args: []const Value) Error!Value {
         }
         plist = heap.cdr(rest);
     }
-    sym.plist = try ev.heap.allocCons(args[1], try ev.heap.allocCons(args[2], sym.plist));
+    sym.plist = try ev.heap.listWithTail(&.{ args[1], args[2] }, sym.plist);
     return args[2];
 }
 
@@ -579,11 +582,17 @@ fn nthcdrFn(p: *anyopaque, args: []const Value) Error!Value {
 // --- list construction ---
 
 fn makeList(ev: *Evaluator, items: []const Value, tail: Value) Error!Value {
+    // The part of the list already built is reachable from nothing else
+    // while the next cell is allocated.
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(tail);
     var result = tail;
     var i: usize = items.len;
     while (i > 0) {
         i -= 1;
         result = try ev.heap.allocCons(items[i], result);
+        held.setItem(0, result);
     }
     return result;
 }
@@ -822,17 +831,17 @@ fn applyFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len < 2) return Error.WrongArgCount;
     const callee = try resolveCallee(ev, args[0]);
 
-    var collected: std.ArrayList(Value) = .empty;
-    defer collected.deinit(ev.allocator);
-    try collected.appendSlice(ev.allocator, args[1 .. args.len - 1]);
+    var collected = ev.heap.protect();
+    defer collected.close();
+    for (args[1 .. args.len - 1]) |arg| try collected.push(arg);
 
     var v = args[args.len - 1];
     while (!isNil(v)) {
         if (!v.isCons()) return Error.TypeError;
-        try collected.append(ev.allocator, heap.car(v));
+        try collected.push(heap.car(v));
         v = heap.cdr(v);
     }
-    return ev.callFunction(callee, collected.items);
+    return ev.callFunction(callee, collected.items());
 }
 
 // --- mapping ---
@@ -844,11 +853,23 @@ fn mapDriver(ev: *Evaluator, args: []const Value, comptime kind: MapKind) Error!
     const callee = try resolveCallee(ev, args[0]);
     const lists = args[1..];
 
-    const cursors = try ev.allocator.alloc(Value, lists.len);
-    defer ev.allocator.free(cursors);
-    @memcpy(cursors, lists);
-    const call_args = try ev.allocator.alloc(Value, lists.len);
-    defer ev.allocator.free(call_args);
+    // The cursors, the arguments of the call in flight, and the list
+    // built so far all go on the Lisp stack: calling the function
+    // allocates, and nothing else refers to any of them.
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(value.NIL);
+    try held.push(value.NIL);
+
+    var cursors_held = ev.heap.protect();
+    defer cursors_held.close();
+    for (lists) |list| try cursors_held.push(list);
+    const cursors = cursors_held.items();
+
+    var call_held = ev.heap.protect();
+    defer call_held.close();
+    for (lists) |_| try call_held.push(value.NIL);
+    const call_args = call_held.items();
 
     var head = value.NIL;
     var tail = value.NIL;
@@ -865,9 +886,11 @@ fn mapDriver(ev: *Evaluator, args: []const Value, comptime kind: MapKind) Error!
         switch (kind) {
             .c => {},
             .car => {
+                held.setItem(1, r);
                 const cell = try ev.heap.allocCons(r, value.NIL);
                 if (isNil(head)) {
                     head = cell;
+                    held.setItem(0, head);
                 } else {
                     heap.setCdr(tail, cell);
                 }
@@ -878,6 +901,7 @@ fn mapDriver(ev: *Evaluator, args: []const Value, comptime kind: MapKind) Error!
                 if (isNil(seg)) continue;
                 if (isNil(head)) {
                     head = seg;
+                    held.setItem(0, head);
                 } else {
                     heap.setCdr(tail, seg);
                 }

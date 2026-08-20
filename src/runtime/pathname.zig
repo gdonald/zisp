@@ -18,6 +18,10 @@ const Interner = symbol_mod.Interner;
 /// A logical namestring names its host before a colon and separates
 /// directories with semicolons: `SYS:SRC;CODE;EVAL.LISP.NEWEST`.
 pub fn parseLogical(h: *Heap, interner: *Interner, host: []const u8, text: []const u8) !heap.Pathname {
+    // Each component is built in turn, and building the next one
+    // allocates, so the ones already built are held meanwhile.
+    var held = h.protect();
+    defer held.close();
     var parts = heap.Pathname{
         .host = try h.allocString(host),
         .device = value.NIL,
@@ -28,13 +32,18 @@ pub fn parseLogical(h: *Heap, interner: *Interner, host: []const u8, text: []con
         .is_logical = true,
     };
 
+    try held.push(parts.host);
+
     const cut = if (std.mem.lastIndexOfScalar(u8, text, ';')) |i| i + 1 else 0;
     parts.directory = try parseLogicalDirectory(h, interner, text[0..cut]);
+    try held.push(parts.directory);
 
     // The file part is `name.type.version`, each optional.
     var pieces = std.mem.splitScalar(u8, text[cut..], '.');
     parts.name = try component(h, interner, pieces.next() orelse "");
+    try held.push(parts.name);
     if (pieces.next()) |type_text| parts.type_ = try component(h, interner, type_text);
+    try held.push(parts.type_);
     if (pieces.next()) |version_text| {
         parts.version = try logicalVersion(interner, version_text);
     }
@@ -55,27 +64,25 @@ fn parseLogicalDirectory(h: *Heap, interner: *Interner, text: []const u8) !Value
     // physical syntax where a leading slash marks an absolute one.
     const relative = text[0] == ';';
 
-    var components: std.ArrayListUnmanaged(Value) = .empty;
-    defer components.deinit(h.allocator);
+    var components = h.protect();
+    defer components.close();
     var it = std.mem.splitScalar(u8, text, ';');
     while (it.next()) |seg| {
         if (seg.len == 0) continue;
-        try components.append(h.allocator, try directorySegment(h, interner, seg));
+        try components.push(try directorySegment(h, interner, seg));
     }
 
-    var list = value.NIL;
-    var i: usize = components.items.len;
-    while (i > 0) {
-        i -= 1;
-        list = try h.allocCons(components.items[i], list);
-    }
+    const list = try h.list(components.items());
     const head = try interner.internKeyword(if (relative) "RELATIVE" else "ABSOLUTE");
-    return h.allocCons(head, list);
+    return h.listWithTail(&.{head}, list);
 }
 
 pub fn parse(h: *Heap, interner: *Interner, text: []const u8) !heap.Pathname {
     const cut = if (std.mem.lastIndexOfScalar(u8, text, '/')) |i| i + 1 else 0;
     const file = text[cut..];
+
+    var held = h.protect();
+    defer held.close();
 
     var parts = heap.Pathname{
         .host = value.NIL,
@@ -86,11 +93,13 @@ pub fn parse(h: *Heap, interner: *Interner, text: []const u8) !heap.Pathname {
         .version = value.NIL,
         .is_logical = false,
     };
+    try held.push(parts.directory);
 
     // A leading dot belongs to the name, so `.emacs` has no type.
     if (std.mem.lastIndexOfScalar(u8, file, '.')) |dot| {
         if (dot > 0) {
             parts.name = try component(h, interner, file[0..dot]);
+            try held.push(parts.name);
             parts.type_ = try component(h, interner, file[dot + 1 ..]);
             return parts;
         }
@@ -114,24 +123,19 @@ fn parseDirectory(h: *Heap, interner: *Interner, text: []const u8) !Value {
     if (text.len == 0) return value.NIL;
     const absolute = text[0] == '/';
 
-    var components: std.ArrayListUnmanaged(Value) = .empty;
-    defer components.deinit(h.allocator);
+    var components = h.protect();
+    defer components.close();
     var it = std.mem.splitScalar(u8, text, '/');
     while (it.next()) |seg| {
         // Empty segments come from the leading slash and from doubled
         // separators; a lone `.` adds nothing to the path.
         if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
-        try components.append(h.allocator, try directorySegment(h, interner, seg));
+        try components.push(try directorySegment(h, interner, seg));
     }
 
-    var list = value.NIL;
-    var i: usize = components.items.len;
-    while (i > 0) {
-        i -= 1;
-        list = try h.allocCons(components.items[i], list);
-    }
+    const list = try h.list(components.items());
     const head = try interner.internKeyword(if (absolute) "ABSOLUTE" else "RELATIVE");
-    return h.allocCons(head, list);
+    return h.listWithTail(&.{head}, list);
 }
 
 fn directorySegment(h: *Heap, interner: *Interner, seg: []const u8) !Value {

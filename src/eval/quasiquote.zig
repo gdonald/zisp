@@ -40,7 +40,13 @@ pub fn expand(ev: *Evaluator, template: Value) Error!Value {
 }
 
 fn make2(ev: *Evaluator, a: Value, b: Value) Error!Value {
-    return ev.heap.allocCons(a, try ev.heap.allocCons(b, value.NIL));
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(a);
+    try held.push(b);
+    const tail = try ev.heap.allocCons(b, value.NIL);
+    held.setItem(1, tail);
+    return ev.heap.allocCons(a, tail);
 }
 
 fn quoteOf(ev: *Evaluator, syms: *const Syms, v: Value) Error!Value {
@@ -67,9 +73,15 @@ fn expectProperList(v: Value) Error!void {
 /// subforms as a list template lets depth-zero splices distribute into the
 /// rebuilt marker.
 fn rebuild(ev: *Evaluator, syms: *const Syms, marker: Value, forms: Value, depth: u32) Error!Value {
+    var held = ev.heap.protect();
+    defer held.close();
     const marker_seg = try make2(ev, syms.list, try quoteOf(ev, syms, marker));
+    try held.push(marker_seg);
     const rest = try qq(ev, syms, forms, depth);
-    return ev.heap.allocCons(syms.append, try make2(ev, marker_seg, rest));
+    try held.push(rest);
+    const pair = try make2(ev, marker_seg, rest);
+    try held.push(pair);
+    return ev.heap.allocCons(syms.append, pair);
 }
 
 fn qq(ev: *Evaluator, syms: *const Syms, x: Value, depth: u32) Error!Value {
@@ -94,8 +106,10 @@ fn qq(ev: *Evaluator, syms: *const Syms, x: Value, depth: u32) Error!Value {
     // (list <qq of element>); a depth-zero splice contributes each of its
     // subforms; a depth-zero multi-subform unquote (from a distributed
     // splice in an earlier round) contributes (list <subforms...>).
-    var segs: std.ArrayList(Value) = .empty;
-    defer segs.deinit(ev.allocator);
+    // The segments built so far are reachable from nothing else while
+    // the next one is built, and building allocates.
+    var segs = ev.heap.protect();
+    defer segs.close();
 
     var tail: Value = undefined;
     var last_was_splice = false;
@@ -138,7 +152,7 @@ fn qq(ev: *Evaluator, syms: *const Syms, x: Value, depth: u32) Error!Value {
             try expectProperList(forms);
             var f = forms;
             while (!f.equalsRaw(value.NIL)) {
-                try segs.append(ev.allocator, heap.car(f));
+                try segs.push(heap.car(f));
                 f = heap.cdr(f);
             }
             last_was_splice = !forms.equalsRaw(value.NIL);
@@ -149,20 +163,26 @@ fn qq(ev: *Evaluator, syms: *const Syms, x: Value, depth: u32) Error!Value {
             // evaluates to its own element.
             const forms = heap.cdr(h);
             try expectProperList(forms);
-            try segs.append(ev.allocator, try ev.heap.allocCons(syms.list, forms));
+            try segs.push(try ev.heap.allocCons(syms.list, forms));
             last_was_splice = false;
         } else {
-            try segs.append(ev.allocator, try make2(ev, syms.list, try qq(ev, syms, h, depth)));
+            try segs.push(try make2(ev, syms.list, try qq(ev, syms, h, depth)));
             last_was_splice = false;
         }
         cur = heap.cdr(cur);
     }
 
+    var built = ev.heap.protect();
+    defer built.close();
+    try built.push(tail);
     var form = try ev.heap.allocCons(tail, value.NIL);
-    var i = segs.items.len;
+    built.setItem(0, form);
+    built.setItem(0, form);
+    var i = segs.len;
     while (i > 0) {
         i -= 1;
-        form = try ev.heap.allocCons(segs.items[i], form);
+        form = try ev.heap.allocCons(segs.items()[i], form);
+        built.setItem(0, form);
     }
     return ev.heap.allocCons(syms.append, form);
 }

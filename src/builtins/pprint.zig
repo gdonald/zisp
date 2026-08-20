@@ -401,10 +401,12 @@ fn setPprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
     const priority = if (args.len >= 3) args[2] else Value.fromFixnum(0);
     const current = ev.env.lookupValue(table_sym) orelse value.NIL;
 
-    var entry = try ev.heap.allocCons(priority, value.NIL);
-    entry = try ev.heap.allocCons(args[1], entry);
-    entry = try ev.heap.allocCons(args[0], entry);
-    symbol_mod.symbol(table_sym).value_cell = try ev.heap.allocCons(entry, current);
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(current);
+    const entry = try ev.heap.list(&.{ args[0], args[1], priority });
+    try held.push(entry);
+    symbol_mod.symbol(table_sym).value_cell = try ev.heap.listWithTail(&.{entry}, current);
     return value.NIL;
 }
 

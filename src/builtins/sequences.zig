@@ -91,12 +91,7 @@ fn build(ev: *Evaluator, kind: Kind, elements: []const Value) Error!Value {
 }
 
 fn listOf(ev: *Evaluator, elements: []const Value) Error!Value {
-    var list = value.NIL;
-    var i: usize = elements.len;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(elements[i], list);
-    }
+    const list = try ev.heap.list(elements);
     return list;
 }
 

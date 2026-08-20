@@ -172,8 +172,7 @@ fn streamElementTypeFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn byteType(ev: *Evaluator, name: []const u8, bits: i64) Error!Value {
-    const tail = try ev.heap.allocCons(Value.fromFixnum(bits), value.NIL);
-    return ev.heap.allocCons(try ev.interner.intern(name), tail);
+    return ev.heap.list(&.{ try ev.interner.intern(name), Value.fromFixnum(bits) });
 }
 
 // --- opening and closing files ---

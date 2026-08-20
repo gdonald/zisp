@@ -52,6 +52,7 @@ zig build -Dfreestanding=true       # embedded build (placeholder)
 - [docs/cli.md](docs/cli.md) — command-line interface
 - [docs/ansi-test.md](docs/ansi-test.md) — running the compliance suite
 - [docs/macros.md](docs/macros.md) - macro non-hygiene and gensym
+- [docs/gc.md](docs/gc.md) - the collector
 
 ## License
 

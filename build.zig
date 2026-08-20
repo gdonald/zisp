@@ -29,7 +29,17 @@ pub fn build(b: *std.Build) void {
         "Build for a freestanding target — no std.io/std.fs/std.os (placeholder)",
     ) orelse false;
 
+    // -Dgc-torture=N runs a collection every N allocations, so a value a
+    // Zig local holds without rooting is reclaimed under it rather than
+    // surviving by luck. Zero leaves the trigger heuristic in charge.
+    const gc_torture = b.option(
+        u32,
+        "gc-torture",
+        "Collect every N allocations (0 = off)",
+    ) orelse 0;
+
     const build_options = b.addOptions();
+    build_options.addOption(u32, "gc_torture", gc_torture);
     build_options.addOption(bool, "ansi_tests", ansi_tests);
     build_options.addOption(bool, "profile", profile);
     build_options.addOption(bool, "freestanding", freestanding);

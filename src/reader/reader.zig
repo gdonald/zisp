@@ -334,6 +334,12 @@ pub const Reader = struct {
     /// Element-position dispatches that produce `skipped` are silently
     /// re-tried so `#+`/`#-` can elide entries.
     fn readListAt(self: *Reader, lparen_pos: Position) Error!Value {
+        // The list being built is reachable from nothing else while the
+        // next element is read, and reading allocates.
+        var held = self.heap.protect();
+        defer held.close();
+        try held.push(value.NIL);
+        try held.push(value.NIL);
         var head: Value = value.NIL;
         var tail: Value = value.NIL;
         while (true) {
@@ -360,11 +366,13 @@ pub const Reader = struct {
                     switch (step) {
                         .skipped => continue,
                         .value => |elem| {
+                            held.setItem(1, elem);
                             const cell_pos = if (head.equalsRaw(value.NIL)) lparen_pos else elem_pos;
                             const cell = try self.allocConsAt(elem, value.NIL, cell_pos);
                             if (head.equalsRaw(value.NIL)) {
                                 head = cell;
                                 tail = cell;
+                                held.setItem(0, head);
                             } else {
                                 heap_mod.setCdr(tail, cell);
                                 tail = cell;
@@ -409,10 +417,14 @@ pub const Reader = struct {
     fn readMacroExpansion(self: *Reader, sym_name: []const u8) Error!Value {
         const sym = try self.interner.intern(sym_name);
         const inner = try self.readForm();
+        var held = self.heap.protect();
+        defer held.close();
+        try held.push(inner);
         // Use the inner form's position when we don't have a separate
         // capture for the macro character itself.
         const pos: Position = .{};
         const tail = try self.allocConsAt(inner, value.NIL, pos);
+        held.setItem(0, tail);
         return try self.allocConsAt(sym, tail, pos);
     }
 

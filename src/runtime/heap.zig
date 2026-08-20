@@ -2,6 +2,9 @@ const std = @import("std");
 const value = @import("value.zig");
 const pretty = @import("pretty.zig");
 const circle = @import("circle.zig");
+const gc = @import("gc.zig");
+const build_options = @import("build_options");
+const stack_mod = @import("stack.zig");
 const Value = value.Value;
 
 pub const Cons = extern struct {
@@ -314,17 +317,164 @@ pub const HeapHashTable = struct {
 
 /// All allocation flows through this. For now a bump arena is supplied from
 /// outside; a real GC heap will replace the underlying allocator later.
+/// Builds a proper list one element at a time, keeping both the list so
+/// far and the element being added where a root scan can see them.
+pub const ListBuilder = struct {
+    heap: *Heap,
+    held: stack_mod.Region,
+    head: Value,
+    tail: Value,
+
+    pub fn append(self: *ListBuilder, v: Value) !void {
+        self.held.setItem(1, v);
+        const cell = try self.heap.allocCons(v, value.NIL);
+        if (self.head.equalsRaw(value.NIL)) {
+            self.head = cell;
+            self.held.setItem(0, cell);
+        } else {
+            setCdr(self.tail, cell);
+        }
+        self.tail = cell;
+    }
+
+    /// End the list with `v` in the last cdr rather than nil.
+    pub fn dot(self: *ListBuilder, v: Value) void {
+        if (self.head.equalsRaw(value.NIL)) {
+            self.head = v;
+            self.held.setItem(0, v);
+            return;
+        }
+        setCdr(self.tail, v);
+    }
+
+    pub fn finish(self: *ListBuilder) Value {
+        self.held.close();
+        return self.head;
+    }
+};
+
+/// What the heap calls to run a collection.
+pub const Collector = struct {
+    context: *anyopaque,
+    run: *const fn (context: *anyopaque) anyerror!void,
+};
+
 pub const Heap = struct {
+    /// Payload arrays (string characters, array storage, bignum limbs)
+    /// and the collections objects own come from here.
     allocator: std.mem.Allocator,
+    /// Objects themselves come from here, so a sweep can walk them.
+    objects: gc.Allocator,
+    /// Set once an evaluator is driving this heap.
+    collector: ?Collector = null,
+    /// Collect every this many allocations. A value a Zig local holds
+    /// without rooting is then reclaimed under it rather than surviving
+    /// by luck.
+    torture: u32 = build_options.gc_torture,
+    since_torture: u32 = 0,
+    collecting: bool = false,
+    /// Values held by whatever is running: call arguments, and anything
+    /// a Zig function keeps across an allocation.
+    stack: stack_mod.Stack,
 
     pub fn init(allocator: std.mem.Allocator) Heap {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .objects = gc.Allocator.init(allocator),
+            .stack = stack_mod.Stack.init(allocator),
+        };
+    }
+
+    /// Hold values where a root scan can see them:
+    ///
+    ///     var held = heap.protect();
+    ///     defer held.close();
+    ///     try held.push(v);
+    pub fn protect(self: *Heap) stack_mod.Region {
+        return self.stack.open();
+    }
+
+    /// Collect ahead of an allocation when torture is on, so what comes
+    /// back is safe until the next one.
+    fn maybeTorture(self: *Heap) void {
+        if (self.torture == 0 or self.collecting) return;
+        const collector = self.collector orelse return;
+        self.since_torture += 1;
+        if (self.since_torture < self.torture) return;
+        self.since_torture = 0;
+        self.collecting = true;
+        defer self.collecting = false;
+        collector.run(collector.context) catch {};
+    }
+
+    pub fn deinit(self: *Heap) void {
+        self.stack.deinit();
+        self.objects.deinit();
+    }
+
+    /// Space for one object of type `T`, taken from the object regions.
+    fn create(self: *Heap, comptime T: type) !*T {
+        self.maybeTorture();
+        const bytes = try self.objects.alloc(@sizeOf(T));
+        return @ptrCast(@alignCast(bytes.ptr));
+    }
+
+    /// Space for an object with a variable-length tail, such as a
+    /// structure's slots.
+    fn createSized(self: *Heap, total: usize) ![]align(gc.ALIGNMENT) u8 {
+        self.maybeTorture();
+        return self.objects.alloc(total);
     }
 
     pub fn allocCons(self: *Heap, car_v: Value, cdr_v: Value) !Value {
-        const cell = try self.allocator.create(Cons);
+        // The values going in are held for the allocation, which is a
+        // point a collection can happen at.
+        var held = self.protect();
+        defer held.close();
+        try held.push(car_v);
+        try held.push(cdr_v);
+        self.maybeTorture();
+        const bytes = try self.objects.allocCons();
+        const cell: *Cons = @ptrCast(@alignCast(bytes.ptr));
         cell.* = .{ .car = car_v, .cdr = cdr_v };
         return Value.fromConsAddr(@intFromPtr(cell));
+    }
+
+    /// A proper list of `items`, or `items` ending in `tail`. Each cell
+    /// is rooted as it is built, so the part already built survives a
+    /// collection that the next cell's allocation sets off.
+    pub fn list(self: *Heap, items: []const Value) !Value {
+        return self.listWithTail(items, value.NIL);
+    }
+
+    pub fn listWithTail(self: *Heap, items: []const Value, tail: Value) !Value {
+        var held = self.protect();
+        defer held.close();
+        // The items come in a Zig array, which a root scan cannot see.
+        try held.push(tail);
+        for (items) |item| try held.push(item);
+        var result = tail;
+        var i = items.len;
+        while (i > 0) {
+            i -= 1;
+            result = try self.allocCons(items[i], result);
+            held.setItem(0, result);
+        }
+        return result;
+    }
+
+    /// Build a list front to back, holding what is built so far.
+    pub fn listBuilder(self: *Heap) ListBuilder {
+        var builder = ListBuilder{
+            .heap = self,
+            .held = self.protect(),
+            .head = value.NIL,
+            .tail = value.NIL,
+        };
+        // Slot 0 is the list so far, slot 1 whatever is being added.
+        builder.held.push(value.NIL) catch unreachable;
+        builder.held.push(value.NIL) catch unreachable;
+        return builder;
     }
 
     /// A string decoded from UTF-8. This is the constructor for text that
@@ -372,7 +522,7 @@ pub const Heap = struct {
     /// first `len` are live. Room past `len` is what `vector-push-extend`
     /// fills in.
     pub fn allocStringWithCapacity(self: *Heap, len: usize, capacity: usize) !Value {
-        const obj = try self.allocator.create(HeapString);
+        const obj = try self.create(HeapString);
         const codes = try self.allocator.alloc(u32, capacity);
         obj.* = .{
             .header = .{ .type_tag = .string, .size = @sizeOf(HeapString) },
@@ -404,7 +554,7 @@ pub const Heap = struct {
     }
 
     pub fn allocSingleFloat(self: *Heap, x: f32) !Value {
-        const obj = try self.allocator.create(HeapSingleFloat);
+        const obj = try self.create(HeapSingleFloat);
         obj.* = .{
             .header = .{ .type_tag = .single_float, .size = @sizeOf(HeapSingleFloat) },
             .value = x,
@@ -413,7 +563,7 @@ pub const Heap = struct {
     }
 
     pub fn allocDoubleFloat(self: *Heap, x: f64) !Value {
-        const obj = try self.allocator.create(HeapDoubleFloat);
+        const obj = try self.create(HeapDoubleFloat);
         obj.* = .{
             .header = .{ .type_tag = .double_float, .size = @sizeOf(HeapDoubleFloat) },
             .value = x,
@@ -422,7 +572,11 @@ pub const Heap = struct {
     }
 
     pub fn allocRatio(self: *Heap, num: Value, den: Value) !Value {
-        const obj = try self.allocator.create(HeapRatio);
+        var held = self.protect();
+        defer held.close();
+        try held.push(num);
+        try held.push(den);
+        const obj = try self.create(HeapRatio);
         obj.* = .{
             .header = .{ .type_tag = .ratio, .size = @sizeOf(HeapRatio) },
             .numerator = num,
@@ -442,7 +596,7 @@ pub const Heap = struct {
         rehash_size: Value,
         rehash_threshold: Value,
     ) !Value {
-        const obj = try self.allocator.create(HeapHashTable);
+        const obj = try self.create(HeapHashTable);
         obj.* = .{
             .header = .{ .type_tag = .hash_table, .size = @sizeOf(HeapHashTable) },
             .hash_test = hash_test,
@@ -459,6 +613,9 @@ pub const Heap = struct {
     /// A simple vector: rank one, element type T, no fill pointer, not
     /// adjustable, not displaced.
     pub fn allocVector(self: *Heap, elements: []const Value) !Value {
+        var held = self.protect();
+        defer held.close();
+        for (elements) |element| try held.push(element);
         const v = try self.allocArray(&.{elements.len}, .t);
         @memcpy(asArray(v).storage[0..elements.len], elements);
         return v;
@@ -467,7 +624,7 @@ pub const Heap = struct {
     /// An array of the given dimensions with its own storage, every slot
     /// left as NIL.
     pub fn allocArray(self: *Heap, sizes: []const usize, element_type: ElementType) !Value {
-        const obj = try self.allocator.create(HeapArray);
+        const obj = try self.create(HeapArray);
         const dims = try self.allocator.alloc(u64, sizes.len);
         var total: usize = 1;
         for (sizes, dims) |size, *d| {
@@ -518,7 +675,7 @@ pub const Heap = struct {
 
     /// Wrap a `Const` whose limbs the heap allocator already owns.
     pub fn allocBignum(self: *Heap, n: std.math.big.int.Const) !Value {
-        const obj = try self.allocator.create(HeapBignum);
+        const obj = try self.create(HeapBignum);
         obj.* = .{
             .header = .{ .type_tag = .bignum, .size = @sizeOf(HeapBignum) },
             .limbs = n.limbs.ptr,
@@ -529,14 +686,14 @@ pub const Heap = struct {
     }
 
     pub fn allocStream(self: *Heap, stream: HeapStream) !Value {
-        const obj = try self.allocator.create(HeapStream);
+        const obj = try self.create(HeapStream);
         obj.* = stream;
         obj.header = .{ .type_tag = .stream, .size = @sizeOf(HeapStream) };
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
 
     pub fn allocRandomState(self: *Heap, state: [4]u64) !Value {
-        const obj = try self.allocator.create(HeapRandomState);
+        const obj = try self.create(HeapRandomState);
         obj.* = .{
             .header = .{ .type_tag = .random_state, .size = @sizeOf(HeapRandomState) },
             .state = state,
@@ -545,7 +702,11 @@ pub const Heap = struct {
     }
 
     pub fn allocComplex(self: *Heap, realpart: Value, imagpart: Value) !Value {
-        const obj = try self.allocator.create(HeapComplex);
+        var held = self.protect();
+        defer held.close();
+        try held.push(realpart);
+        try held.push(imagpart);
+        const obj = try self.create(HeapComplex);
         obj.* = .{
             .header = .{ .type_tag = .complex, .size = @sizeOf(HeapComplex) },
             .realpart = realpart,
@@ -555,7 +716,19 @@ pub const Heap = struct {
     }
 
     pub fn allocPathname(self: *Heap, components: Pathname) !Value {
-        const obj = try self.allocator.create(HeapPathname);
+        var held = self.protect();
+        defer held.close();
+        for ([_]Value{
+            components.host,
+            components.device,
+            components.directory,
+            components.name,
+            components.type_,
+            components.version,
+        }) |component| {
+            try held.push(component);
+        }
+        const obj = try self.create(HeapPathname);
         obj.* = .{
             .header = .{ .type_tag = .pathname, .size = @sizeOf(HeapPathname) },
             .host = components.host,
@@ -569,9 +742,19 @@ pub const Heap = struct {
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
 
+    /// Reclaim every object left unmarked. What each dead object holds
+    /// outside the collected heap goes with it.
+    pub fn sweep(self: *Heap) void {
+        self.objects.sweep(.{ .context = self, .run = finalizeObject });
+    }
+
     pub fn allocStructure(self: *Heap, name: Value, slots: []const Value) !Value {
+        var held = self.protect();
+        defer held.close();
+        try held.push(name);
+        for (slots) |slot| try held.push(slot);
         const total = @sizeOf(HeapStructure) + slots.len * @sizeOf(Value);
-        const buf = try self.allocator.alignedAlloc(u8, .of(HeapStructure), total);
+        const buf = try self.createSized(total);
         const obj: *HeapStructure = @ptrCast(buf.ptr);
         obj.* = .{
             .header = .{ .type_tag = .structure, .size = @intCast(total) },
@@ -583,9 +766,50 @@ pub const Heap = struct {
     }
 };
 
+/// Release what a dead object holds on the host allocator. The object's
+/// own bytes go back to the region it came from, so only what it points
+/// at is dealt with here.
+fn finalizeObject(context: *anyopaque, object: [*]align(gc.ALIGNMENT) u8) void {
+    const self: *Heap = @ptrCast(@alignCast(context));
+    const obj: *HeapObject = @ptrCast(@alignCast(object));
+    switch (obj.header.type_tag) {
+        .string => {
+            const text: *HeapString = @ptrCast(obj);
+            self.allocator.free(text.allocated());
+        },
+        .vector => {
+            const array: *HeapArray = @ptrCast(obj);
+            self.allocator.free(array.dims[0..array.rank]);
+            self.allocator.free(array.storage[0..array.storage_len]);
+        },
+        .bignum => {
+            const big: *HeapBignum = @ptrCast(obj);
+            self.allocator.free(@constCast(big.limbs[0..big.len]));
+        },
+        .hash_table => {
+            const table: *HeapHashTable = @ptrCast(@alignCast(obj));
+            var buckets = table.buckets.valueIterator();
+            while (buckets.next()) |bucket| bucket.deinit(self.allocator);
+            table.buckets.deinit(self.allocator);
+            table.entries.deinit(self.allocator);
+        },
+        .stream => {
+            const stream: *HeapStream = @ptrCast(@alignCast(obj));
+            stream.output.deinit(self.allocator);
+            stream.tokens.deinit(self.allocator);
+            if (stream.circle) |state| {
+                state.deinit(self.allocator);
+                self.allocator.destroy(state);
+            }
+        },
+        else => {},
+    }
+}
+
 /// Inspect the type tag of a heap-allocated value.
 pub fn heapType(v: Value) HeapType {
     const obj: *const HeapObject = @ptrFromInt(v.toHeapAddr());
+    checkLive(v.toHeapAddr());
     return obj.header.type_tag;
 }
 
@@ -717,22 +941,57 @@ pub fn asHashTable(v: Value) *HeapHashTable {
     return @ptrFromInt(v.toHeapAddr());
 }
 
+/// Abort on a cons the collector has already reclaimed. This is what
+/// catches a Zig local holding a value nothing rooted.
+pub fn checkStoredValue(v: Value) void {
+    checkStored(v);
+}
+
+/// Abort when a value about to be stored is already reclaimed, which
+/// points at whoever held it without rooting it.
+fn checkStored(v: Value) void {
+    if (!gc.checked) return;
+    const address = if (v.isCons())
+        v.toConsAddr()
+    else if (v.tag() == .heap)
+        v.toHeapAddr()
+    else
+        return;
+    checkLive(address);
+}
+
+fn checkLive(address: usize) void {
+    if (gc.checked and gc.isPoisoned(address)) {
+        const words: [*]const u64 = @ptrFromInt(address);
+        std.debug.panic(
+            "use of a reclaimed object at 0x{x} words 0x{x} 0x{x}",
+            .{ address, words[0], words[1] },
+        );
+    }
+}
+
 pub fn car(v: Value) Value {
     const cell: *const Cons = @ptrFromInt(v.toConsAddr());
+    checkLive(v.toConsAddr());
     return cell.car;
 }
 
 pub fn cdr(v: Value) Value {
     const cell: *const Cons = @ptrFromInt(v.toConsAddr());
+    checkLive(v.toConsAddr());
     return cell.cdr;
 }
 
 pub fn setCar(v: Value, new_car: Value) void {
     const cell: *Cons = @ptrFromInt(v.toConsAddr());
+    checkLive(v.toConsAddr());
+    checkStored(new_car);
     cell.car = new_car;
 }
 
 pub fn setCdr(v: Value, new_cdr: Value) void {
     const cell: *Cons = @ptrFromInt(v.toConsAddr());
+    checkLive(v.toConsAddr());
+    checkStored(new_cdr);
     cell.cdr = new_cdr;
 }

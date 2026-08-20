@@ -196,8 +196,7 @@ pub fn plistPut(h: *heap.Heap, sym: Value, key: Value, v: Value) !void {
         }
         plist = heap.cdr(rest);
     }
-    const tail = try h.allocCons(v, symbol(sym).plist);
-    symbol(sym).plist = try h.allocCons(key, tail);
+    symbol(sym).plist = try h.listWithTail(&.{ key, v }, symbol(sym).plist);
 }
 
 pub fn name(v: Value) []const u8 {

@@ -3,6 +3,8 @@ const value = @import("../runtime/value.zig");
 const heap_mod = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const env_mod = @import("env.zig");
+const stack_mod = @import("../runtime/stack.zig");
+const collect_mod = @import("collect.zig");
 const source_pos = @import("../runtime/source_pos.zig");
 const function = @import("function.zig");
 const lambda_list = @import("lambda_list.zig");
@@ -98,6 +100,16 @@ pub const Evaluator = struct {
     // so a native function reading the cell sees the innermost binding.
     dynamic_stack: std.ArrayList(DynamicEntry) = .empty,
 
+    // Values the driver is holding across a possible collection, which
+    // nothing else roots.
+    pinned: std.ArrayList(Value) = .empty,
+    // Collections run so far, which `room` reports.
+    gc_count: u64 = 0,
+    // Set by `gc`, cleared by the collection it asks for.
+    gc_requested: bool = false,
+    // Whether the heap knows how to reach this evaluator's root scan.
+    collector_installed: bool = false,
+
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
             .allocator = allocator,
@@ -119,9 +131,45 @@ pub const Evaluator = struct {
         self.values.deinit(self.allocator);
         self.transfer_values.deinit(self.allocator);
         self.dynamic_stack.deinit(self.allocator);
+        self.pinned.deinit(self.allocator);
         var hosts = self.logical_hosts.keyIterator();
         while (hosts.next()) |name| self.allocator.free(name.*);
         self.logical_hosts.deinit(self.allocator);
+    }
+
+    /// Hold values on the Lisp stack for as long as the caller needs
+    /// them. Any Zig function that keeps a value in a local across an
+    /// allocation uses this, or the value is invisible to a root scan:
+    ///
+    ///     var held = ev.protect();
+    ///     defer held.close();
+    ///     try held.push(v);
+    pub fn protect(self: *Evaluator) stack_mod.Region {
+        return self.heap.protect();
+    }
+
+    /// Keep `v` alive across a collection until `unpin`.
+    pub fn pin(self: *Evaluator, v: Value) !void {
+        try self.pinned.append(self.allocator, v);
+    }
+
+    pub fn unpin(self: *Evaluator) void {
+        _ = self.pinned.pop();
+    }
+
+    /// Pins come off in groups where a caller holds several values whose
+    /// lifetimes end together.
+    pub fn pinMark(self: *const Evaluator) usize {
+        return self.pinned.items.len;
+    }
+
+    pub fn unpinTo(self: *Evaluator, mark: usize) void {
+        self.pinned.shrinkRetainingCapacity(mark);
+    }
+
+    /// Replace the most recent pin, for a value that is rebuilt in place.
+    pub fn repin(self: *Evaluator, v: Value) void {
+        self.pinned.items[self.pinned.items.len - 1] = v;
     }
 
     /// Rebind `sym`'s value cell, remembering the previous contents.
@@ -152,6 +200,7 @@ pub const Evaluator = struct {
 
     /// Record `v` as the sole value of the current form and return it.
     pub fn set1(self: *Evaluator, v: Value) Error!Value {
+        heap_mod.checkStoredValue(v);
         self.values.clearRetainingCapacity();
         try self.values.append(self.allocator, v);
         return v;
@@ -288,7 +337,25 @@ pub const Evaluator = struct {
         return fn_v;
     }
 
+    /// Let the heap collect through this evaluator's roots, which is what
+    /// the torture setting needs.
+    fn installCollector(self: *Evaluator) void {
+        self.collector_installed = true;
+        self.heap.collector = .{ .context = @ptrCast(self), .run = &runCollection };
+    }
+
+    fn runCollection(context: *anyopaque) anyerror!void {
+        try collect_mod.collect(fromOpaque(context));
+    }
+
     pub fn eval(self: *Evaluator, form: Value) Error!Value {
+        if (!self.collector_installed) self.installCollector();
+        // The form is held on the Lisp stack for as long as it is being
+        // evaluated. A macro expansion or a quasiquote's output is fresh
+        // structure that nothing else refers to.
+        var held = self.heap.protect();
+        defer held.close();
+        try held.push(form);
         if (form.equalsRaw(value.NIL)) return self.set1(form);
         if (form.equalsRaw(value.T)) return self.set1(form);
         switch (form.tag()) {
@@ -314,6 +381,10 @@ pub const Evaluator = struct {
                 return handler(self, tail);
             }
             if (try self.macro_expander(self, form)) |expanded| {
+                // The expansion is fresh structure nothing else holds.
+                var held = self.heap.stack.open();
+                defer held.close();
+                try held.push(expanded);
                 return self.eval(expanded);
             }
             const fn_v = self.env.lookupFunction(head) orelse
@@ -327,18 +398,22 @@ pub const Evaluator = struct {
     pub fn applyFunction(self: *Evaluator, fn_v: Value, arg_forms: Value) Error!Value {
         if (!isFunction(fn_v)) return Error.NotCallable;
 
-        var args: std.ArrayList(Value) = .empty;
-        defer args.deinit(self.allocator);
+        // The function and the arguments go on the Lisp stack, so a
+        // collection during a later argument's evaluation can see them.
+        var held = self.heap.stack.open();
+        defer held.close();
+        try held.push(fn_v);
 
+        var args = self.heap.stack.open();
+        defer args.close();
         var rest = arg_forms;
         while (!rest.equalsRaw(value.NIL)) {
             if (!rest.isCons()) return Error.BadArgList;
-            const arg = try self.eval(heap_mod.car(rest));
-            try args.append(self.allocator, arg);
+            try args.push(try self.eval(heap_mod.car(rest)));
             rest = heap_mod.cdr(rest);
         }
 
-        return self.callFunction(fn_v, args.items);
+        return self.callFunction(fn_v, args.items());
     }
 
     /// Expand `form` once if its head names a macro. Returns null when the
@@ -414,26 +489,20 @@ pub const Evaluator = struct {
     };
 
     fn applyClosure(self: *Evaluator, c0: *const function.Closure, args0: []const Value) Error!Value {
-        const saved_value_chain = self.env.top_value;
-        const saved_function_chain = self.env.top_function;
-        defer {
-            self.env.top_value = saved_value_chain;
-            self.env.top_function = saved_function_chain;
-        }
+        const chain_mark = try self.env.saveChains();
+        defer self.env.restoreChains(chain_mark);
 
-        // Tail jumps alternate between two buffers so the args feeding the
-        // current call are never the buffer being refilled for the next one.
-        var buf_a: std.ArrayList(Value) = .empty;
-        var buf_b: std.ArrayList(Value) = .empty;
-        defer buf_a.deinit(self.allocator);
-        defer buf_b.deinit(self.allocator);
+        // A tail jump refills one region on the Lisp stack. The args
+        // feeding the current call are already bound into its frame by
+        // the time the region is refilled for the next one.
+        var out_region = self.heap.stack.open();
+        defer out_region.close();
 
         const call_mark = self.dynamicMark();
         defer self.unwindSpecials(call_mark);
 
         var cur = c0;
         var cur_args: []const Value = args0;
-        var use_a = true;
         var frame: ?*env_mod.Frame = null;
 
         while (true) {
@@ -477,13 +546,11 @@ pub const Evaluator = struct {
             // call in its tail position, so that call is not a tail call.
             if (self.dynamicMark() > frame_mark) return self.eval(last);
 
-            const out_buf = if (use_a) &buf_a else &buf_b;
-            switch (try self.evalTail(last, out_buf)) {
+            switch (try self.evalTail(last, &out_region)) {
                 .value => |v| return v,
                 .call => |next_c| {
                     cur = next_c;
-                    cur_args = out_buf.items;
-                    use_a = !use_a;
+                    cur_args = out_region.items();
                 },
             }
         }
@@ -493,7 +560,7 @@ pub const Evaluator = struct {
     /// reached through `if` or `progn`) is reported as a `.call` for the
     /// trampoline to loop on; everything else evaluates here and returns a
     /// `.value`. Closure call arguments are evaluated into `out_buf`.
-    fn evalTail(self: *Evaluator, form: Value, out_buf: *std.ArrayList(Value)) Error!TailStep {
+    fn evalTail(self: *Evaluator, form: Value, out_buf: *stack_mod.Region) Error!TailStep {
         if (!form.isCons()) return .{ .value = try self.eval(form) };
         const head = heap_mod.car(form);
         if (!head.isSymbol()) return .{ .value = try self.eval(form) };
@@ -507,17 +574,20 @@ pub const Evaluator = struct {
         }
 
         if (try self.macro_expander(self, form)) |expanded| {
+            var held = self.heap.stack.open();
+            defer held.close();
+            try held.push(expanded);
             return self.evalTail(expanded, out_buf);
         }
 
         const fn_v = self.env.lookupFunction(head) orelse
             return self.unbound(head, Error.UnboundFunction);
         if (isFunction(fn_v) and asFunction(fn_v).kind == .closure) {
-            out_buf.clearRetainingCapacity();
+            out_buf.clear();
             var rest = tail;
             while (!rest.equalsRaw(value.NIL)) {
                 if (!rest.isCons()) return Error.BadArgList;
-                try out_buf.append(self.allocator, try self.eval(heap_mod.car(rest)));
+                try out_buf.push(try self.eval(heap_mod.car(rest)));
                 rest = heap_mod.cdr(rest);
             }
             return .{ .call = &asFunction(fn_v).payload.closure };
@@ -526,7 +596,7 @@ pub const Evaluator = struct {
         return .{ .value = try self.applyFunction(fn_v, tail) };
     }
 
-    fn tailIf(self: *Evaluator, args: Value, out_buf: *std.ArrayList(Value)) Error!TailStep {
+    fn tailIf(self: *Evaluator, args: Value, out_buf: *stack_mod.Region) Error!TailStep {
         if (!args.isCons()) return Error.BadArgList;
         const test_form = heap_mod.car(args);
         const rest = heap_mod.cdr(args);
@@ -550,7 +620,7 @@ pub const Evaluator = struct {
         return .{ .value = try self.set1(value.NIL) };
     }
 
-    fn tailProgn(self: *Evaluator, body: Value, out_buf: *std.ArrayList(Value)) Error!TailStep {
+    fn tailProgn(self: *Evaluator, body: Value, out_buf: *stack_mod.Region) Error!TailStep {
         if (!body.isCons()) {
             if (body.equalsRaw(value.NIL)) return .{ .value = try self.set1(value.NIL) };
             return Error.BadArgList;

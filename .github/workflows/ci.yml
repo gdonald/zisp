@@ -31,6 +31,12 @@ jobs:
       - name: zig build tests
         run: zig build tests --summary all
 
+      - name: zig build tests -Dgc-torture
+        # Collects ahead of every 64th allocation and holds reclaimed
+        # blocks back, so a value a Zig local keeps without rooting is
+        # reclaimed under it and the dereference aborts.
+        run: zig build tests -Dgc-torture=64 --summary all
+
       - name: ansi-test load rate
         # Tracks how much of the ANSI suite loads and runs. The rt-based
         # test play depends on layers still under construction, so this is

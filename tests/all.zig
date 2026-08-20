@@ -4,6 +4,12 @@
 comptime {
     _ = @import("runtime/value_test.zig");
     _ = @import("runtime/heap_test.zig");
+    _ = @import("runtime/gc_test.zig");
+    _ = @import("runtime/mark_test.zig");
+    _ = @import("runtime/sweep_test.zig");
+    _ = @import("runtime/stack_test.zig");
+    _ = @import("eval/collect_test.zig");
+
     _ = @import("runtime/symbol_test.zig");
     _ = @import("runtime/package_test.zig");
     _ = @import("runtime/printer_test.zig");
@@ -44,6 +50,7 @@ comptime {
     _ = @import("builtins/packages_test.zig");
     _ = @import("builtins/package_conflict_corpus_test.zig");
     _ = @import("builtins/types_corpus_test.zig");
+    _ = @import("builtins/gc_corpus_test.zig");
     _ = @import("builtins/pprint_corpus_test.zig");
     _ = @import("builtins/pathnames_test.zig");
     _ = @import("builtins/merge_pathnames_corpus_test.zig");

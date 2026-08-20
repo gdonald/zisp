@@ -12,6 +12,7 @@ const printer = @import("../runtime/printer.zig");
 const format = @import("format.zig");
 const streams = @import("streams.zig");
 const reader_mod = @import("../reader.zig");
+const collect_mod = @import("../eval/collect.zig");
 const eval_mod = @import("../eval/eval.zig");
 const special_forms = @import("../eval/special_forms.zig");
 const function = @import("../eval/function.zig");
@@ -73,13 +74,9 @@ fn installFeatures(ev: *Evaluator) !void {
     };
     const names = [_][]const u8{ "ZISP", "ANSI-CL", "COMMON-LISP", os_feature, arch_feature };
 
-    var list = value.NIL;
-    var i: usize = names.len;
-    while (i > 0) {
-        i -= 1;
-        const sym = try ev.interner.internKeyword(names[i]);
-        list = try ev.heap.allocCons(sym, list);
-    }
+    var builder = ev.heap.listBuilder();
+    for (names) |name| try builder.append(try ev.interner.internKeyword(name));
+    const list = builder.finish();
     const features = try ev.interner.intern("*FEATURES*");
     symbol_mod.symbol(features).value_cell = list;
 }
@@ -273,8 +270,15 @@ pub fn evalSource(ev: *Evaluator, source: []const u8) Error!void {
     var tokenizer = reader_mod.Tokenizer.init(source);
     var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
     while (true) {
+        // Between top-level forms nothing but the evaluator's own state
+        // holds a value, which is what makes a collection safe here.
+        try collect_mod.maybeCollect(ev);
         const form = rd.read() catch return Error.ProgramError;
         const f = form orelse break;
+        // The form is fresh structure nothing else holds.
+        var held = ev.heap.protect();
+        defer held.close();
+        try held.push(f);
         _ = try ev.eval(f);
     }
 }
@@ -285,8 +289,16 @@ pub fn evalSource(ev: *Evaluator, source: []const u8) Error!void {
 /// rules. `ctt` is compile-time-too mode. Forms destined for load time are
 /// appended to `out`; compile-time evaluation happens immediately.
 pub fn compileToplevel(ev: *Evaluator, form: Value, ctt: bool, out: *std.ArrayList(Value)) Error!void {
+    // The forms collected for the fasl, and the one in hand, are held
+    // through the evaluation that compiling does. `out` is a Zig list, so
+    // a pin is what keeps its contents from being reclaimed.
+    try ev.pin(form);
+    defer ev.unpin();
     var f = form;
-    while (try ev.macroexpand1(f)) |expanded| f = expanded;
+    while (try ev.macroexpand1(f)) |expanded| {
+        f = expanded;
+        ev.repin(f);
+    }
 
     if (f.isCons() and heap.car(f).isSymbol()) {
         const head = symbol_mod.symbol(heap.car(f)).name;
@@ -332,13 +344,20 @@ pub fn compileToplevel(ev: *Evaluator, form: Value, ctt: bool, out: *std.ArrayLi
             // Macro definitions become available at compile time and are
             // also part of the compiled file.
             _ = try ev.eval(f);
-            try out.append(ev.allocator, f);
+            try keepForLoad(ev, out, f);
             return;
         }
     }
 
-    try out.append(ev.allocator, f);
+    try keepForLoad(ev, out, f);
     if (ctt) _ = try ev.eval(f);
+}
+
+/// Collect a load-time form, pinning it for as long as the caller keeps
+/// the list.
+fn keepForLoad(ev: *Evaluator, out: *std.ArrayList(Value), f: Value) Error!void {
+    try out.append(ev.allocator, f);
+    try ev.pin(f);
 }
 
 /// Minimal compilation of `source`: process every top-level form, collect
@@ -369,6 +388,8 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
 
     var load_forms: std.ArrayList(Value) = .empty;
     defer load_forms.deinit(ev.allocator);
+    const pin_mark = ev.pinMark();
+    defer ev.unpinTo(pin_mark);
     {
         var bindings = try PathVarBindings.bind(
             ev,

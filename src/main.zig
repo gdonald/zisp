@@ -112,13 +112,11 @@ fn reportError(repl: *zisp.repl.Repl, e: anyerror) void {
 
 /// Bind `*command-line-arguments*` to a list of the script's arguments.
 fn bindCommandLineArgs(repl: *zisp.repl.Repl, script_args: []const []const u8) !void {
-    var list = zisp.value.NIL;
-    var i: usize = script_args.len;
-    while (i > 0) {
-        i -= 1;
-        const s = try repl.ev.heap.allocString(script_args[i]);
-        list = try repl.ev.heap.allocCons(s, list);
+    var builder = repl.ev.heap.listBuilder();
+    for (script_args) |arg| {
+        try builder.append(try repl.ev.heap.allocString(arg));
     }
+    const list = builder.finish();
     const sym = try repl.ev.interner.intern("*COMMAND-LINE-ARGUMENTS*");
     zisp.symbol.symbol(sym).value_cell = list;
 }

@@ -403,18 +403,18 @@ fn letForm(ev: *Evaluator, args: Value) Error!Value {
     const bindings = heap.car(args);
     const body = heap.cdr(args);
 
-    var syms: std.ArrayList(Value) = .empty;
-    defer syms.deinit(ev.allocator);
-    var vals: std.ArrayList(Value) = .empty;
-    defer vals.deinit(ev.allocator);
+    // Symbol and value alternate in one run: an init already evaluated
+    // is reachable from nothing else while the next one is evaluated.
+    var pairs = ev.heap.protect();
+    defer pairs.close();
 
     var bind_rest = bindings;
     while (!bind_rest.equalsRaw(value.NIL)) {
         if (!bind_rest.isCons()) return Error.BadArgList;
         const pair = try parseBinding(heap.car(bind_rest));
         const init_val = if (pair.has_init) try ev.eval(pair.init) else value.NIL;
-        try syms.append(ev.allocator, pair.sym);
-        try vals.append(ev.allocator, init_val);
+        try pairs.push(pair.sym);
+        try pairs.push(init_val);
         bind_rest = heap.cdr(bind_rest);
     }
 
@@ -422,8 +422,10 @@ fn letForm(ev: *Evaluator, args: Value) Error!Value {
     defer ev.env.popValueFrame();
     const mark = ev.dynamicMark();
     defer ev.unwindSpecials(mark);
-    for (syms.items, vals.items) |s, v| {
-        try bindVariable(ev, s, v);
+    const bound = pairs.items();
+    var i: usize = 0;
+    while (i < bound.len) : (i += 2) {
+        try bindVariable(ev, bound[i], bound[i + 1]);
     }
     return prognBody(ev, body);
 }
@@ -594,27 +596,27 @@ fn unwindProtect(ev: *Evaluator, args: Value) Error!Value {
         // and its carried value list so a normally-completing cleanup can't
         // clobber them, run the cleanup, restore, and re-raise.
         const saved = ev.saveTransferState();
-        var saved_tv: std.ArrayList(Value) = .empty;
-        defer saved_tv.deinit(ev.allocator);
-        try saved_tv.appendSlice(ev.allocator, ev.transfer_values.items);
+        var saved_tv = ev.heap.protect();
+        defer saved_tv.close();
+        for (ev.transfer_values.items) |v| try saved_tv.push(v);
 
         _ = try prognBody(ev, cleanup);
 
         ev.restoreTransferState(saved);
         ev.transfer_values.clearRetainingCapacity();
-        try ev.transfer_values.appendSlice(ev.allocator, saved_tv.items);
+        try ev.transfer_values.appendSlice(ev.allocator, saved_tv.items());
         return err;
     };
 
     // Normal completion: the protected form's value list must survive the
     // cleanup forms, which are evaluated only for effect.
-    var saved_vals: std.ArrayList(Value) = .empty;
-    defer saved_vals.deinit(ev.allocator);
-    try saved_vals.appendSlice(ev.allocator, ev.values.items);
+    var saved_vals = ev.heap.protect();
+    defer saved_vals.close();
+    for (ev.values.items) |v| try saved_vals.push(v);
 
     _ = try prognBody(ev, cleanup);
 
-    return ev.setValues(saved_vals.items);
+    return ev.setValues(saved_vals.items());
 }
 
 /// `(ignore-errors form*)` — evaluate the body, and on an error return
@@ -703,38 +705,33 @@ fn evalWhen(ev: *Evaluator, args: Value) Error!Value {
 }
 
 fn valuesForm(ev: *Evaluator, args: Value) Error!Value {
-    var vals: std.ArrayList(Value) = .empty;
-    defer vals.deinit(ev.allocator);
+    var vals = ev.heap.protect();
+    defer vals.close();
     var rest = args;
     while (!rest.equalsRaw(value.NIL)) {
         if (!rest.isCons()) return Error.BadArgList;
-        try vals.append(ev.allocator, try ev.eval(heap.car(rest)));
+        try vals.push(try ev.eval(heap.car(rest)));
         rest = heap.cdr(rest);
     }
-    return ev.setValues(vals.items);
+    return ev.setValues(vals.items());
 }
 
 fn valuesListForm(ev: *Evaluator, args: Value) Error!Value {
     const list = try ev.eval(try expectOneArg(args));
-    var vals: std.ArrayList(Value) = .empty;
-    defer vals.deinit(ev.allocator);
+    var vals = ev.heap.protect();
+    defer vals.close();
     var rest = list;
     while (!rest.equalsRaw(value.NIL)) {
         if (!rest.isCons()) return Error.TypeError;
-        try vals.append(ev.allocator, heap.car(rest));
+        try vals.push(heap.car(rest));
         rest = heap.cdr(rest);
     }
-    return ev.setValues(vals.items);
+    return ev.setValues(vals.items());
 }
 
 fn multipleValueList(ev: *Evaluator, args: Value) Error!Value {
     _ = try ev.eval(try expectOneArg(args));
-    var list = value.NIL;
-    var i = ev.values.items.len;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(ev.values.items[i], list);
-    }
+    const list = try ev.heap.list(ev.values.items);
     return ev.set1(list);
 }
 
@@ -742,16 +739,16 @@ fn multipleValueCall(ev: *Evaluator, args: Value) Error!Value {
     if (!args.isCons()) return Error.BadArgList;
     const callee = try resolveCallee(ev, try ev.eval(heap.car(args)));
 
-    var collected: std.ArrayList(Value) = .empty;
-    defer collected.deinit(ev.allocator);
+    var collected = ev.heap.protect();
+    defer collected.close();
     var rest = heap.cdr(args);
     while (!rest.equalsRaw(value.NIL)) {
         if (!rest.isCons()) return Error.BadArgList;
         _ = try ev.eval(heap.car(rest));
-        try collected.appendSlice(ev.allocator, ev.values.items);
+        for (ev.values.items) |v| try collected.push(v);
         rest = heap.cdr(rest);
     }
-    return ev.callFunction(callee, collected.items);
+    return ev.callFunction(callee, collected.items());
 }
 
 fn resolveCallee(ev: *Evaluator, designator: Value) Error!Value {
@@ -767,9 +764,9 @@ fn multipleValueProg1(ev: *Evaluator, args: Value) Error!Value {
     if (!args.isCons()) return Error.BadArgList;
     _ = try ev.eval(heap.car(args));
 
-    var saved: std.ArrayList(Value) = .empty;
-    defer saved.deinit(ev.allocator);
-    try saved.appendSlice(ev.allocator, ev.values.items);
+    var saved = ev.heap.protect();
+    defer saved.close();
+    for (ev.values.items) |v| try saved.push(v);
 
     var rest = heap.cdr(args);
     while (!rest.equalsRaw(value.NIL)) {
@@ -777,7 +774,7 @@ fn multipleValueProg1(ev: *Evaluator, args: Value) Error!Value {
         _ = try ev.eval(heap.car(rest));
         rest = heap.cdr(rest);
     }
-    return ev.setValues(saved.items);
+    return ev.setValues(saved.items());
 }
 
 fn multipleValueBind(ev: *Evaluator, args: Value) Error!Value {
@@ -789,9 +786,9 @@ fn multipleValueBind(ev: *Evaluator, args: Value) Error!Value {
     const body = heap.cdr(after_vars);
 
     _ = try ev.eval(values_form);
-    var produced: std.ArrayList(Value) = .empty;
-    defer produced.deinit(ev.allocator);
-    try produced.appendSlice(ev.allocator, ev.values.items);
+    var produced = ev.heap.protect();
+    defer produced.close();
+    for (ev.values.items) |v| try produced.push(v);
 
     _ = try ev.env.pushValueFrame();
     defer ev.env.popValueFrame();
@@ -802,7 +799,7 @@ fn multipleValueBind(ev: *Evaluator, args: Value) Error!Value {
         if (!rest.isCons()) return Error.BadArgList;
         const var_sym = heap.car(rest);
         if (!var_sym.isSymbol()) return Error.TypeError;
-        const v = if (i < produced.items.len) produced.items[i] else value.NIL;
+        const v = if (i < produced.items().len) produced.items()[i] else value.NIL;
         try ev.env.top_value.?.bind(ev.allocator, var_sym, v);
         rest = heap.cdr(rest);
     }

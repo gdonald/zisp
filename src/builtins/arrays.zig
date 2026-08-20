@@ -90,10 +90,9 @@ fn elementTypeName(ev: *Evaluator, element_type: ElementType) Error!Value {
         .t => value.T,
         .character => ev.interner.intern("CHARACTER"),
         .bit => ev.interner.intern("BIT"),
-        .unsigned_byte_8 => blk: {
-            const tail = try ev.heap.allocCons(Value.fromFixnum(8), value.NIL);
-            break :blk ev.heap.allocCons(try ev.interner.intern("UNSIGNED-BYTE"), tail);
-        },
+        .unsigned_byte_8 => ev.heap.list(
+            &.{ try ev.interner.intern("UNSIGNED-BYTE"), Value.fromFixnum(8) },
+        ),
     };
 }
 
@@ -485,13 +484,9 @@ fn arrayDimensionsFn(p: *anyopaque, args: []const Value) Error!Value {
         return ev.heap.allocCons(Value.fromFixnum(@intCast(heap.asString(v).capacity)), value.NIL);
     }
     const a = try expectArray(v);
-    var list = value.NIL;
-    var i: usize = a.rank;
-    while (i > 0) {
-        i -= 1;
-        list = try ev.heap.allocCons(Value.fromFixnum(@intCast(a.dimensions()[i])), list);
-    }
-    return list;
+    var builder = ev.heap.listBuilder();
+    for (a.dimensions()) |size| try builder.append(Value.fromFixnum(@intCast(size)));
+    return builder.finish();
 }
 
 fn arrayDimensionFn(p: *anyopaque, args: []const Value) Error!Value {

@@ -14,6 +14,7 @@ const heap_mod = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
 const reader_mod = @import("../reader.zig");
+const collect_mod = @import("../eval/collect.zig");
 const eval_pkg = @import("../eval.zig");
 const builtins = @import("../builtins/builtins.zig");
 
@@ -96,6 +97,7 @@ pub const Repl = struct {
         var tokenizer = reader_mod.Tokenizer.init(source);
         var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
         while (true) {
+            try collect_mod.maybeCollect(&self.ev);
             const form = rd.read() catch |e| {
                 try self.reportError("Reader", e);
                 return;
@@ -121,6 +123,7 @@ pub const Repl = struct {
         var tokenizer = reader_mod.Tokenizer.init(source);
         var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
         while (true) {
+            try collect_mod.maybeCollect(&self.ev);
             const form = rd.read() catch return Error.ProgramError;
             const f = form orelse break;
             self.rotateInput(f);
