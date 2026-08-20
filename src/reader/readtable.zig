@@ -55,6 +55,7 @@ const MACRO_TOKEN_KINDS = [_]TokenKind{
     .hash_plus,
     .hash_minus,
     .hash_p,
+    .hash_c,
 };
 
 /// Compile-time index of a token kind in `MACRO_TOKEN_KINDS`. Used to size
@@ -87,6 +88,7 @@ pub const Readtable = struct {
         t.set(.hash_plus, vtable.hash_plus);
         t.set(.hash_minus, vtable.hash_minus);
         t.set(.hash_p, vtable.hash_p);
+        t.set(.hash_c, vtable.hash_c);
         return t;
     }
 
@@ -114,4 +116,5 @@ pub const StandardHandlers = struct {
     hash_plus: MacroHandler,
     hash_minus: MacroHandler,
     hash_p: MacroHandler,
+    hash_c: MacroHandler,
 };

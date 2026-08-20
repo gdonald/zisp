@@ -277,7 +277,7 @@ test "#+ inside vector elides element when feature absent" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = (try readWithFeatures(s, &.{}, "#(1 #+nope 2 3)")).?;
-    const items = heap.asVector(v).constSlice();
+    const items = heap.arrayActive(v);
     try std.testing.expectEqual(@as(usize, 2), items.len);
     try std.testing.expectEqual(@as(i64, 1), items[0].toFixnum());
     try std.testing.expectEqual(@as(i64, 3), items[1].toFixnum());
@@ -289,7 +289,7 @@ test "#+ inside vector keeps element when feature present" {
     const sbcl = try s.interner.internKeyword("SBCL");
     const features = [_]Value{sbcl};
     const v = (try readWithFeatures(s, &features, "#(1 #+sbcl 2 3)")).?;
-    const items = heap.asVector(v).constSlice();
+    const items = heap.arrayActive(v);
     try std.testing.expectEqual(@as(usize, 3), items.len);
 }
 

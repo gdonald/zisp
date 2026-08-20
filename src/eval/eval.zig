@@ -80,6 +80,19 @@ pub const Evaluator = struct {
     // `defmacro` reads it to record the definition form's position.
     // Fixnum zero until the first dispatch; never a cons before then.
     current_form: Value = .{ .raw = 0 },
+    // Logical pathname hosts, mapping an upcased host name to its
+    // translation list. Empty until `setf logical-pathname-translations`
+    // defines one.
+    logical_hosts: std.StringHashMapUnmanaged(Value) = .{},
+
+    // Column the console sink is sitting at, so `~&` and `~T` can line
+    // output up across separate `format` calls.
+    output_column: usize = 0,
+
+    // Symbol named by the most recent UnboundVariable / UnboundFunction /
+    // NotCallable error, so the driver can name it in the message.
+    error_symbol: Value = .{ .raw = 0 },
+
     // Shallow-binding stack for special variables. `let`, `let*`, and
     // lambda-list binding push the old value cell here and restore on exit,
     // so a native function reading the cell sees the innermost binding.
@@ -106,6 +119,9 @@ pub const Evaluator = struct {
         self.values.deinit(self.allocator);
         self.transfer_values.deinit(self.allocator);
         self.dynamic_stack.deinit(self.allocator);
+        var hosts = self.logical_hosts.keyIterator();
+        while (hosts.next()) |name| self.allocator.free(name.*);
+        self.logical_hosts.deinit(self.allocator);
     }
 
     /// Rebind `sym`'s value cell, remembering the previous contents.
@@ -113,6 +129,12 @@ pub const Evaluator = struct {
         const cell = &symbol_mod.symbol(sym).value_cell;
         try self.dynamic_stack.append(self.allocator, .{ .sym = sym, .saved = cell.* });
         cell.* = val;
+    }
+
+    /// Record `sym` as the subject of `err` and return the error.
+    pub fn unbound(self: *Evaluator, sym: Value, err: Error) Error {
+        self.error_symbol = sym;
+        return err;
     }
 
     /// Depth of the dynamic stack, to be handed back to `unwindSpecials`.
@@ -279,7 +301,7 @@ pub const Evaluator = struct {
 
     fn evalSymbol(self: *Evaluator, sym: Value) Error!Value {
         if (symbol_mod.isKeyword(sym, self.interner)) return sym;
-        return self.env.lookupValue(sym) orelse Error.UnboundVariable;
+        return self.env.lookupValue(sym) orelse self.unbound(sym, Error.UnboundVariable);
     }
 
     fn evalCons(self: *Evaluator, form: Value) Error!Value {
@@ -294,7 +316,8 @@ pub const Evaluator = struct {
             if (try self.macro_expander(self, form)) |expanded| {
                 return self.eval(expanded);
             }
-            const fn_v = self.env.lookupFunction(head) orelse return Error.UnboundFunction;
+            const fn_v = self.env.lookupFunction(head) orelse
+                return self.unbound(head, Error.UnboundFunction);
             return self.applyFunction(fn_v, tail);
         }
 
@@ -487,7 +510,8 @@ pub const Evaluator = struct {
             return self.evalTail(expanded, out_buf);
         }
 
-        const fn_v = self.env.lookupFunction(head) orelse return Error.UnboundFunction;
+        const fn_v = self.env.lookupFunction(head) orelse
+            return self.unbound(head, Error.UnboundFunction);
         if (isFunction(fn_v) and asFunction(fn_v).kind == .closure) {
             out_buf.clearRetainingCapacity();
             var rest = tail;
@@ -545,5 +569,10 @@ pub const Evaluator = struct {
 
     pub fn fromOpaque(p: *anyopaque) *Evaluator {
         return @ptrCast(@alignCast(p));
+    }
+
+    /// The handle a native receives, so one native can call another.
+    pub fn asOpaque(self: *Evaluator) *anyopaque {
+        return @ptrCast(self);
     }
 };

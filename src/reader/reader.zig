@@ -28,6 +28,10 @@ const float_parse = @import("float_parse.zig");
 const readtable_mod = @import("readtable.zig");
 const value = @import("../runtime/value.zig");
 const heap_mod = @import("../runtime/heap.zig");
+const bignum = @import("../runtime/bignum.zig");
+const complex = @import("../runtime/complex.zig");
+const character = @import("../runtime/character.zig");
+const pathname_mod = @import("../runtime/pathname.zig");
 const symbol = @import("../runtime/symbol.zig");
 const source_pos = @import("../runtime/source_pos.zig");
 
@@ -115,6 +119,7 @@ pub const standard_handlers: readtable_mod.StandardHandlers = .{
     .hash_plus = handleHashPlus,
     .hash_minus = handleHashMinus,
     .hash_p = handleHashP,
+    .hash_c = handleHashC,
 };
 
 /// Process-wide standard readtable, lazily initialized. Every `Reader.init`
@@ -319,7 +324,7 @@ pub const Reader = struct {
             // Reader-macro kinds without a handler shouldn't reach here —
             // the standard readtable populates them. A null means user code
             // explicitly cleared an entry; surface as BadToken.
-            .quote, .backquote, .comma, .comma_at, .hash_quote, .hash_lparen, .hash_plus, .hash_minus, .hash_p => self.errAt(t.pos, Error.BadToken),
+            .quote, .backquote, .comma, .comma_at, .hash_quote, .hash_lparen, .hash_plus, .hash_minus, .hash_p, .hash_c => self.errAt(t.pos, Error.BadToken),
         };
     }
 
@@ -379,7 +384,23 @@ pub const Reader = struct {
         if (t.kind != .string) return self.errAt(t.pos, Error.BadToken);
         if (self.suppress) return value.NIL;
         const namestring = try self.parseStringAt(t.text, t.pos);
-        return self.heap.allocPathname(namestring);
+        const text = try heap_mod.stringUtf8Alloc(self.heap.allocator, namestring);
+        return pathname_mod.parseText(self.heap, self.interner, text) catch
+            self.errAt(t.pos, Error.BadToken);
+    }
+
+    /// `#C(real imaginary)`. Both parts must be reals, and the pair goes
+    /// through the same canonicalization as `complex`.
+    fn readComplex(self: *Reader) Error!Value {
+        const parts = try self.readForm();
+        if (self.suppress) return value.NIL;
+        if (!parts.isCons()) return self.errAt(self.tokenizer.last_token_start, Error.BadToken);
+        const rest = heap_mod.cdr(parts);
+        if (!rest.isCons() or !heap_mod.cdr(rest).equalsRaw(value.NIL)) {
+            return self.errAt(self.tokenizer.last_token_start, Error.BadToken);
+        }
+        return complex.make(self.heap, heap_mod.car(parts), heap_mod.car(rest)) catch
+            self.errAt(self.tokenizer.last_token_start, Error.BadToken);
     }
 
     /// Helper: lower a reader-macro form into `(SYM x)`.
@@ -531,33 +552,35 @@ pub const Reader = struct {
     }
 
     fn parseStringAt(self: *Reader, text: []const u8, p: Position) Error!Value {
-        var buf: [4096]u8 = undefined;
+        var buf: [1024]u32 = undefined;
         if (text.len > buf.len) {
             // Fall back to heap scratch for very long strings.
-            const scratch = try self.heap.allocator.alloc(u8, text.len);
+            const scratch = try self.heap.allocator.alloc(u32, text.len);
             defer self.heap.allocator.free(scratch);
             const out = unescapeString(text, scratch) catch return self.errAt(p, Error.BadToken);
-            return try self.heap.allocString(out);
+            return try self.heap.allocStringFromChars(out);
         }
         const out = unescapeString(text, &buf) catch return self.errAt(p, Error.BadToken);
-        return try self.heap.allocString(out);
+        return try self.heap.allocStringFromChars(out);
     }
 
     fn parseIntegerAt(self: *Reader, text: []const u8, p: Position) Error!Value {
-        const n = parseIntegerLexeme(text) catch return self.errAt(p, Error.BadToken);
-        if (n < value.FIXNUM_MIN or n > value.FIXNUM_MAX) {
-            // Bignums are not yet supported. For now reject overflow loudly.
-            return self.errAt(p, Error.BadToken);
+        if (parseIntegerLexeme(text)) |n| {
+            if (n >= value.FIXNUM_MIN and n <= value.FIXNUM_MAX) return Value.fromFixnum(n);
+        } else |e| {
+            if (e != IntegerParseError.Overflow) return self.errAt(p, Error.BadToken);
         }
-        return Value.fromFixnum(n);
+        const lexeme = splitIntegerLexeme(text) catch return self.errAt(p, Error.BadToken);
+        const big = bignum.parse(self.heap, lexeme.digits, lexeme.radix, lexeme.negative) catch
+            return self.errAt(p, Error.BadToken);
+        return big orelse self.errAt(p, Error.BadToken);
     }
 
     fn parseRatioAt(self: *Reader, text: []const u8, p: Position) Error!Value {
         const slash = std.mem.indexOfScalar(u8, text, '/') orelse return self.errAt(p, Error.BadToken);
-        const num = parseIntegerLexeme(text[0..slash]) catch return self.errAt(p, Error.BadToken);
-        const den = parseIntegerLexeme(text[slash + 1 ..]) catch return self.errAt(p, Error.BadToken);
-        if (den == 0) return self.errAt(p, Error.BadToken);
-        return try self.heap.allocRatio(num, den);
+        const num = try self.parseIntegerAt(text[0..slash], p);
+        const den = try self.parseIntegerAt(text[slash + 1 ..], p);
+        return bignum.makeRatio(self.heap, num, den) catch return self.errAt(p, Error.BadToken);
     }
 
     fn parseFloatAt(self: *Reader, text: []const u8, p: Position) Error!Value {
@@ -625,6 +648,11 @@ fn handleHashP(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
     return ReadStep{ .value = try self.readPathname() };
 }
 
+fn handleHashC(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
+    const self: *Reader = @ptrCast(@alignCast(ctx));
+    return ReadStep{ .value = try self.readComplex() };
+}
+
 /// Apply readtable-case `:upcase` to a symbol's source text. `|..|` runs
 /// are taken verbatim with the surrounding pipes stripped; backslash
 /// escapes one following character verbatim. `out` must have room for
@@ -679,33 +707,37 @@ fn foldSymbolName(text: []const u8, out: []u8) Error![]const u8 {
 /// per CLHS 2.4.5; other escapes are reserved. We mirror that: any other
 /// escape is `BadToken`. The tokenizer kept the bytes between the quotes
 /// raw, so we walk them once.
-fn unescapeString(text: []const u8, out: []u8) ![]u8 {
+/// Strip `\\` escapes and decode the UTF-8 source text into codepoints.
+fn unescapeString(text: []const u8, out: []u32) ![]u32 {
     var i: usize = 0;
     var o: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const c = text[i];
+    while (i < text.len) {
+        var c: u21 = text[i];
+        var width: usize = 1;
         if (c == '\\') {
             i += 1;
             if (i >= text.len) return error.BadToken;
-            const esc = text[i];
-            if (esc != '\\' and esc != '"') return error.BadToken;
-            if (o >= out.len) return error.BadToken;
-            out[o] = esc;
-            o += 1;
-        } else {
-            if (o >= out.len) return error.BadToken;
-            out[o] = c;
-            o += 1;
+            c = text[i];
+            if (c != '\\' and c != '"') return error.BadToken;
+        } else if (c >= 0x80) {
+            width = std.unicode.utf8ByteSequenceLength(text[i]) catch return error.BadToken;
+            if (i + width > text.len) return error.BadToken;
+            c = std.unicode.utf8Decode(text[i .. i + width]) catch return error.BadToken;
         }
+        if (o >= out.len) return error.BadToken;
+        out[o] = c;
+        o += 1;
+        i += width;
     }
     return out[0..o];
 }
 
 const IntegerParseError = error{ Overflow, BadDigit };
 
-/// Decode a numeric lexeme into i64, honoring optional sign and any
-/// of `#b`/`#o`/`#x`/`#nR` radix prefixes the tokenizer accepted.
-fn parseIntegerLexeme(text: []const u8) IntegerParseError!i64 {
+/// A numeric lexeme split into its radix prefix, sign, and digit text.
+const IntegerLexeme = struct { radix: u8, negative: bool, digits: []const u8 };
+
+fn splitIntegerLexeme(text: []const u8) IntegerParseError!IntegerLexeme {
     if (text.len == 0) return IntegerParseError.BadDigit;
     var i: usize = 0;
 
@@ -749,17 +781,23 @@ fn parseIntegerLexeme(text: []const u8) IntegerParseError!i64 {
     }
     if (i >= text.len) return IntegerParseError.BadDigit;
 
-    var acc: i128 = 0;
-    while (i < text.len) : (i += 1) {
-        const d = digitValue(text[i]) orelse return IntegerParseError.BadDigit;
+    for (text[i..]) |c| {
+        const d = digitValue(c) orelse return IntegerParseError.BadDigit;
         if (d >= radix) return IntegerParseError.BadDigit;
-        acc = acc * @as(i128, radix) + @as(i128, d);
+    }
+    return .{ .radix = @intCast(radix), .negative = negative, .digits = text[i..] };
+}
+
+/// Decode a numeric lexeme into i64, honoring optional sign and any
+/// of `#b`/`#o`/`#x`/`#nR` radix prefixes the tokenizer accepted.
+fn parseIntegerLexeme(text: []const u8) IntegerParseError!i64 {
+    const lexeme = try splitIntegerLexeme(text);
+    var acc: i128 = 0;
+    for (lexeme.digits) |c| {
+        acc = acc * @as(i128, lexeme.radix) + @as(i128, digitValue(c).?);
         if (acc > std.math.maxInt(i64)) return IntegerParseError.Overflow;
     }
-    if (negative) acc = -acc;
-    if (acc > std.math.maxInt(i64) or acc < std.math.minInt(i64)) {
-        return IntegerParseError.Overflow;
-    }
+    if (lexeme.negative) acc = -acc;
     return @intCast(acc);
 }
 
@@ -790,15 +828,7 @@ fn decodeCharLiteral(text: []const u8) CharLiteralError!u21 {
         }
     }
 
-    if (std.ascii.eqlIgnoreCase(text, "Space")) return ' ';
-    if (std.ascii.eqlIgnoreCase(text, "Newline")) return '\n';
-    if (std.ascii.eqlIgnoreCase(text, "Tab")) return '\t';
-    if (std.ascii.eqlIgnoreCase(text, "Return")) return '\r';
-    if (std.ascii.eqlIgnoreCase(text, "Linefeed")) return '\n';
-    if (std.ascii.eqlIgnoreCase(text, "Page")) return 0x0C;
-    if (std.ascii.eqlIgnoreCase(text, "Backspace")) return 0x08;
-    if (std.ascii.eqlIgnoreCase(text, "Rubout")) return 0x7F;
-    if (std.ascii.eqlIgnoreCase(text, "Null")) return 0;
+    if (character.codeForName(text)) |code| return code;
 
     if (text.len >= 2 and (text[0] == 'U' or text[0] == 'u') and text[1] == '+') {
         const hex = text[2..];

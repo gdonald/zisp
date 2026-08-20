@@ -272,13 +272,16 @@ test "compile-file writes a loadable fasl and binds the pathname variables" {
     defer testing.allocator.free(src_form);
     const fasl_v = try fx.evalStr(src_form);
     try testing.expect(fasl_v.tag() == .heap and heap_mod.heapType(fasl_v) == .string);
-    const fasl_path = heap_mod.asString(fasl_v).constSlice();
+    const fasl_path = try heap_mod.stringUtf8Alloc(testing.allocator, fasl_v);
+    defer testing.allocator.free(fasl_path);
     try testing.expect(std.mem.endsWith(u8, fasl_path, "cf.zfasl"));
 
     // The compile-time capture saw the namestrings; outside they are nil.
-    const seen_p = heap_mod.asString(try fx.evalStr("seen-compile-pathname")).constSlice();
+    const seen_p = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr("seen-compile-pathname"));
+    defer testing.allocator.free(seen_p);
     try testing.expectEqualStrings(path, seen_p);
-    const seen_t = heap_mod.asString(try fx.evalStr("seen-compile-truename")).constSlice();
+    const seen_t = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr("seen-compile-truename"));
+    defer testing.allocator.free(seen_t);
     try testing.expect(std.mem.endsWith(u8, seen_t, "/cf.lisp"));
     try testing.expect(seen_t.len > 0 and seen_t[0] == '/');
     try testing.expect((try fx.evalStr("*compile-file-pathname*")).equalsRaw(value.NIL));
@@ -290,7 +293,8 @@ test "compile-file writes a loadable fasl and binds the pathname variables" {
     _ = try fx.evalStr(load_form);
     const marker = try fx.evalStr("loaded-marker");
     try testing.expectEqual(@as(i64, 99), marker.toFixnum());
-    const seen_lp = heap_mod.asString(try fx.evalStr("seen-load-pathname")).constSlice();
+    const seen_lp = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr("seen-load-pathname"));
+    defer testing.allocator.free(seen_lp);
     try testing.expectEqualStrings(fasl_path, seen_lp);
     try testing.expect((try fx.evalStr("*load-pathname*")).equalsRaw(value.NIL));
     try testing.expect((try fx.evalStr("*load-truename*")).equalsRaw(value.NIL));
@@ -303,4 +307,52 @@ test "compile-file argument errors" {
     try testing.expectError(Error.WrongArgCount, fx.evalStr("(compile-file)"));
     try testing.expectError(Error.TypeError, fx.evalStr("(compile-file 5)"));
     try testing.expectError(Error.FileError, fx.evalStr("(compile-file \"no-such-file.lisp\")"));
+}
+
+test "compile-file accepts a pathname and names the fasl after the source" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "rt.lsp", .data = "(setq compiled-marker 5)" });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/rt.lsp", .{tmp.sub_path});
+    defer testing.allocator.free(path);
+
+    const src = try std.fmt.allocPrint(testing.allocator, "(compile-file (pathname \"{s}\"))", .{path});
+    defer testing.allocator.free(src);
+    const fasl_v = try fx.evalStr(src);
+    const rt_path = try heap_mod.stringUtf8Alloc(testing.allocator, fasl_v);
+    defer testing.allocator.free(rt_path);
+    try testing.expect(std.mem.endsWith(u8, rt_path, "/rt.zfasl"));
+}
+
+test "a fasl of shared subforms reads back in full" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "shared.lisp",
+        .data =
+        \\(defmacro twice (form) (list 'list form form))
+        \\(setq shared-marker (twice (+ 1 2)))
+        ,
+    });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/shared.lisp", .{tmp.sub_path});
+    defer testing.allocator.free(path);
+
+    const compile_form = try std.fmt.allocPrint(testing.allocator, "(compile-file \"{s}\")", .{path});
+    defer testing.allocator.free(compile_form);
+    const fasl_v = try fx.evalStr(compile_form);
+
+    const load_form = try std.fmt.allocPrint(
+        testing.allocator,
+        "(load \"{s}\")",
+        .{try heap_mod.stringUtf8Alloc(fx.arena.allocator(), fasl_v)},
+    );
+    defer testing.allocator.free(load_form);
+    _ = try fx.evalStr(load_form);
+    try testing.expect((try fx.evalStr("(equal shared-marker '(3 3))")).equalsRaw(value.T));
 }

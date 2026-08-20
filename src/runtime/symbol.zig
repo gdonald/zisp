@@ -1,6 +1,7 @@
 const std = @import("std");
 const value = @import("value.zig");
 const package = @import("package.zig");
+const heap = @import("heap.zig");
 const Value = value.Value;
 const Package = package.Package;
 
@@ -169,6 +170,34 @@ pub const Interner = struct {
 
 pub fn symbol(v: Value) *Symbol {
     return @ptrFromInt(v.toSymbolAddr());
+}
+
+/// The value stored on a symbol's property list under `key`.
+pub fn plistGet(sym: Value, key: Value) ?Value {
+    var plist = symbol(sym).plist;
+    while (plist.isCons()) {
+        const rest = heap.cdr(plist);
+        if (!rest.isCons()) return null;
+        if (heap.car(plist).equalsRaw(key)) return heap.car(rest);
+        plist = heap.cdr(rest);
+    }
+    return null;
+}
+
+/// Store `v` under `key`, replacing any value already there.
+pub fn plistPut(h: *heap.Heap, sym: Value, key: Value, v: Value) !void {
+    var plist = symbol(sym).plist;
+    while (plist.isCons()) {
+        const rest = heap.cdr(plist);
+        if (!rest.isCons()) break;
+        if (heap.car(plist).equalsRaw(key)) {
+            heap.setCar(rest, v);
+            return;
+        }
+        plist = heap.cdr(rest);
+    }
+    const tail = try h.allocCons(v, symbol(sym).plist);
+    symbol(sym).plist = try h.allocCons(key, tail);
 }
 
 pub fn name(v: Value) []const u8 {

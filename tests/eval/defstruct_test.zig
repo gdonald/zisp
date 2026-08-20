@@ -70,7 +70,7 @@ const Fixture = struct {
     /// Evaluate `src` and return what `format nil "~S"` prints for it.
     fn printed(self: *Fixture, src: []const u8) ![]const u8 {
         const v = try self.evalStr(src);
-        return heap_mod.asString(v).constSlice();
+        return heap_mod.stringUtf8Alloc(self.arena.allocator(), v);
     }
 };
 

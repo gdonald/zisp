@@ -125,17 +125,18 @@ fn inPackage(ev: *Evaluator, args: Value) Error!Value {
 }
 
 /// Text of a string designator: a string, a symbol (its name), or a
-/// character. Returns a slice borrowed from the value itself.
-pub fn stringDesignator(v: Value) Error![]const u8 {
+/// character. A symbol's name is borrowed; a string is encoded to UTF-8
+/// through `allocator`, which the callers back with the heap's arena.
+pub fn stringDesignator(allocator: std.mem.Allocator, v: Value) Error![]const u8 {
     if (v.isSymbol()) return symbol_mod.symbol(v).name;
-    if (v.isHeap() and heap.heapType(v) == .string) return heap.asString(v).constSlice();
+    if (heap.isString(v)) return heap.stringUtf8Alloc(allocator, v);
     return Error.TypeError;
 }
 
 /// Resolve a package designator to a live package, or signal.
 pub fn resolvePackage(ev: *Evaluator, v: Value) Error!*package_mod.Package {
     if (package_mod.isPackage(v)) return package_mod.asPackage(v);
-    const name = try stringDesignator(v);
+    const name = try stringDesignator(ev.heap.allocator, v);
     return ev.interner.registry.find(name) orelse Error.NoSuchPackage;
 }
 
@@ -209,7 +210,8 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
 fn functionForm(ev: *Evaluator, args: Value) Error!Value {
     const arg = try expectOneArg(args);
     if (arg.isSymbol()) {
-        const f = ev.env.lookupFunction(arg) orelse return Error.UnboundFunction;
+        const f = ev.env.lookupFunction(arg) orelse
+            return ev.unbound(arg, Error.UnboundFunction);
         return ev.set1(f);
     }
     if (!arg.isCons()) return Error.TypeError;
@@ -755,7 +757,8 @@ fn multipleValueCall(ev: *Evaluator, args: Value) Error!Value {
 fn resolveCallee(ev: *Evaluator, designator: Value) Error!Value {
     if (function.isFunction(designator)) return designator;
     if (designator.isSymbol()) {
-        return ev.env.lookupFunction(designator) orelse Error.UnboundFunction;
+        return ev.env.lookupFunction(designator) orelse
+            ev.unbound(designator, Error.UnboundFunction);
     }
     return Error.TypeError;
 }

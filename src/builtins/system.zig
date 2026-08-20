@@ -9,42 +9,39 @@ const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
+const format = @import("format.zig");
+const streams = @import("streams.zig");
 const reader_mod = @import("../reader.zig");
 const eval_mod = @import("../eval/eval.zig");
 const special_forms = @import("../eval/special_forms.zig");
 const function = @import("../eval/function.zig");
+const pathnames = @import("pathnames.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
 const Error = function.NativeError;
 
+/// Namestring behind a pathname designator: a string, or a pathname.
+const namestringOf = pathnames.namestringOf;
+
 fn evaluator(p: *anyopaque) *Evaluator {
     return Evaluator.fromOpaque(p);
-}
-
-pub fn prin1Settings(ev: *Evaluator) printer.Settings {
-    return .{ .escape = true, .current_package = ev.interner.currentPackage() };
-}
-
-pub fn princSettings(ev: *Evaluator) printer.Settings {
-    return .{ .escape = false, .current_package = ev.interner.currentPackage() };
 }
 
 pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORMAT", &formatFn);
     _ = try ev.defineNative("LOAD", &loadFn);
     _ = try ev.defineNative("COMPILE-FILE", &compileFileFn);
-    _ = try ev.defineNative("PATHNAME", &pathnameFn);
-    _ = try ev.defineNative("NAMESTRING", &namestringFn);
     _ = try ev.defineNative("TRUENAME", &truenameFn);
+    _ = try ev.defineNative("PROBE-FILE", &probeFileFn);
+    _ = try ev.defineNative("FILE-WRITE-DATE", &fileWriteDateFn);
+    _ = try ev.defineNative("PRIN1-TO-STRING", toStringFn(true));
+    _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(false));
+    _ = try ev.defineNative("WRITE-TO-STRING", toStringFn(true));
+    function.asFunction(try ev.defineNative("READ-FROM-STRING", &readFromStringFn))
+        .preserves_values = true;
     _ = try ev.defineNative("QUIT", &quitFn);
     _ = try ev.defineNative("EXIT", &quitFn);
-
-    // `*standard-output*` holds T as a placeholder for the console; the
-    // printing builtins treat T as "write to the evaluator's out sink" until
-    // real stream objects exist.
-    const std_out = try ev.interner.intern("*STANDARD-OUTPUT*");
-    symbol_mod.symbol(std_out).value_cell = value.T;
 
     // Bound to namestrings during load / compile-file, nil otherwise.
     // Real pathname objects arrive with the pathname type.
@@ -89,68 +86,72 @@ fn installFeatures(ev: *Evaluator) !void {
 
 // --- format ---
 
-fn writesToConsole(dest: Value) bool {
-    return dest.equalsRaw(value.T);
-}
-
 fn formatFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 2) return Error.WrongArgCount;
     const dest = args[0];
     const control = args[1];
-    if (control.tag() != .heap or heap.heapType(control) != .string) return Error.TypeError;
+    if (!heap.isString(control)) return Error.TypeError;
     const ctrl = heap.asString(control).constSlice();
     const fmt_args = args[2..];
 
-    if (writesToConsole(dest)) {
+    // A nil destination collects into a fresh string and returns it.
+    if (dest.equalsRaw(value.NIL)) {
+        var aw = std.Io.Writer.Allocating.init(ev.allocator);
+        defer aw.deinit();
+        var column: usize = 0;
+        try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
+        return ev.heap.allocString(aw.written());
+    }
+
+    const stream = try streams.streamOf(ev, dest, .output);
+    if (stream.kind == .console) {
         const out = ev.out orelse return Error.NoOutputStream;
-        try formatTo(ev, out, ctrl, fmt_args);
+        try format.run(ev, .{ .writer = out, .column = &ev.output_column }, ctrl, fmt_args);
         return value.NIL;
     }
 
-    // NIL destination: collect into a fresh string and return it.
+    // Any other stream takes the rendered text as bytes.
     var aw = std.Io.Writer.Allocating.init(ev.allocator);
     defer aw.deinit();
-    try formatTo(ev, &aw.writer, ctrl, fmt_args);
-    return ev.heap.allocString(aw.written());
+    var column: usize = 0;
+    try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
+    try streams.emitBytes(ev, stream, aw.written());
+    return value.NIL;
 }
 
-fn formatTo(ev: *Evaluator, writer: *std.Io.Writer, ctrl: []const u8, fmt_args: []const Value) Error!void {
-    var arg_index: usize = 0;
-    var i: usize = 0;
-    while (i < ctrl.len) : (i += 1) {
-        const c = ctrl[i];
-        if (c != '~') {
-            try writer.writeByte(c);
-            continue;
+// --- printing to a string ---
+
+fn toStringFn(comptime escape: bool) function.NativeFn {
+    return struct {
+        fn f(p: *anyopaque, args: []const Value) Error!Value {
+            const ev = evaluator(p);
+            if (args.len != 1) return Error.WrongArgCount;
+            var aw = std.Io.Writer.Allocating.init(ev.allocator);
+            defer aw.deinit();
+            const settings = if (escape) format.prin1Settings(ev) else format.princSettings(ev);
+            try printer.write(ev.allocator, &aw.writer, args[0], settings);
+            return ev.heap.allocString(aw.written());
         }
-        i += 1;
-        if (i >= ctrl.len) return Error.ProgramError;
-        switch (std.ascii.toUpper(ctrl[i])) {
-            'A' => {
-                try printer.write(ev.allocator, writer, try nextArg(fmt_args, &arg_index), princSettings(ev));
-            },
-            'S' => {
-                try printer.write(ev.allocator, writer, try nextArg(fmt_args, &arg_index), prin1Settings(ev));
-            },
-            'D' => {
-                const v = try nextArg(fmt_args, &arg_index);
-                if (!v.isFixnum()) return Error.TypeError;
-                try writer.print("{d}", .{v.toFixnum()});
-            },
-            '%' => try writer.writeByte('\n'),
-            '&' => try writer.writeByte('\n'),
-            '~' => try writer.writeByte('~'),
-            else => return Error.ProgramError,
-        }
-    }
+    }.f;
 }
 
-fn nextArg(fmt_args: []const Value, idx: *usize) Error!Value {
-    if (idx.* >= fmt_args.len) return Error.ProgramError;
-    const v = fmt_args[idx.*];
-    idx.* += 1;
-    return v;
+/// `(read-from-string string)` returns the first form and the index just
+/// past the text it consumed.
+fn readFromStringFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!heap.isString(args[0])) return Error.TypeError;
+    const source = try heap.stringUtf8Alloc(ev.allocator, args[0]);
+    defer ev.allocator.free(source);
+
+    var tokenizer = reader_mod.Tokenizer.init(source);
+    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    const form = rd.read() catch return Error.ProgramError;
+    return ev.setValues(&.{
+        form orelse return Error.ProgramError,
+        Value.fromFixnum(@intCast(tokenizer.idx)),
+    });
 }
 
 // --- load ---
@@ -158,10 +159,7 @@ fn nextArg(fmt_args: []const Value, idx: *usize) Error!Value {
 fn loadFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    const path_v = args[0];
-    if (path_v.tag() != .heap or heap.heapType(path_v) != .string) return Error.TypeError;
-    const path = heap.asString(path_v).constSlice();
-    try loadPath(ev, path);
+    try loadPath(ev, try namestringOf(ev.heap.allocator, args[0]));
     return value.T;
 }
 
@@ -203,35 +201,37 @@ fn truenameOf(ev: *Evaluator, io: std.Io, path: []const u8) ![:0]u8 {
     return std.Io.Dir.cwd().realPathFileAlloc(io, path, ev.allocator);
 }
 
-/// Namestring behind a pathname designator: a string, or a pathname.
-fn namestringOf(v: Value) Error![]const u8 {
-    if (heap.isPathname(v)) return heap.asString(heap.asPathname(v).namestring).constSlice();
-    if (v.tag() == .heap and heap.heapType(v) == .string) return heap.asString(v).constSlice();
-    return Error.TypeError;
-}
-
-fn pathnameFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 1) return Error.WrongArgCount;
-    if (heap.isPathname(args[0])) return args[0];
-    const text = try namestringOf(args[0]);
-    return ev.heap.allocPathname(try ev.heap.allocString(text));
-}
-
-fn namestringFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 1) return Error.WrongArgCount;
-    return ev.heap.allocString(try namestringOf(args[0]));
-}
-
 fn truenameFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const io = ev.io orelse return Error.FileError;
-    const path = try namestringOf(args[0]);
+    const path = try namestringOf(ev.heap.allocator, args[0]);
     const resolved = truenameOf(ev, io, path) catch return Error.FileError;
     defer ev.allocator.free(resolved);
-    return ev.heap.allocPathname(try ev.heap.allocString(resolved));
+    return pathnames.parsed(ev, resolved);
+}
+
+fn probeFileFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    const io = ev.io orelse return Error.FileError;
+    const path = try namestringOf(ev.heap.allocator, args[0]);
+    const resolved = truenameOf(ev, io, path) catch return value.NIL;
+    defer ev.allocator.free(resolved);
+    return pathnames.parsed(ev, resolved);
+}
+
+/// Universal time counts from 1900-01-01, seventy years before the Unix epoch.
+const UNIX_EPOCH_UNIVERSAL_TIME: i64 = 2208988800;
+
+fn fileWriteDateFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    const io = ev.io orelse return Error.FileError;
+    const path = try namestringOf(ev.heap.allocator, args[0]);
+    const info = std.Io.Dir.cwd().statFile(io, path, .{}) catch return Error.FileError;
+    const seconds: i64 = @intCast(@divFloor(info.mtime.nanoseconds, std.time.ns_per_s));
+    return Value.fromFixnum(seconds + UNIX_EPOCH_UNIVERSAL_TIME);
 }
 
 /// Saved global cells for a pathname/truename variable pair, rebound for
@@ -358,8 +358,7 @@ pub fn compileSource(ev: *Evaluator, source: []const u8, out: *std.ArrayList(Val
 fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    if (args[0].tag() != .heap or heap.heapType(args[0]) != .string) return Error.TypeError;
-    const path = heap.asString(args[0]).constSlice();
+    const path = try namestringOf(ev.heap.allocator, args[0]);
 
     const io = ev.io orelse return Error.FileError;
     const source = try readFileAlloc(ev, io, path);
@@ -382,19 +381,10 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
         try compileSource(ev, source, &load_forms);
     }
 
-    const fasl_path = try faslPathOf(ev.allocator, path);
+    const fasl_path = try pathnames.faslPathOf(ev.allocator, path);
     defer ev.allocator.free(fasl_path);
     try writeFasl(ev, io, fasl_path, load_forms.items);
     return ev.heap.allocString(fasl_path);
-}
-
-/// `foo.lisp` compiles to `foo.zfasl`; other names get `.zfasl` appended.
-fn faslPathOf(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const stem = if (std.mem.endsWith(u8, path, ".lisp"))
-        path[0 .. path.len - ".lisp".len]
-    else
-        path;
-    return std.fmt.allocPrint(allocator, "{s}.zfasl", .{stem});
 }
 
 fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value) Error!void {
@@ -406,7 +396,7 @@ fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value)
     const w = &file_writer.interface;
     w.print(";; zisp fasl (readable load-time forms)\n", .{}) catch return Error.FileError;
     for (forms) |f| {
-        printer.write(ev.allocator, w, f, prin1Settings(ev)) catch return Error.FileError;
+        printer.write(ev.allocator, w, f, format.prin1Settings(ev)) catch return Error.FileError;
         w.writeByte('\n') catch return Error.FileError;
     }
     w.flush() catch return Error.FileError;

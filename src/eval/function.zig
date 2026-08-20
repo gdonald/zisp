@@ -29,6 +29,7 @@ pub const NativeError = error{
     Throw,
     ProgramError,
     DivisionByZero,
+    ArithmeticError,
     FileError,
     NoOutputStream,
     Quit,

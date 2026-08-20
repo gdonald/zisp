@@ -187,6 +187,40 @@ test "print is cycle-safe when a cons appears in its own car" {
     try std.testing.expect(std.mem.indexOf(u8, s, "cycle") != null);
 }
 
+test "string elements past ascii are encoded back to utf-8" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var interner = try Interner.init(a);
+    defer interner.deinit();
+    try symbol.initStandardSymbols(&interner);
+
+    var h = Heap.init(arena.allocator());
+    const v = try h.allocString(&[_]u8{ 'h', 0xE9, 'y' });
+
+    const escaped = try fmtValue(a, v);
+    defer a.free(escaped);
+    try std.testing.expectEqualStrings("\"h\xc3\xa9y\"", escaped);
+}
+
+test "structure shared between branches prints in full, not as a cycle" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var interner = try Interner.init(a);
+    defer interner.deinit();
+    try symbol.initStandardSymbols(&interner);
+
+    var h = Heap.init(arena.allocator());
+    const shared = try h.allocCons(Value.fromFixnum(1), value.NIL);
+    const second = try h.allocCons(shared, value.NIL);
+    const list = try h.allocCons(shared, second);
+
+    const s = try fmtValue(a, list);
+    defer a.free(s);
+    try std.testing.expectEqualStrings("((1) (1))", s);
+}
+
 test "print emits #<deep> when nesting exceeds MAX_DEPTH" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
@@ -231,7 +265,7 @@ test "print vector heap object" {
     try std.testing.expectEqualStrings("#(1 2)", s);
 }
 
-test "print single-float emits scientific notation" {
+test "a single-float of the default type prints with no exponent marker" {
     const a = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -239,10 +273,7 @@ test "print single-float emits scientific notation" {
     const v = try h.allocSingleFloat(1.5);
     const s = try fmtValue(a, v);
     defer a.free(s);
-    // Phase-0 printer uses Zig's `{e}` formatter; we just check that the
-    // mantissa lands and an exponent marker shows up.
-    try std.testing.expect(std.mem.indexOf(u8, s, "1.5") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "e") != null);
+    try std.testing.expectEqualStrings("1.5", s);
 }
 
 test "print double-float emits d0 suffix" {
@@ -262,7 +293,7 @@ test "print ratio emits num/den" {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     var h = heap.Heap.init(arena.allocator());
-    const v = try h.allocRatio(3, 4);
+    const v = try h.allocRatio(Value.fromFixnum(3), Value.fromFixnum(4));
     const s = try fmtValue(a, v);
     defer a.free(s);
     try std.testing.expectEqualStrings("3/4", s);
@@ -478,7 +509,7 @@ test "ratio respects base/radix" {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     var h = heap.Heap.init(arena.allocator());
-    const v = try h.allocRatio(15, 16);
+    const v = try h.allocRatio(Value.fromFixnum(15), Value.fromFixnum(16));
     const s = try writeOwned(a, v, .{ .base = 16, .radix = true });
     defer a.free(s);
     try std.testing.expectEqualStrings("#xF/10", s);

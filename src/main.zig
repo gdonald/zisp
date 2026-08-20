@@ -62,7 +62,7 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
         result catch |e| {
             if (e == error.Quit) break;
             try out.flush();
-            cli.write("zisp: error: {s}\n", .{@errorName(e)});
+            reportError(repl, e);
             return @intFromEnum(cli.ExitCode.user_error);
         };
     }
@@ -73,7 +73,7 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
             repl.loadFile(path) catch |e| {
                 if (e != error.Quit) {
                     try out.flush();
-                    cli.write("zisp: error: {s}\n", .{@errorName(e)});
+                    reportError(repl, e);
                     return @intFromEnum(cli.ExitCode.user_error);
                 }
             };
@@ -96,6 +96,18 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
 
     try out.flush();
     return @intFromEnum(cli.ExitCode.success);
+}
+
+/// Print a failed batch op's error, naming the symbol when the evaluator
+/// recorded one for an unbound-variable or unbound-function failure.
+fn reportError(repl: *zisp.repl.Repl, e: anyerror) void {
+    const sym = repl.ev.error_symbol;
+    const named = (e == error.UnboundVariable or e == error.UnboundFunction) and sym.isSymbol();
+    if (named) {
+        cli.write("zisp: error: {s}: {s}\n", .{ @errorName(e), zisp.symbol.name(sym) });
+    } else {
+        cli.write("zisp: error: {s}\n", .{@errorName(e)});
+    }
 }
 
 /// Bind `*command-line-arguments*` to a list of the script's arguments.

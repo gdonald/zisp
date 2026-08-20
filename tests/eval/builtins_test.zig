@@ -533,3 +533,80 @@ test "gensym supports the classic macro hygiene pattern" {
         \\  (let ((tmp 7)) (swap-order tmp 3)))
     , 307);
 }
+
+test "assoc finds the pair whose car matches" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(cdr (assoc 'b '((a . 1) (b . 2))))", 2);
+    try fx.expectNil("(assoc 'z '((a . 1)))");
+}
+
+test "assoc skips nil entries in the alist" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(cdr (assoc 'b '(nil (b . 2))))", 2);
+}
+
+test "assoc honors :test and :key" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(cdr (assoc \"b\" '((\"a\" . 1) (\"b\" . 2)) :test #'equal))", 2);
+    try fx.expectFix("(cdr (assoc 'b '(((x b) . 1)) :key #'cadr))", 1);
+}
+
+test "assoc rejects a bad option, a non-pair entry, and a dotted alist" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.WrongArgCount, "(assoc 'a)");
+    try fx.expectErr(Error.ProgramError, "(assoc 'a '((a . 1)) :frob 2)");
+    try fx.expectErr(Error.WrongArgCount, "(assoc 'a '((a . 1)) :test)");
+    try fx.expectErr(Error.TypeError, "(assoc 'a '(7))");
+    try fx.expectErr(Error.TypeError, "(assoc 'z '((a . 1) . 9))");
+}
+
+test "member compares numbers with eql rather than identity" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectT("(equal (member 2.5 '(1.5 2.5)) '(2.5))");
+}
+
+test "fboundp is true for functions, macros and special forms" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectT("(fboundp 'car)");
+    try fx.expectT("(fboundp 'when)");
+    try fx.expectT("(fboundp 'quote)");
+    try fx.expectNil("(fboundp 'no-such-function)");
+    try fx.expectErr(Error.TypeError, "(fboundp 7)");
+    try fx.expectErr(Error.WrongArgCount, "(fboundp)");
+}
+
+test "boundp reports whether a symbol's value cell is filled" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectNil("(boundp 'not-set-anywhere)");
+    _ = try fx.evalStr("(defvar *set-here* 1)");
+    try fx.expectT("(boundp '*set-here*)");
+    try fx.expectErr(Error.TypeError, "(boundp 7)");
+    try fx.expectErr(Error.WrongArgCount, "(boundp)");
+}
+
+test "an unbound name is recorded on the evaluator for the driver to report" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.UnboundFunction, "(no-such-function 1)");
+    try testing.expectEqualStrings("NO-SUCH-FUNCTION", symbol_mod.name(fx.ev.error_symbol));
+    try fx.expectErr(Error.UnboundVariable, "no-such-variable");
+    try testing.expectEqualStrings("NO-SUCH-VARIABLE", symbol_mod.name(fx.ev.error_symbol));
+}
+
+test "the unbound name is recorded from symbol-value, symbol-function and funcall" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.UnboundVariable, "(symbol-value 'nowhere-var)");
+    try testing.expectEqualStrings("NOWHERE-VAR", symbol_mod.name(fx.ev.error_symbol));
+    try fx.expectErr(Error.UnboundFunction, "(symbol-function 'nowhere-fn)");
+    try testing.expectEqualStrings("NOWHERE-FN", symbol_mod.name(fx.ev.error_symbol));
+    try fx.expectErr(Error.UnboundFunction, "(funcall 'nowhere-callee)");
+    try testing.expectEqualStrings("NOWHERE-CALLEE", symbol_mod.name(fx.ev.error_symbol));
+}

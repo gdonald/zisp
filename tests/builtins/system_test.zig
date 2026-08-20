@@ -119,7 +119,9 @@ test "format to nil returns a fresh string and writes nothing to console" {
     defer fx.deinit(testing.allocator);
     const result = try fx.evalStr("(format nil \"~A!\" 99)");
     try testing.expect(result.tag() == .heap and heap_mod.heapType(result) == .string);
-    try testing.expectEqualStrings("99!", heap_mod.asString(result).constSlice());
+    const printed = try heap_mod.stringUtf8Alloc(testing.allocator, result);
+    defer testing.allocator.free(printed);
+    try testing.expectEqualStrings("99!", printed);
     try testing.expectEqualStrings("", fx.console());
 }
 
@@ -148,10 +150,11 @@ test "format with a trailing tilde is a program error" {
     try testing.expectError(error.ProgramError, fx.evalStr("(format t \"abc~\")"));
 }
 
-test "format ~D on a non-integer is a type error" {
+test "format ~D on a non-integer prints it as if by ~A" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try testing.expectError(error.TypeError, fx.evalStr("(format t \"~D\" \"x\")"));
+    _ = try fx.evalStr("(format t \"~D\" \"x\")");
+    try testing.expectEqualStrings("x", fx.console());
 }
 
 test "format with a non-string control is a type error" {
@@ -238,10 +241,16 @@ test "features holds zisp and ansi-cl keywords" {
     try testing.expect(saw_ansi);
 }
 
-test "standard-output is bound" {
+test "the standard streams are bound to console streams" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try testing.expect(fx.symValue("*STANDARD-OUTPUT*").equalsRaw(value.T));
+    for ([_][]const u8{
+        "*STANDARD-OUTPUT*", "*ERROR-OUTPUT*", "*TRACE-OUTPUT*",
+        "*QUERY-IO*",        "*TERMINAL-IO*",  "*DEBUG-IO*",
+        "*STANDARD-INPUT*",
+    }) |name| {
+        try testing.expect(heap_mod.isStream(fx.symValue(name)));
+    }
 }
 
 // --- load ---
@@ -328,7 +337,7 @@ test "evalSource evaluates each form" {
 
 fn namestringOf(fx: *Fixture, src: []const u8) ![]const u8 {
     const v = try fx.evalStr(src);
-    return heap_mod.asString(heap_mod.asPathname(v).namestring).constSlice();
+    return zisp.pathname.namestringOf(fx.arena.allocator(), v);
 }
 
 test "#P reads a pathname carrying its namestring" {
@@ -355,9 +364,13 @@ test "namestring returns the text of either designator" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     const v = try fx.evalStr("(namestring #P\"a/b\")");
-    try testing.expectEqualStrings("a/b", heap_mod.asString(v).constSlice());
+    const a_text = try heap_mod.stringUtf8Alloc(testing.allocator, v);
+    defer testing.allocator.free(a_text);
+    try testing.expectEqualStrings("a/b", a_text);
     const w = try fx.evalStr("(namestring \"c/d\")");
-    try testing.expectEqualStrings("c/d", heap_mod.asString(w).constSlice());
+    const c_text = try heap_mod.stringUtf8Alloc(testing.allocator, w);
+    defer testing.allocator.free(c_text);
+    try testing.expectEqualStrings("c/d", c_text);
 }
 
 test "pathname functions reject non-designators" {
@@ -404,4 +417,82 @@ test "load restores the package the file changed" {
     _ = try fx.evalStr("(load \"vendor/ansi-test/rt-package.lsp\")");
     _ = try fx.evalStr("(load \"tests/lisp/in-package-only.lisp\")");
     try testing.expect(fx.interner.currentPackage() == before);
+}
+
+test "probe-file returns the truename of an existing file and nil otherwise" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "here.lisp", .data = "(setq x 1)" });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/here.lisp", .{tmp.sub_path});
+    defer testing.allocator.free(path);
+
+    const src = try std.fmt.allocPrint(testing.allocator, "(namestring (probe-file \"{s}\"))", .{path});
+    defer testing.allocator.free(src);
+    const found = try fx.evalStr(src);
+    const found_text = try heap_mod.stringUtf8Alloc(testing.allocator, found);
+    defer testing.allocator.free(found_text);
+    try testing.expect(std.mem.endsWith(u8, found_text, "here.lisp"));
+
+    try testing.expect((try fx.evalStr("(probe-file \"does-not-exist-zzz.lisp\")")).equalsRaw(value.NIL));
+}
+
+test "probe-file takes one argument and needs io" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectError(error.WrongArgCount, fx.evalStr("(probe-file)"));
+    try testing.expectError(error.TypeError, fx.evalStr("(probe-file 7)"));
+    fx.ev.io = null;
+    try testing.expectError(error.FileError, fx.evalStr("(probe-file \"x.lisp\")"));
+}
+
+test "file-write-date counts seconds from 1900 and so exceeds the 1970 epoch" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "dated.lisp", .data = "(setq x 1)" });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/dated.lisp", .{tmp.sub_path});
+    defer testing.allocator.free(path);
+
+    const src = try std.fmt.allocPrint(testing.allocator, "(file-write-date \"{s}\")", .{path});
+    defer testing.allocator.free(src);
+    const stamp = try fx.evalStr(src);
+    try testing.expect(stamp.toFixnum() > 2208988800);
+}
+
+test "file-write-date takes one argument, needs io, and fails on a missing file" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectError(error.WrongArgCount, fx.evalStr("(file-write-date)"));
+    try testing.expectError(error.TypeError, fx.evalStr("(file-write-date 7)"));
+    try testing.expectError(error.FileError, fx.evalStr("(file-write-date \"does-not-exist-zzz.lisp\")"));
+    fx.ev.io = null;
+    try testing.expectError(error.FileError, fx.evalStr("(file-write-date \"x.lisp\")"));
+}
+
+test "load accepts a pathname as well as a namestring" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "viapath.lisp", .data = "(setq via-pathname 42)" });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/viapath.lisp", .{tmp.sub_path});
+    defer testing.allocator.free(path);
+
+    const src = try std.fmt.allocPrint(testing.allocator, "(load (pathname \"{s}\"))", .{path});
+    defer testing.allocator.free(src);
+    _ = try fx.evalStr(src);
+    try testing.expectEqual(@as(i64, 42), fx.symValue("VIA-PATHNAME").toFixnum());
+}
+
+test "format encodes literal control-string characters back to utf-8" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    _ = try fx.evalStr("(format t \"h\xc3\xa9y\")");
+    try testing.expectEqualStrings("h\xc3\xa9y", fx.console());
 }

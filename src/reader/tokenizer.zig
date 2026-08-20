@@ -378,6 +378,14 @@ pub const Tokenizer = struct {
                     .text = self.src[start_idx..self.idx],
                 };
             },
+            'c', 'C' => blk: {
+                self.advance();
+                break :blk .{
+                    .kind = .hash_c,
+                    .pos = start_pos,
+                    .text = self.src[start_idx..self.idx],
+                };
+            },
             '\\' => self.charLiteral(start_pos),
             ':' => blk: {
                 self.advance(); // ':'

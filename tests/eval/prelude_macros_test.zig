@@ -246,12 +246,12 @@ test "typep covers the runtime's atomic types" {
     try fx.expectNil("(typep 5 'nil)");
 }
 
-test "typep rejects unknown and compound type specifiers" {
+test "typep rejects an unknown type specifier" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
 
     try testing.expectError(Error.ProgramError, fx.evalStr("(typep 5 'flonk)"));
-    try testing.expectError(Error.ProgramError, fx.evalStr("(typep 5 '(integer 0 10))"));
+    try testing.expectError(Error.ProgramError, fx.evalStr("(typep 5 '(flonk 0 10))"));
     try testing.expectError(Error.WrongArgCount, fx.evalStr("(typep 5)"));
 }
 
@@ -262,4 +262,29 @@ test "error signals from lisp code" {
     try testing.expectError(Error.ProgramError, fx.evalStr("(error \"boom\")"));
     try testing.expectError(Error.ProgramError, fx.evalStr("(error \"~s is bad\" 5)"));
     try testing.expectError(Error.WrongArgCount, fx.evalStr("(error)"));
+}
+
+test "nth-value picks one value out of a multiple-value form" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(nth-value 0 (values 7 8 9))", 7);
+    try fx.expectFix("(nth-value 2 (values 7 8 9))", 9);
+    try fx.expectNil("(nth-value 5 (values 7 8 9))");
+}
+
+test "handler-bind evaluates its handlers and then its body" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    _ = try fx.evalStr("(defvar *handler-evaluated* nil)");
+    try fx.expectFix(
+        "(handler-bind ((error (progn (setq *handler-evaluated* t) nil))) 4)",
+        4,
+    );
+    try fx.expectT("*handler-evaluated*");
+}
+
+test "handler-bind with no handlers and no body is nil" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectNil("(handler-bind ())");
 }

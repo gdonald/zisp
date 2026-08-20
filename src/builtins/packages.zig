@@ -50,6 +50,8 @@ pub fn registerPackages(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAKE-SYMBOL", &makeSymbolFn);
     _ = try ev.defineNative("SYMBOL-NAME", &symbolNameFn);
     _ = try ev.defineNative("%PACKAGE-SYMBOLS", &packageSymbolsFn);
+    _ = try ev.defineNative("%ALL-SYMBOLS", &allSymbolsFn);
+    _ = try ev.defineNative("%ADD-NICKNAMES", &addNicknamesFn);
 
     function.asFunction(ev.env.lookupFunction(try ev.interner.intern("INTERN")).?).preserves_values = true;
     function.asFunction(ev.env.lookupFunction(try ev.interner.intern("FIND-SYMBOL")).?).preserves_values = true;
@@ -76,7 +78,7 @@ fn listOfValues(ev: *Evaluator, items: []const Value) Error!Value {
 fn makePackageFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len == 0 or (args.len - 1) % 2 != 0) return Error.WrongArgCount;
-    const name = try special_forms.stringDesignator(args[0]);
+    const name = try special_forms.stringDesignator(ev.heap.allocator, args[0]);
     if (ev.interner.registry.find(name) != null) return Error.PackageError;
 
     const nicknames_kw = try ev.interner.internKeyword("NICKNAMES");
@@ -95,7 +97,7 @@ fn makePackageFn(p: *anyopaque, args: []const Value) Error!Value {
     const pkg = ev.interner.registry.create(name) catch return Error.PackageError;
     var nick = nicknames;
     while (nick.isCons()) : (nick = heap.cdr(nick)) {
-        const text = try special_forms.stringDesignator(heap.car(nick));
+        const text = try special_forms.stringDesignator(ev.heap.allocator, heap.car(nick));
         ev.interner.registry.addNickname(pkg, text) catch return Error.PackageError;
     }
     var used = use_list;
@@ -105,11 +107,29 @@ fn makePackageFn(p: *anyopaque, args: []const Value) Error!Value {
     return pkg.toValue();
 }
 
+/// The nicknames half of `make-package`, so `defpackage` can add them to
+/// a package that already exists.
+fn addNicknamesFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    const pkg = try special_forms.resolvePackage(ev, args[1]);
+    var rest = args[0];
+    while (rest.isCons()) : (rest = heap.cdr(rest)) {
+        const text = try special_forms.stringDesignator(ev.heap.allocator, heap.car(rest));
+        if (ev.interner.registry.find(text)) |existing| {
+            if (existing == pkg) continue;
+            return Error.PackageError;
+        }
+        ev.interner.registry.addNickname(pkg, text) catch return Error.PackageError;
+    }
+    return value.NIL;
+}
+
 fn findPackageFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     if (package_mod.isPackage(args[0])) return args[0];
-    const name = try special_forms.stringDesignator(args[0]);
+    const name = try special_forms.stringDesignator(ev.heap.allocator, args[0]);
     const pkg = ev.interner.registry.find(name) orelse return value.NIL;
     return pkg.toValue();
 }
@@ -118,7 +138,7 @@ fn deletePackageFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     if (!package_mod.isPackage(args[0])) {
-        const name = try special_forms.stringDesignator(args[0]);
+        const name = try special_forms.stringDesignator(ev.heap.allocator, args[0]);
         if (ev.interner.registry.find(name) == null) return value.NIL;
     }
     const pkg = try special_forms.resolvePackage(ev, args[0]);
@@ -215,7 +235,7 @@ fn statusKeyword(ev: *Evaluator, status: package_mod.Status) Error!Value {
 fn internFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
-    const name = try special_forms.stringDesignator(args[0]);
+    const name = try special_forms.stringDesignator(ev.heap.allocator, args[0]);
     const pkg = try packageArg(ev, args, 1);
     if (pkg.findSymbol(name)) |found| {
         _ = try ev.setValues(&.{ found.sym, try statusKeyword(ev, found.status) });
@@ -229,7 +249,7 @@ fn internFn(p: *anyopaque, args: []const Value) Error!Value {
 fn findSymbolFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
-    const name = try special_forms.stringDesignator(args[0]);
+    const name = try special_forms.stringDesignator(ev.heap.allocator, args[0]);
     const pkg = try packageArg(ev, args, 1);
     if (pkg.findSymbol(name)) |found| {
         _ = try ev.setValues(&.{ found.sym, try statusKeyword(ev, found.status) });
@@ -247,9 +267,26 @@ fn uninternFn(p: *anyopaque, args: []const Value) Error!Value {
     const name = symbol_mod.symbol(args[0]).name;
     const present = pkg.findPresent(name) orelse return value.NIL;
     if (!present.sym.equalsRaw(args[0])) return value.NIL;
+    // Removing a shadowing symbol uncovers whatever the used packages
+    // export under that name, which may now be two different symbols.
+    if (pkg.isShadowing(name)) try checkUncovered(pkg, name);
     pkg.removePresent(name);
     if (symbol_mod.symbol(args[0]).home == pkg) symbol_mod.symbol(args[0]).home = null;
     return value.T;
+}
+
+/// Whether the used packages export more than one symbol under `name`,
+/// which is what a shadowing symbol was holding apart.
+fn checkUncovered(pkg: *Package, name: []const u8) Error!void {
+    var seen: ?Value = null;
+    for (pkg.use_list.items) |used| {
+        const sym = used.external.get(name) orelse continue;
+        if (seen) |first| {
+            if (!first.equalsRaw(sym)) return Error.PackageError;
+        } else {
+            seen = sym;
+        }
+    }
 }
 
 /// Apply `body` to every symbol in a symbol-or-list designator.
@@ -280,6 +317,14 @@ fn exportOne(ctx: PackageOp, sym: Value) Error!void {
         try ctx.pkg.addInternal(name, sym);
     }
     if (ctx.pkg.external.contains(name)) return;
+    // A package that uses this one may already see a different symbol of
+    // the same name, and exporting would make both visible at once.
+    for (ctx.pkg.used_by.items) |user| {
+        const seen = user.findSymbol(name) orelse continue;
+        if (seen.sym.equalsRaw(sym)) continue;
+        if (user.isShadowing(name)) continue;
+        return Error.PackageError;
+    }
     _ = ctx.pkg.internal.remove(name);
     try ctx.pkg.addExternal(name, sym);
 }
@@ -309,9 +354,11 @@ fn unexportFn(p: *anyopaque, args: []const Value) Error!Value {
 
 fn importOne(ctx: PackageOp, sym: Value) Error!void {
     const name = symbol_mod.symbol(sym).name;
-    if (ctx.pkg.findPresent(name)) |found| {
-        if (found.sym.equalsRaw(sym)) return;
-        return Error.PackageError;
+    // Any accessible symbol of that name conflicts, inherited ones
+    // included; `shadowing-import` is the operation that overrides.
+    if (ctx.pkg.findSymbol(name)) |found| {
+        if (!found.sym.equalsRaw(sym)) return Error.PackageError;
+        if (found.status != .inherited) return;
     }
     try ctx.pkg.addInternal(name, sym);
     if (symbol_mod.symbol(sym).home == null) symbol_mod.symbol(sym).home = ctx.pkg;
@@ -349,10 +396,10 @@ fn shadowFn(p: *anyopaque, args: []const Value) Error!Value {
     if (designator.isCons() or designator.equalsRaw(value.NIL)) {
         var rest = designator;
         while (rest.isCons()) : (rest = heap.cdr(rest)) {
-            try shadowName(ev, pkg, try special_forms.stringDesignator(heap.car(rest)));
+            try shadowName(ev, pkg, try special_forms.stringDesignator(ev.heap.allocator, heap.car(rest)));
         }
     } else {
-        try shadowName(ev, pkg, try special_forms.stringDesignator(designator));
+        try shadowName(ev, pkg, try special_forms.stringDesignator(ev.heap.allocator, designator));
     }
     return value.T;
 }
@@ -363,17 +410,38 @@ fn shadowName(ev: *Evaluator, pkg: *Package, name: []const u8) Error!void {
     try pkg.shadowing.put(pkg.allocator, symbol_mod.symbol(sym).name, sym);
 }
 
+/// Adopting a package must not make two different symbols of one name
+/// visible at once. A name the adopting package shadows is settled
+/// already, so it never conflicts.
+fn checkUseConflicts(pkg: *Package, incoming: *Package) Error!void {
+    var it = incoming.external.iterator();
+    while (it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        if (pkg.isShadowing(name)) continue;
+        const seen = pkg.findSymbol(name) orelse continue;
+        if (seen.sym.equalsRaw(entry.value_ptr.*)) continue;
+        return Error.PackageError;
+    }
+}
+
+fn useOne(ev: *Evaluator, pkg: *Package, designator: Value) Error!void {
+    const incoming = try special_forms.resolvePackage(ev, designator);
+    if (pkg.usesPackage(incoming)) return;
+    try checkUseConflicts(pkg, incoming);
+    try pkg.addUse(incoming);
+}
+
 fn usePackageFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
     const pkg = try packageArg(ev, args, 1);
     var rest = args[0];
     if (!rest.isCons() and !rest.equalsRaw(value.NIL)) {
-        try pkg.addUse(try special_forms.resolvePackage(ev, rest));
+        try useOne(ev, pkg, rest);
         return value.T;
     }
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
-        try pkg.addUse(try special_forms.resolvePackage(ev, heap.car(rest)));
+        try useOne(ev, pkg, heap.car(rest));
     }
     return value.T;
 }
@@ -417,16 +485,34 @@ fn symbolNameFn(p: *anyopaque, args: []const Value) Error!Value {
 fn makeSymbolFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    return ev.interner.makeUninterned(try special_forms.stringDesignator(args[0]));
+    return ev.interner.makeUninterned(try special_forms.stringDesignator(ev.heap.allocator, args[0]));
 }
 
 /// `(%package-symbols pkg kind)` — the list backing `do-symbols` and its
 /// siblings. `kind` selects `:internal`, `:external`, or `:inherited`.
+/// Every symbol present in any package, which is what `do-all-symbols`
+/// walks. A symbol present in several packages appears once per package,
+/// as CLHS allows.
+fn allSymbolsFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    var out: std.ArrayList(Value) = .empty;
+    defer out.deinit(ev.allocator);
+    for (ev.interner.registry.list.items) |pkg| {
+        if (pkg.deleted) continue;
+        var external = pkg.external.valueIterator();
+        while (external.next()) |sym| try out.append(ev.allocator, sym.*);
+        var internal = pkg.internal.valueIterator();
+        while (internal.next()) |sym| try out.append(ev.allocator, sym.*);
+    }
+    return listOfValues(ev, out.items);
+}
+
 fn packageSymbolsFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
     const pkg = try special_forms.resolvePackage(ev, args[0]);
-    const kind = try special_forms.stringDesignator(args[1]);
+    const kind = try special_forms.stringDesignator(ev.heap.allocator, args[1]);
 
     var out: std.ArrayList(Value) = .empty;
     defer out.deinit(ev.allocator);

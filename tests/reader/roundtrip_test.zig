@@ -87,7 +87,7 @@ const Generator = struct {
             den = @divTrunc(den, @as(i64, @intCast(g)));
         }
         if (den == 1) return Value.fromFixnum(num);
-        return self.setup.h.allocRatio(num, den);
+        return self.setup.h.allocRatio(Value.fromFixnum(num), Value.fromFixnum(den));
     }
 
     fn string(self: *Generator) !Value {

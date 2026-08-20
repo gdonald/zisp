@@ -8,6 +8,17 @@ const function = @import("../eval/function.zig");
 pub const system = @import("system.zig");
 pub const registerSystem = system.registerSystem;
 pub const packages = @import("packages.zig");
+pub const pathnames = @import("pathnames.zig");
+pub const strings = @import("strings.zig");
+pub const sequences = @import("sequences.zig");
+pub const arrays = @import("arrays.zig");
+pub const hash_tables = @import("hash_tables.zig");
+pub const numbers = @import("numbers.zig");
+pub const characters = @import("characters.zig");
+pub const streams = @import("streams.zig");
+pub const types = @import("types.zig");
+pub const pprint = @import("pprint.zig");
+const equality = @import("../runtime/equality.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -65,8 +76,6 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("LIST", &listFn);
     _ = try ev.defineNative("LIST*", &listStarFn);
     _ = try ev.defineNative("APPEND", &appendFn);
-    _ = try ev.defineNative("REVERSE", &reverseFn);
-    _ = try ev.defineNative("NREVERSE", &nreverseFn);
     _ = try ev.defineNative("LENGTH", &lengthFn);
 
     _ = try ev.defineNative("EQ", &eqFn);
@@ -81,32 +90,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("ENDP", &endpFn);
     _ = try ev.defineNative("SYMBOLP", &symbolpFn);
     _ = try ev.defineNative("NUMBERP", &numberpFn);
-    _ = try ev.defineNative("INTEGERP", &integerpFn);
     _ = try ev.defineNative("STRINGP", &stringpFn);
-
-    _ = try ev.defineNative("+", &addFn);
-    _ = try ev.defineNative("-", &subFn);
-    _ = try ev.defineNative("*", &mulFn);
-    _ = try ev.defineNative("/", &divFn);
-    _ = try ev.defineNative("MOD", &modFn);
-    _ = try ev.defineNative("REM", &remFn);
-    _ = try ev.defineNative("1+", &onePlusFn);
-    _ = try ev.defineNative("1-", &oneMinusFn);
-    _ = try ev.defineNative("ABS", &absFn);
-    _ = try ev.defineNative("MIN", &minFn);
-    _ = try ev.defineNative("MAX", &maxFn);
-
-    _ = try ev.defineNative("=", cmpFn(.eq));
-    _ = try ev.defineNative("/=", cmpFn(.ne));
-    _ = try ev.defineNative("<", cmpFn(.lt));
-    _ = try ev.defineNative(">", cmpFn(.gt));
-    _ = try ev.defineNative("<=", cmpFn(.le));
-    _ = try ev.defineNative(">=", cmpFn(.ge));
-    _ = try ev.defineNative("ZEROP", zeropFn);
-    _ = try ev.defineNative("PLUSP", pluspFn);
-    _ = try ev.defineNative("MINUSP", minuspFn);
-    _ = try ev.defineNative("ODDP", &oddpFn);
-    _ = try ev.defineNative("EVENP", &evenpFn);
 
     _ = try ev.defineNative("NOT", &notFn);
 
@@ -126,7 +110,6 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAPC", &mapcFn);
     _ = try ev.defineNative("MAPCAN", &mapcanFn);
     _ = try ev.defineNative("ERROR", &errorFn);
-    _ = try ev.defineNative("TYPEP", &typepFn);
 
     _ = try ev.defineNative("RPLACA", &rplacaFn);
     _ = try ev.defineNative("RPLACD", &rplacdFn);
@@ -140,11 +123,10 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("%SET-SYMBOL-PLIST", &setSymbolPlistFn);
     _ = try ev.defineNative("ELT", &eltFn);
     _ = try ev.defineNative("%SET-ELT", &setEltFn);
-    _ = try ev.defineNative("AREF", &arefFn);
-    _ = try ev.defineNative("%SET-AREF", &setArefFn);
-    _ = try ev.defineNative("MAKE-HASH-TABLE", &makeHashTableFn);
-    _ = try ev.defineNative("%PUTHASH", &puthashFn);
     _ = try ev.defineNative("MEMBER", &memberFn);
+    _ = try ev.defineNative("ASSOC", &assocFn);
+    _ = try ev.defineNative("FBOUNDP", &fboundpFn);
+    _ = try ev.defineNative("BOUNDP", &boundpFn);
 
     _ = try ev.defineNative("%MAKE-STRUCTURE", &makeStructureFn);
     _ = try ev.defineNative("%STRUCTURE-P", &structurePFn);
@@ -155,7 +137,6 @@ pub fn registerStandard(ev: *Evaluator) !void {
 
     // Pass-through natives keep the values channel of the call they make
     // (or the values they set themselves).
-    function.asFunction(try ev.defineNative("GETHASH", &gethashFn)).preserves_values = true;
     const funcall_v = ev.env.lookupFunction(try ev.interner.intern("FUNCALL")).?;
     function.asFunction(funcall_v).preserves_values = true;
     const apply_v = ev.env.lookupFunction(try ev.interner.intern("APPLY")).?;
@@ -164,6 +145,17 @@ pub fn registerStandard(ev: *Evaluator) !void {
     function.asFunction(eval_v).preserves_values = true;
 
     try packages.registerPackages(ev);
+    try pathnames.registerPathnames(ev);
+    try strings.registerStrings(ev);
+    try sequences.registerSequences(ev);
+    try arrays.registerArrays(ev);
+    try hash_tables.registerHashTables(ev);
+    try numbers.registerNumbers(ev);
+    try characters.registerCharacters(ev);
+    try streams.registerStreams(ev);
+    try types.registerTypes(ev);
+    try pprint.registerPprint(ev);
+    try pathnames.registerPathnames(ev);
     // Ahead of the prelude: reading the prelude interns every symbol it
     // mentions in the current package, so a name the prelude uses before
     // its native exists would shadow the later definition.
@@ -224,11 +216,12 @@ fn putFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn symbolValueFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 1) return Error.WrongArgCount;
     if (!args[0].isSymbol()) return Error.TypeError;
     const cell = symbol_mod.symbol(args[0]).value_cell;
-    if (cell.equalsRaw(value.SPECIAL_UNBOUND)) return Error.UnboundVariable;
+    if (cell.equalsRaw(value.SPECIAL_UNBOUND)) {
+        return evaluator(p).unbound(args[0], Error.UnboundVariable);
+    }
     return cell;
 }
 
@@ -241,11 +234,12 @@ fn setSymbolValueFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn symbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 1) return Error.WrongArgCount;
     if (!args[0].isSymbol()) return Error.TypeError;
     const cell = symbol_mod.symbol(args[0]).function_cell;
-    if (cell.equalsRaw(value.SPECIAL_UNBOUND)) return Error.UnboundFunction;
+    if (cell.equalsRaw(value.SPECIAL_UNBOUND)) {
+        return evaluator(p).unbound(args[0], Error.UnboundFunction);
+    }
     return cell;
 }
 
@@ -256,6 +250,21 @@ fn setSymbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!function.isFunction(args[1])) return Error.TypeError;
     symbol_mod.symbol(args[0]).function_cell = args[1];
     return args[1];
+}
+
+fn fboundpFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return Error.TypeError;
+    if (ev.lookupSpecialForm(args[0]) != null) return value.T;
+    return if (ev.env.lookupFunction(args[0]) != null) value.T else value.NIL;
+}
+
+fn boundpFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return Error.TypeError;
+    return if (ev.env.lookupValue(args[0]) != null) value.T else value.NIL;
 }
 
 fn symbolPlistFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -294,12 +303,7 @@ fn eltFn(p: *anyopaque, args: []const Value) Error!Value {
         }
         return Error.TypeError;
     }
-    if (args[0].tag() == .heap and heap.heapType(args[0]) == .vector) {
-        const vec = heap.asVector(args[0]);
-        if (i >= vec.len) return Error.TypeError;
-        return vec.slice()[i];
-    }
-    return Error.TypeError;
+    return elementOf(args[0], args[1]);
 }
 
 fn setEltFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -319,34 +323,37 @@ fn setEltFn(p: *anyopaque, args: []const Value) Error!Value {
         }
         return Error.TypeError;
     }
-    if (args[0].tag() == .heap and heap.heapType(args[0]) == .vector) {
-        const vec = heap.asVector(args[0]);
-        if (i >= vec.len) return Error.TypeError;
-        vec.slice()[i] = args[2];
-        return args[2];
+    return setElementOf(args[0], args[1], args[2]);
+}
+
+/// One element of a vector or a string, bounds-checked.
+fn elementOf(seq: Value, index_v: Value) Error!Value {
+    const i = try eltIndex(index_v);
+    if (heap.isString(seq)) {
+        const chars = heap.asString(seq).constSlice();
+        if (i >= chars.len) return Error.TypeError;
+        return Value.fromChar(@intCast(chars[i]));
     }
-    return Error.TypeError;
+    if (!heap.isArray(seq)) return Error.TypeError;
+    const slots = heap.arrayActive(seq);
+    if (i >= slots.len) return Error.TypeError;
+    return slots[i];
 }
 
-fn arefFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 2) return Error.WrongArgCount;
-    if (args[0].tag() != .heap or heap.heapType(args[0]) != .vector) return Error.TypeError;
-    const i = try eltIndex(args[1]);
-    const vec = heap.asVector(args[0]);
-    if (i >= vec.len) return Error.TypeError;
-    return vec.slice()[i];
-}
-
-fn setArefFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 3) return Error.WrongArgCount;
-    if (args[0].tag() != .heap or heap.heapType(args[0]) != .vector) return Error.TypeError;
-    const i = try eltIndex(args[1]);
-    const vec = heap.asVector(args[0]);
-    if (i >= vec.len) return Error.TypeError;
-    vec.slice()[i] = args[2];
-    return args[2];
+fn setElementOf(seq: Value, index_v: Value, new_value: Value) Error!Value {
+    const i = try eltIndex(index_v);
+    if (heap.isString(seq)) {
+        const chars = heap.asString(seq).slice();
+        if (i >= chars.len) return Error.TypeError;
+        if (new_value.tag() != .char) return Error.TypeError;
+        chars[i] = new_value.toChar();
+        return new_value;
+    }
+    if (!heap.isArray(seq)) return Error.TypeError;
+    const slots = heap.arrayActive(seq);
+    if (i >= slots.len) return Error.TypeError;
+    slots[i] = new_value;
+    return new_value;
 }
 
 // --- structures (the runtime half of `defstruct`) ---
@@ -401,71 +408,64 @@ fn copyStructureFn(p: *anyopaque, args: []const Value) Error!Value {
     return ev.heap.allocStructure(obj.name, obj.slice());
 }
 
-// --- hash tables (minimal eql tables) ---
-
-fn isHashTable(v: Value) bool {
-    return v.tag() == .heap and heap.heapType(v) == .hash_table;
-}
-
-/// `(make-hash-table &key ...)` — keyword options are accepted and ignored
-/// until the full hash-table work; the table is always an eql table.
-fn makeHashTableFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len % 2 != 0) return Error.ProgramError;
-    return ev.heap.allocHashTable();
-}
-
-fn gethashFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
-    if (!isHashTable(args[1])) return Error.TypeError;
-    const table = heap.asHashTable(args[1]);
-    if (table.map.get(args[0].raw)) |v| {
-        return ev.setValues(&.{ v, value.T });
-    }
-    const default = if (args.len == 3) args[2] else value.NIL;
-    return ev.setValues(&.{ default, value.NIL });
-}
-
-fn puthashFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 3) return Error.WrongArgCount;
-    if (!isHashTable(args[1])) return Error.TypeError;
-    const table = heap.asHashTable(args[1]);
-    try table.map.put(ev.heap.allocator, args[0].raw, args[2]);
-    return args[2];
-}
-
 // --- member ---
 
 /// `(member item list &key test key)`. Default test is eql (raw identity).
-fn memberFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len < 2 or (args.len - 2) % 2 != 0) return Error.WrongArgCount;
+/// `:test` and `:key` as accepted by `member` and `assoc`.
+const TestAndKey = struct {
+    test_fn: ?Value,
+    key_fn: ?Value,
 
-    var test_fn: ?Value = null;
-    var key_fn: ?Value = null;
-    const test_kw = try ev.interner.internKeyword("TEST");
-    const key_kw = try ev.interner.internKeyword("KEY");
-    var i: usize = 2;
-    while (i < args.len) : (i += 2) {
-        if (args[i].equalsRaw(test_kw)) {
-            test_fn = try resolveCallee(ev, args[i + 1]);
-        } else if (args[i].equalsRaw(key_kw)) {
-            key_fn = try resolveCallee(ev, args[i + 1]);
-        } else return Error.ProgramError;
+    fn parse(ev: *Evaluator, opts: []const Value) Error!TestAndKey {
+        if (opts.len % 2 != 0) return Error.WrongArgCount;
+        var result = TestAndKey{ .test_fn = null, .key_fn = null };
+        const test_kw = try ev.interner.internKeyword("TEST");
+        const key_kw = try ev.interner.internKeyword("KEY");
+        var i: usize = 0;
+        while (i < opts.len) : (i += 2) {
+            if (opts[i].equalsRaw(test_kw)) {
+                result.test_fn = try resolveCallee(ev, opts[i + 1]);
+            } else if (opts[i].equalsRaw(key_kw)) {
+                result.key_fn = try resolveCallee(ev, opts[i + 1]);
+            } else return Error.ProgramError;
+        }
+        return result;
     }
 
+    fn matches(self: TestAndKey, ev: *Evaluator, item: Value, elem_in: Value) Error!bool {
+        var elem = elem_in;
+        if (self.key_fn) |k| elem = try ev.callFunction(k, &.{elem});
+        if (self.test_fn) |t| {
+            return !(try ev.callFunction(t, &.{ item, elem })).equalsRaw(value.NIL);
+        }
+        return equality.eql(item, elem);
+    }
+};
+
+fn assocFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 2) return Error.WrongArgCount;
+    const opts = try TestAndKey.parse(ev, args[2..]);
+
     var cur = args[1];
-    while (cur.isCons()) {
-        var elem = heap.car(cur);
-        if (key_fn) |k| elem = try ev.callFunction(k, &.{elem});
-        const hit = if (test_fn) |t|
-            !(try ev.callFunction(t, &.{ args[0], elem })).equalsRaw(value.NIL)
-        else
-            args[0].equalsRaw(elem);
-        if (hit) return cur;
-        cur = heap.cdr(cur);
+    while (cur.isCons()) : (cur = heap.cdr(cur)) {
+        const pair = heap.car(cur);
+        if (isNil(pair)) continue;
+        if (!pair.isCons()) return Error.TypeError;
+        if (try opts.matches(ev, args[0], heap.car(pair))) return pair;
+    }
+    if (!isNil(cur)) return Error.TypeError;
+    return value.NIL;
+}
+
+fn memberFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 2) return Error.WrongArgCount;
+    const opts = try TestAndKey.parse(ev, args[2..]);
+
+    var cur = args[1];
+    while (cur.isCons()) : (cur = heap.cdr(cur)) {
+        if (try opts.matches(ev, args[0], heap.car(cur))) return cur;
     }
     if (!isNil(cur)) return Error.TypeError;
     return value.NIL;
@@ -480,55 +480,6 @@ fn errorFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len == 0) return Error.WrongArgCount;
     return Error.ProgramError;
-}
-
-/// Minimal `typep` over the types the runtime has. Compound type
-/// specifiers and unknown type names are an error until the full type
-/// system lands.
-fn typepFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 2) return Error.WrongArgCount;
-    const v = args[0];
-    const spec = args[1];
-    if (!spec.isSymbol()) return Error.ProgramError;
-    const n = symbol_mod.symbol(spec).name;
-
-    const result: bool = if (std.mem.eql(u8, n, "T"))
-        true
-    else if (std.mem.eql(u8, n, "NIL"))
-        false
-    else if (std.mem.eql(u8, n, "NULL"))
-        isNil(v)
-    else if (std.mem.eql(u8, n, "CONS"))
-        v.isCons()
-    else if (std.mem.eql(u8, n, "LIST"))
-        isNil(v) or v.isCons()
-    else if (std.mem.eql(u8, n, "ATOM"))
-        !v.isCons()
-    else if (std.mem.eql(u8, n, "SYMBOL"))
-        v.isSymbol()
-    else if (std.mem.eql(u8, n, "KEYWORD"))
-        v.isSymbol() and symbol_mod.isKeyword(v, ev.interner)
-    else if (std.mem.eql(u8, n, "BOOLEAN"))
-        v.equalsRaw(value.NIL) or v.equalsRaw(value.T)
-    else if (std.mem.eql(u8, n, "INTEGER") or std.mem.eql(u8, n, "FIXNUM"))
-        v.isFixnum()
-    else if (std.mem.eql(u8, n, "NUMBER"))
-        v.isFixnum()
-    else if (std.mem.eql(u8, n, "CHARACTER"))
-        v.tag() == .char
-    else if (std.mem.eql(u8, n, "STRING"))
-        v.tag() == .heap and heap.heapType(v) == .string
-    else if (std.mem.eql(u8, n, "FUNCTION"))
-        function.isFunction(v)
-    else if (std.mem.eql(u8, n, "STRUCTURE-OBJECT"))
-        heap.isStructure(v)
-    else if (heap.isStructure(v))
-        heap.asStructure(v).name.equalsRaw(spec)
-    else
-        return Error.ProgramError;
-
-    return if (result) value.T else value.NIL;
 }
 
 // --- cons accessors ---
@@ -666,34 +617,6 @@ fn appendFn(p: *anyopaque, args: []const Value) Error!Value {
     return result;
 }
 
-fn reverseFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 1) return Error.WrongArgCount;
-    var result = value.NIL;
-    var v = args[0];
-    while (!isNil(v)) {
-        if (!v.isCons()) return Error.TypeError;
-        result = try ev.heap.allocCons(heap.car(v), result);
-        v = heap.cdr(v);
-    }
-    return result;
-}
-
-fn nreverseFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    var prev = value.NIL;
-    var cur = args[0];
-    while (!isNil(cur)) {
-        if (!cur.isCons()) return Error.TypeError;
-        const next = heap.cdr(cur);
-        heap.setCdr(cur, prev);
-        prev = cur;
-        cur = next;
-    }
-    return prev;
-}
-
 fn lengthFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 1) return Error.WrongArgCount;
@@ -711,7 +634,7 @@ fn lengthFn(p: *anyopaque, args: []const Value) Error!Value {
     if (v.tag() == .heap) {
         switch (heap.heapType(v)) {
             .string => return Value.fromFixnum(@intCast(heap.asString(v).len)),
-            .vector => return Value.fromFixnum(@intCast(heap.asVector(v).len)),
+            .vector => return Value.fromFixnum(@intCast(heap.asArray(v).activeLen())),
             else => return Error.TypeError,
         }
     }
@@ -719,94 +642,6 @@ fn lengthFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 // --- equality ---
-
-fn numberp(v: Value) bool {
-    if (v.isFixnum()) return true;
-    if (v.tag() != .heap) return false;
-    return switch (heap.heapType(v)) {
-        .single_float, .double_float, .ratio => true,
-        else => false,
-    };
-}
-
-fn toF64(v: Value) f64 {
-    if (v.isFixnum()) return @floatFromInt(v.toFixnum());
-    const t = heap.heapType(v);
-    if (t == .single_float) return heap.asSingleFloat(v).value;
-    if (t == .double_float) return heap.asDoubleFloat(v).value;
-    const r = heap.asRatio(v);
-    return @as(f64, @floatFromInt(r.numerator)) / @as(f64, @floatFromInt(r.denominator));
-}
-
-fn numEqual(a: Value, b: Value) bool {
-    if (a.isFixnum() and b.isFixnum()) return a.toFixnum() == b.toFixnum();
-    return toF64(a) == toF64(b);
-}
-
-fn eqlValues(a: Value, b: Value) bool {
-    if (a.equalsRaw(b)) return true;
-    if (a.tag() != .heap or b.tag() != .heap) return false;
-    const ta = heap.heapType(a);
-    if (ta != heap.heapType(b)) return false;
-    return switch (ta) {
-        .single_float => heap.asSingleFloat(a).value == heap.asSingleFloat(b).value,
-        .double_float => heap.asDoubleFloat(a).value == heap.asDoubleFloat(b).value,
-        .ratio => heap.asRatio(a).numerator == heap.asRatio(b).numerator and
-            heap.asRatio(a).denominator == heap.asRatio(b).denominator,
-        else => false,
-    };
-}
-
-fn equalValues(a: Value, b: Value) bool {
-    if (eqlValues(a, b)) return true;
-    if (a.isCons() and b.isCons()) {
-        return equalValues(heap.car(a), heap.car(b)) and equalValues(heap.cdr(a), heap.cdr(b));
-    }
-    if (a.tag() == .heap and b.tag() == .heap and
-        heap.heapType(a) == .string and heap.heapType(b) == .string)
-    {
-        return std.mem.eql(u8, heap.asString(a).constSlice(), heap.asString(b).constSlice());
-    }
-    return false;
-}
-
-fn charLower(c: u21) u21 {
-    if (c < 128) return std.ascii.toLower(@intCast(c));
-    return c;
-}
-
-fn stringEqualFold(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        if (std.ascii.toLower(ca) != std.ascii.toLower(cb)) return false;
-    }
-    return true;
-}
-
-fn equalpValues(a: Value, b: Value) bool {
-    if (numberp(a) and numberp(b)) return numEqual(a, b);
-    if (a.isChar() and b.isChar()) return charLower(a.toChar()) == charLower(b.toChar());
-    if (a.isCons() and b.isCons()) {
-        return equalpValues(heap.car(a), heap.car(b)) and equalpValues(heap.cdr(a), heap.cdr(b));
-    }
-    if (a.tag() == .heap and b.tag() == .heap) {
-        const ta = heap.heapType(a);
-        const tb = heap.heapType(b);
-        if (ta == .string and tb == .string) {
-            return stringEqualFold(heap.asString(a).constSlice(), heap.asString(b).constSlice());
-        }
-        if (ta == .vector and tb == .vector) {
-            const va = heap.asVector(a).constSlice();
-            const vb = heap.asVector(b).constSlice();
-            if (va.len != vb.len) return false;
-            for (va, vb) |ea, eb| {
-                if (!equalpValues(ea, eb)) return false;
-            }
-            return true;
-        }
-    }
-    return a.equalsRaw(b);
-}
 
 fn eqFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
@@ -817,19 +652,19 @@ fn eqFn(p: *anyopaque, args: []const Value) Error!Value {
 fn eqlFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    return boolv(eqlValues(args[0], args[1]));
+    return boolv(equality.eql(args[0], args[1]));
 }
 
 fn equalFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    return boolv(equalValues(args[0], args[1]));
+    return boolv(equality.equal(args[0], args[1]));
 }
 
 fn equalpFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    return boolv(equalpValues(args[0], args[1]));
+    return boolv(equality.equalp(args[0], args[1]));
 }
 
 // --- type predicates ---
@@ -875,219 +710,13 @@ fn symbolpFn(p: *anyopaque, args: []const Value) Error!Value {
 fn numberpFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 1) return Error.WrongArgCount;
-    return boolv(numberp(args[0]));
-}
-
-fn integerpFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    return boolv(args[0].isFixnum());
+    return boolv(equality.isNumber(args[0]));
 }
 
 fn stringpFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 1) return Error.WrongArgCount;
     return boolv(args[0].tag() == .heap and heap.heapType(args[0]) == .string);
-}
-
-// --- arithmetic ---
-
-fn asFix(v: Value) Error!i64 {
-    if (!v.isFixnum()) return Error.TypeError;
-    return v.toFixnum();
-}
-
-fn gcd(a: i64, b: i64) i64 {
-    var x = a;
-    var y = b;
-    while (y != 0) {
-        const t = @rem(x, y);
-        x = y;
-        y = t;
-    }
-    return x;
-}
-
-fn makeRatio(ev: *Evaluator, num: i64, den: i64) Error!Value {
-    if (den == 0) return Error.DivisionByZero;
-    if (num == 0) return Value.fromFixnum(0);
-    var n = num;
-    var d = den;
-    if (d < 0) {
-        n = -n;
-        d = -d;
-    }
-    const g = gcd(if (n < 0) -n else n, d);
-    n = @divExact(n, g);
-    d = @divExact(d, g);
-    if (d == 1) return Value.fromFixnum(n);
-    return ev.heap.allocRatio(n, d);
-}
-
-fn addFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    var sum: i64 = 0;
-    for (args) |a| sum += try asFix(a);
-    return Value.fromFixnum(sum);
-}
-
-fn subFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len == 0) return Error.WrongArgCount;
-    if (args.len == 1) return Value.fromFixnum(-(try asFix(args[0])));
-    var acc = try asFix(args[0]);
-    for (args[1..]) |a| acc -= try asFix(a);
-    return Value.fromFixnum(acc);
-}
-
-fn mulFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    var prod: i64 = 1;
-    for (args) |a| prod *= try asFix(a);
-    return Value.fromFixnum(prod);
-}
-
-fn divFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len == 0) return Error.WrongArgCount;
-    if (args.len == 1) return makeRatio(ev, 1, try asFix(args[0]));
-    const num = try asFix(args[0]);
-    var den: i64 = 1;
-    for (args[1..]) |a| {
-        const d = try asFix(a);
-        if (d == 0) return Error.DivisionByZero;
-        den *= d;
-    }
-    return makeRatio(ev, num, den);
-}
-
-fn modFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 2) return Error.WrongArgCount;
-    const a = try asFix(args[0]);
-    const b = try asFix(args[1]);
-    if (b == 0) return Error.DivisionByZero;
-    return Value.fromFixnum(@mod(a, b));
-}
-
-fn remFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 2) return Error.WrongArgCount;
-    const a = try asFix(args[0]);
-    const b = try asFix(args[1]);
-    if (b == 0) return Error.DivisionByZero;
-    return Value.fromFixnum(@rem(a, b));
-}
-
-fn onePlusFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    return Value.fromFixnum((try asFix(args[0])) + 1);
-}
-
-fn oneMinusFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    return Value.fromFixnum((try asFix(args[0])) - 1);
-}
-
-fn absFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    const n = try asFix(args[0]);
-    return Value.fromFixnum(if (n < 0) -n else n);
-}
-
-fn minFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len == 0) return Error.WrongArgCount;
-    var acc = try asFix(args[0]);
-    for (args[1..]) |a| {
-        const n = try asFix(a);
-        if (n < acc) acc = n;
-    }
-    return Value.fromFixnum(acc);
-}
-
-fn maxFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len == 0) return Error.WrongArgCount;
-    var acc = try asFix(args[0]);
-    for (args[1..]) |a| {
-        const n = try asFix(a);
-        if (n > acc) acc = n;
-    }
-    return Value.fromFixnum(acc);
-}
-
-// --- comparisons ---
-
-const CmpOp = enum { eq, ne, lt, gt, le, ge };
-
-fn cmpFn(comptime op: CmpOp) function.NativeFn {
-    return struct {
-        fn f(p: *anyopaque, args: []const Value) Error!Value {
-            _ = p;
-            if (args.len == 0) return Error.WrongArgCount;
-            for (args) |a| {
-                if (!a.isFixnum()) return Error.TypeError;
-            }
-            if (op == .ne) {
-                for (args, 0..) |a, i| {
-                    for (args[i + 1 ..]) |b| {
-                        if (a.toFixnum() == b.toFixnum()) return value.NIL;
-                    }
-                }
-                return value.T;
-            }
-            var i: usize = 1;
-            while (i < args.len) : (i += 1) {
-                const x = args[i - 1].toFixnum();
-                const y = args[i].toFixnum();
-                const ok = switch (op) {
-                    .eq => x == y,
-                    .lt => x < y,
-                    .gt => x > y,
-                    .le => x <= y,
-                    .ge => x >= y,
-                    .ne => unreachable,
-                };
-                if (!ok) return value.NIL;
-            }
-            return value.T;
-        }
-    }.f;
-}
-
-fn signPred(comptime want: enum { zero, plus, minus }) function.NativeFn {
-    return struct {
-        fn f(p: *anyopaque, args: []const Value) Error!Value {
-            _ = p;
-            if (args.len != 1) return Error.WrongArgCount;
-            const n = try asFix(args[0]);
-            return boolv(switch (want) {
-                .zero => n == 0,
-                .plus => n > 0,
-                .minus => n < 0,
-            });
-        }
-    }.f;
-}
-
-const zeropFn = signPred(.zero);
-const pluspFn = signPred(.plus);
-const minuspFn = signPred(.minus);
-
-fn oddpFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    return boolv(@rem(try asFix(args[0]), 2) != 0);
-}
-
-fn evenpFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
-    if (args.len != 1) return Error.WrongArgCount;
-    return boolv(@rem(try asFix(args[0]), 2) == 0);
 }
 
 fn notFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -1101,7 +730,8 @@ fn notFn(p: *anyopaque, args: []const Value) Error!Value {
 fn resolveCallee(ev: *Evaluator, designator: Value) Error!Value {
     if (function.isFunction(designator)) return designator;
     if (designator.isSymbol()) {
-        return ev.env.lookupFunction(designator) orelse Error.UnboundFunction;
+        return ev.env.lookupFunction(designator) orelse
+            ev.unbound(designator, Error.UnboundFunction);
     }
     return Error.TypeError;
 }
@@ -1133,8 +763,8 @@ fn gensymFn(p: *anyopaque, args: []const Value) Error!Value {
         if (a.tag() == .fixnum) {
             if (a.toFixnum() < 0) return Error.TypeError;
             explicit = a.toFixnum();
-        } else if (a.tag() == .heap and heap.heapType(a) == .string) {
-            prefix = heap.asString(a).constSlice();
+        } else if (heap.isString(a)) {
+            prefix = try heap.stringUtf8Alloc(ev.heap.allocator, a);
         } else return Error.TypeError;
     }
 
@@ -1143,7 +773,8 @@ fn gensymFn(p: *anyopaque, args: []const Value) Error!Value {
         n = c;
     } else {
         const counter_sym = try ev.interner.intern("*GENSYM-COUNTER*");
-        const cur = ev.env.lookupValue(counter_sym) orelse return Error.UnboundVariable;
+        const cur = ev.env.lookupValue(counter_sym) orelse
+            return ev.unbound(counter_sym, Error.UnboundVariable);
         if (cur.tag() != .fixnum or cur.toFixnum() < 0) return Error.TypeError;
         n = cur.toFixnum();
         symbol_mod.symbol(counter_sym).value_cell = Value.fromFixnum(n + 1);
@@ -1163,8 +794,8 @@ fn gentempFn(p: *anyopaque, args: []const Value) Error!Value {
     var prefix: []const u8 = "T";
     if (args.len == 1) {
         const a = args[0];
-        if (a.tag() != .heap or heap.heapType(a) != .string) return Error.TypeError;
-        prefix = heap.asString(a).constSlice();
+        if (!heap.isString(a)) return Error.TypeError;
+        prefix = try heap.stringUtf8Alloc(ev.heap.allocator, a);
     }
 
     var n: i64 = 1;

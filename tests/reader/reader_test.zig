@@ -118,8 +118,34 @@ test "read string with escapes" {
     defer s.deinit();
     const v = try readOne(s, "\"hello \\\"world\\\"\"");
     try std.testing.expect(v.isHeap());
-    const got = heap.asString(v).constSlice();
+    const got = try heap.stringUtf8Alloc(std.testing.allocator, v);
+    defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("hello \"world\"", got);
+}
+
+test "a latin-1 source character becomes one string element" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "\"h\xc3\xa9llo\"");
+    const codes = heap.asString(v).constSlice();
+    try std.testing.expectEqual(@as(usize, 5), codes.len);
+    try std.testing.expectEqual(@as(u32, 0xE9), codes[1]);
+}
+
+test "a source character past latin-1 is one string element too" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    const v = try readOne(s, "\"\xe6\x97\xa5\xe6\x9c\xac\"");
+    try std.testing.expectEqual(@as(usize, 2), heap.asString(v).constSlice().len);
+    try std.testing.expectEqual(@as(u32, 0x65E5), heap.asString(v).constSlice()[0]);
+}
+
+test "a truncated utf-8 sequence in a string is a bad token" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    try std.testing.expectError(ReaderError.BadToken, readOne(s, "\"a\xc3\""));
+    try std.testing.expectError(ReaderError.BadToken, readOne(s, "\"a\xffb\""));
+    try std.testing.expectError(ReaderError.BadToken, readOne(s, "\"a\xc3(\""));
 }
 
 test "read character literals" {
@@ -150,8 +176,8 @@ test "read float and ratio" {
     const r = try readOne(s, "3/4");
     try std.testing.expectEqual(heap.HeapType.ratio, heap.heapType(r));
     const ratio = heap.asRatio(r);
-    try std.testing.expectEqual(@as(i64, 3), ratio.numerator);
-    try std.testing.expectEqual(@as(i64, 4), ratio.denominator);
+    try std.testing.expectEqual(@as(i64, 3), ratio.numerator.toFixnum());
+    try std.testing.expectEqual(@as(i64, 4), ratio.denominator.toFixnum());
 }
 
 test "read keyword interns into the KEYWORD package" {
@@ -274,7 +300,7 @@ test "vector literal #(1 2 3)" {
     const v = try readOne(s, "#(1 2 3)");
     try std.testing.expect(v.isHeap());
     try std.testing.expectEqual(heap.HeapType.vector, heap.heapType(v));
-    const items = heap.asVector(v).constSlice();
+    const items = heap.arrayActive(v);
     try std.testing.expectEqual(@as(usize, 3), items.len);
     try std.testing.expectEqual(@as(i64, 1), items[0].toFixnum());
     try std.testing.expectEqual(@as(i64, 2), items[1].toFixnum());
@@ -285,7 +311,7 @@ test "empty vector #()" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const v = try readOne(s, "#()");
-    try std.testing.expectEqual(@as(usize, 0), heap.asVector(v).len);
+    try std.testing.expectEqual(@as(usize, 0), heap.arrayActive(v).len);
 }
 
 // --- errors ----------------------------------------------------
@@ -393,6 +419,7 @@ test "dispatch goes through the readtable" {
         .hash_plus = overrideQuoteHandler,
         .hash_minus = overrideQuoteHandler,
         .hash_p = overrideQuoteHandler,
+        .hash_c = overrideQuoteHandler,
     });
     var tk = Tokenizer.init("'foo");
     var rd = zisp.reader.Reader.initFull(&tk, &s.h, &s.interner, &rt, null, "");
@@ -544,7 +571,8 @@ test "read string longer than the on-stack buffer" {
     var rd = Reader.init(&tk, &s.h, &s.interner);
     const v = (try rd.read()).?;
     try std.testing.expect(v.isHeap());
-    const got = heap.asString(v).constSlice();
+    const got = try heap.stringUtf8Alloc(std.testing.allocator, v);
+    defer std.testing.allocator.free(got);
     try std.testing.expectEqual(@as(usize, big_n), got.len);
     try std.testing.expectEqual(@as(u8, 'a'), got[0]);
     try std.testing.expectEqual(@as(u8, 'a'), got[big_n - 1]);
@@ -753,15 +781,39 @@ test "unknown character literal carries token position" {
     try std.testing.expectEqual(@as(u32, 3), pos.column);
 }
 
-test "integer that overflows fixnum but fits i64 carries position" {
+test "an integer past the fixnum range reads as a bignum" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    // FIXNUM_MAX is 2^60 - 1; 2^60 = 1152921504606846976 still fits i64.
-    var tk = Tokenizer.init("  1152921504606846976");
-    var rd = Reader.init(&tk, &s.h, &s.interner);
-    try std.testing.expectError(ReaderError.BadToken, rd.read());
-    const pos = rd.lastErrorPos() orelse return error.NoPositionRecorded;
-    try std.testing.expectEqual(@as(u32, 3), pos.column);
+    // FIXNUM_MAX is 2^60 - 1, so 2^60 needs a bignum even though it fits i64.
+    const v = try readOne(s, "1152921504606846976");
+    try std.testing.expect(heap.isBignum(v));
+
+    const text = try printer.printToOwnedSlice(std.testing.allocator, v);
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings("1152921504606846976", text);
+}
+
+test "a bignum literal round-trips through the printer in any radix" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    for ([_][2][]const u8{
+        .{ "123456789012345678901234567890", "123456789012345678901234567890" },
+        .{ "-123456789012345678901234567890", "-123456789012345678901234567890" },
+        .{ "#x10000000000000000", "18446744073709551616" },
+        .{ "#b" ++ "1" ++ ("0" ** 64), "18446744073709551616" },
+        .{ "#36rZZZZZZZZZZZZZZ", "6140942214464815497215" },
+    }) |pair| {
+        const v = try readOne(s, pair[0]);
+        const text = try printer.printToOwnedSlice(std.testing.allocator, v);
+        defer std.testing.allocator.free(text);
+        try std.testing.expectEqualStrings(pair[1], text);
+    }
+}
+
+test "a malformed oversized integer is still a bad token" {
+    const s = try newSetup(std.testing.allocator);
+    defer s.deinit();
+    try std.testing.expectError(ReaderError.BadToken, readOne(s, "#b1111111111111111111111111111111111111111111111111111111111111112"));
 }
 
 test "fallback captures position when deeper site didn't stamp" {

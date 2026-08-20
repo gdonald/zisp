@@ -194,8 +194,44 @@
 (defsetf car (cell) (new) `(progn (rplaca ,cell ,new) ,new))
 (defsetf cdr (cell) (new) `(progn (rplacd ,cell ,new) ,new))
 (defsetf nth (n list) (new) `(progn (rplaca (nthcdr ,n ,list) ,new) ,new))
+
+;; setf on the compound accessors: the first letter picks which half
+;; of the innermost cons to replace, and the rest is the path to it.
+(defsetf caar (x) (v) `(progn (rplaca (car ,x) ,v) ,v))
+(defsetf cadr (x) (v) `(progn (rplaca (cdr ,x) ,v) ,v))
+(defsetf cdar (x) (v) `(progn (rplacd (car ,x) ,v) ,v))
+(defsetf cddr (x) (v) `(progn (rplacd (cdr ,x) ,v) ,v))
+(defsetf caaar (x) (v) `(progn (rplaca (caar ,x) ,v) ,v))
+(defsetf caadr (x) (v) `(progn (rplaca (cadr ,x) ,v) ,v))
+(defsetf cadar (x) (v) `(progn (rplaca (cdar ,x) ,v) ,v))
+(defsetf caddr (x) (v) `(progn (rplaca (cddr ,x) ,v) ,v))
+(defsetf cdaar (x) (v) `(progn (rplacd (caar ,x) ,v) ,v))
+(defsetf cdadr (x) (v) `(progn (rplacd (cadr ,x) ,v) ,v))
+(defsetf cddar (x) (v) `(progn (rplacd (cdar ,x) ,v) ,v))
+(defsetf cdddr (x) (v) `(progn (rplacd (cddr ,x) ,v) ,v))
+(defsetf caaaar (x) (v) `(progn (rplaca (caaar ,x) ,v) ,v))
+(defsetf caaadr (x) (v) `(progn (rplaca (caadr ,x) ,v) ,v))
+(defsetf caadar (x) (v) `(progn (rplaca (cadar ,x) ,v) ,v))
+(defsetf caaddr (x) (v) `(progn (rplaca (caddr ,x) ,v) ,v))
+(defsetf cadaar (x) (v) `(progn (rplaca (cdaar ,x) ,v) ,v))
+(defsetf cadadr (x) (v) `(progn (rplaca (cdadr ,x) ,v) ,v))
+(defsetf caddar (x) (v) `(progn (rplaca (cddar ,x) ,v) ,v))
+(defsetf cadddr (x) (v) `(progn (rplaca (cdddr ,x) ,v) ,v))
+(defsetf cdaaar (x) (v) `(progn (rplacd (caaar ,x) ,v) ,v))
+(defsetf cdaadr (x) (v) `(progn (rplacd (caadr ,x) ,v) ,v))
+(defsetf cdadar (x) (v) `(progn (rplacd (cadar ,x) ,v) ,v))
+(defsetf cdaddr (x) (v) `(progn (rplacd (caddr ,x) ,v) ,v))
+(defsetf cddaar (x) (v) `(progn (rplacd (cdaar ,x) ,v) ,v))
+(defsetf cddadr (x) (v) `(progn (rplacd (cdadr ,x) ,v) ,v))
+(defsetf cdddar (x) (v) `(progn (rplacd (cddar ,x) ,v) ,v))
+(defsetf cddddr (x) (v) `(progn (rplacd (cdddr ,x) ,v) ,v))
 (defsetf elt %set-elt)
 (defsetf aref %set-aref)
+(defsetf row-major-aref %set-row-major-aref)
+(defsetf fill-pointer %set-fill-pointer)
+(defsetf logical-pathname-translations %set-logical-pathname-translations)
+(defsetf char %set-char)
+(defsetf schar %set-char)
 (defsetf symbol-value %set-symbol-value)
 (defsetf symbol-function %set-symbol-function)
 (defsetf symbol-plist %set-symbol-plist)
@@ -355,10 +391,171 @@
        ,@(%struct-accessor-forms accessors 0)
        ',name)))
 
+(defun identity (x) x)
+
+(defmacro pprint-logical-block ((stream-var object &key prefix per-line-prefix suffix)
+                                &body body)
+  "Print BODY as one logical block, breaking its conditional newlines only
+when the block will not fit before the right margin."
+  (when (and prefix per-line-prefix)
+    (error "cannot specify values for both prefix and per-line-prefix"))
+  (let ((target (gensym))
+        (pretty (gensym)))
+    `(let* ((,target ,stream-var)
+            (,pretty (%make-pretty-stream ,target))
+            (,stream-var ,pretty))
+       (declare (ignore ,object))
+       (unwind-protect
+            (progn
+              ;; A per-line prefix goes on the first line as well, so it
+              ;; serves as the block's prefix too.
+              (%pprint-block-start ,pretty ,(or prefix per-line-prefix "")
+                                   ,(or per-line-prefix "") "")
+              ,@body
+              (%pprint-block-end ,pretty ,(or suffix "")))
+         (%pretty-stream-finish ,pretty)))))
+
+(defmacro deftype (name lambda-list &body body)
+  `(%put-deftype ',name
+                 (lambda (%args)
+                   (destructuring-bind ,lambda-list %args ,@body))))
+
+(defmacro check-type (place type &optional string)
+  (declare (ignore string))
+  `(unless (typep ,place ',type)
+     (error "value is not of the required type")))
+
+(defmacro do-symbols ((var &optional (package '*package*) result) &body body)
+  `(progn
+     (dolist-over (,var (%package-symbols ,package "PRESENT")) ,@body)
+     (dolist-over (,var (%package-symbols ,package "INHERITED")) ,@body)
+     ,result))
+
+(defmacro do-external-symbols ((var &optional (package '*package*) result) &body body)
+  `(progn
+     (dolist-over (,var (%package-symbols ,package "EXTERNAL")) ,@body)
+     ,result))
+
+(defmacro do-all-symbols ((var &optional result) &body body)
+  `(progn
+     (dolist-over (,var (%all-symbols)) ,@body)
+     ,result))
+
+;; The walking half of the do-symbols family, so each of them is one line
+;; of iteration rather than its own tagbody.
+(defmacro dolist-over ((var list) &body body)
+  (let ((rest (gensym)))
+    `(let ((,rest ,list))
+       (tagbody
+        step
+          (when ,rest
+            (let ((,var (car ,rest)))
+              ,@body)
+            (setq ,rest (cdr ,rest))
+            (go step))))))
+
+(defun %designator-name (thing)
+  (cond ((stringp thing) thing)
+        ((symbolp thing) (symbol-name thing))
+        ((characterp thing) (string thing))
+        (t (error "not a string designator"))))
+
+(defun %defpackage-option (option package-name)
+  "One defpackage option as the form that carries it out."
+  (let ((key (car option))
+        (args (cdr option)))
+    (cond
+      ((eq key :use)
+       (list 'use-package (list 'quote (mapcar #'%designator-name args)) package-name))
+      ((eq key :nicknames)
+       (list '%add-nicknames (list 'quote (mapcar #'%designator-name args)) package-name))
+      ((eq key :shadow)
+       (list 'shadow (list 'quote (mapcar #'%designator-name args)) package-name))
+      ((eq key :intern)
+       (list '%intern-all (list 'quote (mapcar #'%designator-name args)) package-name))
+      ((eq key :export)
+       (list '%export-names (list 'quote (mapcar #'%designator-name args)) package-name))
+      ((eq key :shadowing-import-from)
+       (list '%shadowing-import-from
+             (%designator-name (car args))
+             (list 'quote (mapcar #'%designator-name (cdr args)))
+             package-name))
+      ((eq key :import-from)
+       (list '%import-from
+             (%designator-name (car args))
+             (list 'quote (mapcar #'%designator-name (cdr args)))
+             package-name))
+      ((eq key :documentation) nil)
+      ((eq key :size) nil)
+      (t (error "unknown defpackage option")))))
+
+(defun %intern-all (names package)
+  (dolist-over (n names) (intern n package))
+  nil)
+
+(defun %export-names (names package)
+  (dolist-over (n names) (export (list (intern n package)) package))
+  nil)
+
+(defun %import-from (from names package)
+  (dolist-over (n names) (import (list (find-symbol n from)) package))
+  nil)
+
+(defun %shadowing-import-from (from names package)
+  (dolist-over (n names) (shadowing-import (list (find-symbol n from)) package))
+  nil)
+
+(defmacro defpackage (name &rest options)
+  (let ((package-name (%designator-name name)))
+    `(progn
+       (unless (find-package ,package-name)
+         (make-package ,package-name :use nil))
+       ,@(mapcar (lambda (option) (%defpackage-option option package-name)) options)
+       (find-package ,package-name))))
+
+(defmacro with-open-file ((var filespec &rest options) &body body)
+  `(let ((,var (open ,filespec ,@options)))
+     (unwind-protect (progn ,@body)
+       (when ,var (close ,var)))))
+
+(defmacro with-input-from-string ((var string &rest options) &body body)
+  (declare (ignore options))
+  `(let ((,var (make-string-input-stream ,string)))
+     (unwind-protect (progn ,@body)
+       (close ,var))))
+
+(defmacro with-output-to-string ((var) &body body)
+  `(let ((,var (make-string-output-stream)))
+     (unwind-protect (progn ,@body (get-output-stream-string ,var))
+       (close ,var))))
+
+(defmacro with-hash-table-iterator ((name table) &body body)
+  (let ((remaining (gensym)))
+    `(let ((,remaining (%hash-table-entries ,table)))
+       (flet ((,name ()
+                (if (null ,remaining)
+                    nil
+                    (let ((entry (car ,remaining)))
+                      (setq ,remaining (cdr ,remaining))
+                      (values t (car entry) (cdr entry))))))
+         ,@body))))
+
+(defmacro nth-value (n form)
+  `(nth ,n (multiple-value-list ,form)))
+
+;; No condition can be signaled yet, so the handlers are evaluated and
+;; discarded and the body runs unguarded.
+(defmacro handler-bind (bindings &body body)
+  `(progn ,@(mapcar #'cadr bindings) (progn ,@body)))
+
 (export '(when unless cond and or prog1 prog2 case ecase ccase
           typecase etypecase ctypecase
           get-setf-expansion setf defsetf define-setf-expander
           push pop pushnew incf decf
-          defstruct otherwise))
+          defstruct otherwise nth-value handler-bind identity
+          with-hash-table-iterator with-open-file
+          with-input-from-string with-output-to-string
+          do-symbols do-external-symbols do-all-symbols dolist-over defpackage
+          deftype check-type pprint-logical-block))
 
 (in-package "COMMON-LISP-USER")
