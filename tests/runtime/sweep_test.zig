@@ -16,6 +16,7 @@ const Value = value.Value;
 fn newHeap() zisp.Heap {
     var h = zisp.Heap.init(testing.allocator);
     h.objects.quarantine = false;
+    h.objects.nursery_capacity = 0;
     h.torture = 0;
     return h;
 }

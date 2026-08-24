@@ -1,7 +1,8 @@
-//! Fragmentation and coalescing.
+//! Nursery evacuation, driven through `load` so a collection happens
+//! between top-level forms.
 //!
-//! Reads `tests/lisp/gc-fragmentation.lisp` and evaluates each form. Every
-//! form is self-checking and must come back T.
+//! `tests/lisp/gc-copy-cons.lisp` holds the checks: each one signals an
+//! error when it does not hold, and counts itself when it does.
 
 const std = @import("std");
 const testing = std.testing;
@@ -10,7 +11,8 @@ const value = zisp.value;
 const symbol_mod = zisp.symbol;
 const Evaluator = zisp.eval.Evaluator;
 
-const corpus_text = @embedFile("../lisp/gc-fragmentation.lisp");
+const corpus_path = "tests/lisp/gc-copy-cons.lisp";
+const expected_checks = 29;
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,
@@ -30,14 +32,12 @@ const Fixture = struct {
         };
         try symbol_mod.initStandardSymbols(&fx.interner);
         fx.heap = zisp.Heap.init(fx.arena.allocator());
-        // These tests drive collections themselves and read what came
-        // back, so the torture setting stays out of the way.
-        fx.heap.torture = 0;
-        fx.heap.objects.quarantine = false;
         fx.ev = Evaluator.init(allocator, &fx.heap, &fx.interner);
         fx.ev.out = &fx.aw.writer;
+        fx.ev.io = testing.io;
         try zisp.eval.registerStandardSpecialForms(&fx.ev);
         try zisp.builtins.registerStandard(&fx.ev);
+        try zisp.builtins.registerSystem(&fx.ev);
         return fx;
     }
 
@@ -48,29 +48,27 @@ const Fixture = struct {
         self.arena.deinit();
         allocator.destroy(self);
     }
+
+    fn global(self: *Fixture, name: []const u8) value.Value {
+        const found = self.interner.cl_user.findSymbol(name).?;
+        return symbol_mod.symbol(found.sym).value_cell;
+    }
 };
 
-test "every form in the collector corpus evaluates to T" {
+test "every check in the copying corpus holds" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
 
-    var tk = zisp.reader.Tokenizer.init(corpus_text);
-    var rd = zisp.reader.Reader.init(&tk, &fx.heap, &fx.interner);
-    var checked: u32 = 0;
-    while (true) {
-        // The same safe point the file driver collects at.
-        try zisp.eval.collect.maybeCollect(&fx.ev);
-        const form = (try rd.read()) orelse break;
-        checked += 1;
-        const got = fx.ev.eval(form) catch |e| {
-            std.debug.print("collector corpus form {d}: eval error {s}\n", .{ checked, @errorName(e) });
-            return e;
-        };
-        if (!got.equalsRaw(value.T)) {
-            std.debug.print("collector corpus form {d}: expected T\n", .{checked});
-            return error.TestUnexpectedResult;
-        }
-    }
-    try testing.expectEqual(@as(u32, 14), checked);
-    try testing.expect(fx.ev.gc_count >= 2);
+    try zisp.builtins.system.loadPath(&fx.ev, corpus_path);
+    const checks = fx.global("*CHECKS*");
+    try testing.expectEqual(@as(i64, expected_checks), checks.toFixnum());
+}
+
+test "the corpus leaves the nursery empty and the collector run" {
+    const fx = try Fixture.init(testing.allocator);
+    defer fx.deinit(testing.allocator);
+
+    try zisp.builtins.system.loadPath(&fx.ev, corpus_path);
+    try testing.expect(fx.ev.gc_count > 0);
+    try testing.expect(fx.heap.objects.stats.promoted > 0);
 }

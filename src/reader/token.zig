@@ -26,6 +26,8 @@ pub const TokenKind = enum {
     hash_minus, // #-
     hash_p, // #P
     hash_c, // #C
+    hash_star, // #*  — text holds the bits
+    hash_dot, // #.   — read-time evaluation
 
     // Literals
     integer, // text holds the digit run (with optional sign / radix prefix)

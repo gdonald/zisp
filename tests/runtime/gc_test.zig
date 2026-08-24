@@ -10,6 +10,9 @@ fn newAllocator() gc.Allocator {
     // These tests read the free lists, which a build that holds
     // reclaimed blocks back does not fill in.
     allocator.quarantine = false;
+    // They are about the tenured space: the regions, the free lists and
+    // the sweep. With a nursery in front nothing would reach them.
+    allocator.nursery_capacity = 0;
     return allocator;
 }
 

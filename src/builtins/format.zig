@@ -106,6 +106,24 @@ const Node = union(enum) {
     conditional: Conditional,
     iteration: Iteration,
     call: Call,
+    case_block: CaseBlock,
+    justification: Justification,
+};
+
+/// `~(...~)` — the body's output with its case converted.
+const CaseBlock = struct {
+    directive: Directive,
+    body: []const Node,
+};
+
+/// `~<...~>` — segments separated by `~;`. Line breaking is the pretty
+/// printer's job; what is kept here is the segment structure, including
+/// the `~:;` overflow segment that only shows when the line is too long.
+const Justification = struct {
+    directive: Directive,
+    segments: []const []const Node,
+    /// Whether the first segment was introduced as the overflow prefix.
+    has_overflow: bool,
 };
 
 const Parser = struct {
@@ -155,7 +173,21 @@ fn parseNode(p: *Parser, directive: Directive) Error!Node {
             .body = (try parseBlock(p, "}")).nodes,
         } },
         '/' => .{ .call = .{ .directive = directive, .name = try parseCallName(p) } },
-        'A', 'S', 'D', '%', '&', '~', '*', 'T', '?', '^' => .{ .simple = directive },
+        '(' => .{ .case_block = .{
+            .directive = directive,
+            .body = (try parseBlock(p, ")")).nodes,
+        } },
+        '<' => .{ .justification = try parseJustification(p, directive) },
+        'A', 'S', 'D', '%', '&', '~', '*', 'T', '?', '^', 'P', '_', 'I', 'W' => .{ .simple = directive },
+        // `~<newline>` continues a control string across source lines: the
+        // newline goes unless `@` keeps it, and the indentation after it
+        // goes unless `:` keeps that.
+        '\n', '\r' => blk: {
+            if (!directive.colon) {
+                while (p.pos < p.ctrl.len and isFormatWhitespace(p.ctrl[p.pos])) p.pos += 1;
+            }
+            break :blk .{ .literal = if (directive.at) &NEWLINE_TEXT else &.{} };
+        },
         else => Error.ProgramError,
     };
 }
@@ -176,6 +208,22 @@ fn parseConditional(p: *Parser, directive: Directive) Error!Conditional {
     };
 }
 
+fn parseJustification(p: *Parser, directive: Directive) Error!Justification {
+    var segments: std.ArrayList([]const Node) = .empty;
+    var has_overflow = false;
+    while (true) {
+        const block = try parseBlock(p, ">;");
+        try segments.append(p.allocator, block.nodes);
+        if (block.stop.char == '>') break;
+        if (block.stop.colon and segments.items.len == 1) has_overflow = true;
+    }
+    return .{
+        .directive = directive,
+        .segments = try segments.toOwnedSlice(p.allocator),
+        .has_overflow = has_overflow,
+    };
+}
+
 /// `~/name/` names a function; the text runs to the closing slash.
 fn parseCallName(p: *Parser) Error![]const u32 {
     const start = p.pos;
@@ -193,6 +241,12 @@ fn utf8Count(text: []const u8) usize {
         if (b & 0xC0 != 0x80) n += 1;
     }
     return n;
+}
+
+const NEWLINE_TEXT = [_]u32{'\n'};
+
+fn isFormatWhitespace(c: u32) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 12;
 }
 
 fn isDigit(c: u32) bool {
@@ -343,6 +397,8 @@ fn runNodes(r: *Runner, nodes: []const Node, args: *Args) Error!Flow {
                 try runCall(r, c, args);
                 break :blk Flow.normal;
             },
+            .case_block => |c| try runCaseBlock(r, c, args),
+            .justification => |j| try runJustification(r, j, args),
         };
         if (flow != .normal) return flow;
     }
@@ -360,8 +416,76 @@ fn runSimple(r: *Runner, directive: Directive, args: *Args) Error!Flow {
         '*' => try skipArgs(r, directive, args),
         'T' => try columnTab(r, directive, args),
         '?' => try recursiveFormat(r, directive, args),
+        'P' => try printPlural(r, directive, args),
+        // Conditional newline and indentation only matter under the pretty
+        // printer, which does its own line breaking.
+        '_', 'I' => {},
+        'W' => try printPadded(r, directive, args, prin1Settings(r.ev)),
         '^' => return try escape(r, directive, args),
         else => return Error.ProgramError,
+    }
+    return .normal;
+}
+
+/// `~P`: the plural suffix for the argument. `:` re-uses the previous
+/// argument, `@` gives the y/ies pair instead of ""/s.
+fn printPlural(r: *Runner, directive: Directive, args: *Args) Error!void {
+    if (directive.colon) {
+        if (args.index == 0) return Error.ProgramError;
+        args.index -= 1;
+    }
+    const arg = try args.next();
+    const singular = arg.isFixnum() and arg.toFixnum() == 1;
+    if (directive.at) {
+        try r.out.writeText(if (singular) "y" else "ies");
+    } else if (!singular) {
+        try r.out.writeChar('s');
+    }
+}
+
+/// `~(...~)`: the body's output, case-converted. Plain downcases, `:`
+/// capitalizes each word, `@` capitalizes the first word, `:@` upcases.
+fn runCaseBlock(r: *Runner, block: CaseBlock, args: *Args) Error!Flow {
+    var captured = std.Io.Writer.Allocating.init(r.allocator);
+    var column: usize = r.out.column.*;
+    var inner = Runner{
+        .ev = r.ev,
+        .out = .{ .writer = &captured.writer, .column = &column },
+        .allocator = r.allocator,
+    };
+    const flow = try runNodes(&inner, block.body, args);
+    const text = captured.written();
+
+    var at_word_start = true;
+    var seen_word = false;
+    for (text) |byte| {
+        const alphanumeric = std.ascii.isAlphanumeric(byte);
+        const converted: u8 = if (directiveUpcases(block.directive))
+            std.ascii.toUpper(byte)
+        else if (block.directive.colon)
+            (if (at_word_start) std.ascii.toUpper(byte) else std.ascii.toLower(byte))
+        else if (block.directive.at)
+            (if (at_word_start and !seen_word) std.ascii.toUpper(byte) else std.ascii.toLower(byte))
+        else
+            std.ascii.toLower(byte);
+        try r.out.writeChar(converted);
+        if (alphanumeric) seen_word = true;
+        at_word_start = !alphanumeric;
+    }
+    return flow;
+}
+
+fn directiveUpcases(directive: Directive) bool {
+    return directive.colon and directive.at;
+}
+
+/// `~<...~>`: the segments run in order. An overflow segment (the one
+/// before `~:;`) is what a line break would use, so it is dropped here.
+fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
+    const segments = if (j.has_overflow and j.segments.len > 1) j.segments[1..] else j.segments;
+    for (segments) |segment| {
+        const flow = try runNodes(r, segment, args);
+        if (flow != .normal) return flow;
     }
     return .normal;
 }

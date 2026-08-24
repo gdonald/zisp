@@ -111,6 +111,7 @@ pub fn registerNumbers(ev: *Evaluator) !void {
     symbol_mod.symbol(most_positive).value_cell = Value.fromFixnum(value.FIXNUM_MAX);
     const most_negative = try ev.interner.intern("MOST-NEGATIVE-FIXNUM");
     symbol_mod.symbol(most_negative).value_cell = Value.fromFixnum(value.FIXNUM_MIN);
+    try registerFloatConstants(ev);
 
     // Each returns a quotient and a remainder.
     for ([_]struct { name: []const u8, native: function.NativeFn }{
@@ -1348,4 +1349,58 @@ fn randomStatePFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 1) return Error.WrongArgCount;
     return boolv(heap.isRandomState(args[0]));
+}
+
+/// The float limits CLHS names. `short-float` is this implementation's
+/// single-float and `long-float` its double-float, so those names alias.
+fn registerFloatConstants(ev: *Evaluator) !void {
+    const singles = [_]struct { name: []const u8, v: f32 }{
+        .{ .name = "MOST-POSITIVE-SINGLE-FLOAT", .v = std.math.floatMax(f32) },
+        .{ .name = "MOST-NEGATIVE-SINGLE-FLOAT", .v = -std.math.floatMax(f32) },
+        .{ .name = "LEAST-POSITIVE-SINGLE-FLOAT", .v = std.math.floatTrueMin(f32) },
+        .{ .name = "LEAST-NEGATIVE-SINGLE-FLOAT", .v = -std.math.floatTrueMin(f32) },
+        .{ .name = "LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT", .v = std.math.floatMin(f32) },
+        .{ .name = "LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT", .v = -std.math.floatMin(f32) },
+        .{ .name = "SINGLE-FLOAT-EPSILON", .v = std.math.floatEps(f32) / 2 },
+        .{ .name = "SINGLE-FLOAT-NEGATIVE-EPSILON", .v = std.math.floatEps(f32) / 4 },
+    };
+    const doubles = [_]struct { name: []const u8, v: f64 }{
+        .{ .name = "MOST-POSITIVE-DOUBLE-FLOAT", .v = std.math.floatMax(f64) },
+        .{ .name = "MOST-NEGATIVE-DOUBLE-FLOAT", .v = -std.math.floatMax(f64) },
+        .{ .name = "LEAST-POSITIVE-DOUBLE-FLOAT", .v = std.math.floatTrueMin(f64) },
+        .{ .name = "LEAST-NEGATIVE-DOUBLE-FLOAT", .v = -std.math.floatTrueMin(f64) },
+        .{ .name = "LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT", .v = std.math.floatMin(f64) },
+        .{ .name = "LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT", .v = -std.math.floatMin(f64) },
+        .{ .name = "DOUBLE-FLOAT-EPSILON", .v = std.math.floatEps(f64) / 2 },
+        .{ .name = "DOUBLE-FLOAT-NEGATIVE-EPSILON", .v = std.math.floatEps(f64) / 4 },
+    };
+    for (singles) |c| {
+        const sym = try ev.interner.intern(c.name);
+        symbol_mod.symbol(sym).value_cell = try ev.heap.allocSingleFloat(c.v);
+        const short = try ev.interner.intern(try shortName(ev, c.name, "SINGLE", "SHORT"));
+        symbol_mod.symbol(short).value_cell = symbol_mod.symbol(sym).value_cell;
+    }
+    for (doubles) |c| {
+        const sym = try ev.interner.intern(c.name);
+        symbol_mod.symbol(sym).value_cell = try ev.heap.allocDoubleFloat(c.v);
+        const long = try ev.interner.intern(try shortName(ev, c.name, "DOUBLE", "LONG"));
+        symbol_mod.symbol(long).value_cell = symbol_mod.symbol(sym).value_cell;
+    }
+}
+
+/// The aliased name, e.g. MOST-POSITIVE-SHORT-FLOAT for the single-float
+/// constant. The buffer is scratch the interner copies out of.
+var alias_buf: [64]u8 = undefined;
+fn shortName(ev: *Evaluator, name: []const u8, from: []const u8, to: []const u8) ![]const u8 {
+    _ = ev;
+    const at = std.mem.indexOf(u8, name, from).?;
+    var written: usize = 0;
+    @memcpy(alias_buf[written..][0..at], name[0..at]);
+    written += at;
+    @memcpy(alias_buf[written..][0..to.len], to);
+    written += to.len;
+    const rest = name[at + from.len ..];
+    @memcpy(alias_buf[written..][0..rest.len], rest);
+    written += rest.len;
+    return alias_buf[0..written];
 }

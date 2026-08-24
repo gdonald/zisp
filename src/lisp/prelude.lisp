@@ -8,6 +8,15 @@
 
 (in-package "COMMON-LISP")
 
+(defconstant lambda-list-keywords
+  '(&allow-other-keys &aux &body &environment &key &optional &rest &whole))
+
+;; No fixed cap on argument or value counts: a call is limited only by what
+;; a fixnum can index.
+(defconstant call-arguments-limit most-positive-fixnum)
+(defconstant lambda-parameters-limit most-positive-fixnum)
+(defconstant multiple-values-limit most-positive-fixnum)
+
 (defmacro when (test &body body)
   `(if ,test (progn ,@body) nil))
 
@@ -540,6 +549,11 @@ when the block will not fit before the right margin."
                       (values t (car entry) (cdr entry))))))
          ,@body))))
 
+(defmacro locally (&body body)
+  (if (and (consp (car body)) (eq (caar body) 'declare))
+      `(locally ,@(cdr body))
+      `(progn ,@body)))
+
 (defmacro nth-value (n form)
   `(nth ,n (multiple-value-list ,form)))
 
@@ -548,11 +562,33 @@ when the block will not fit before the right margin."
 (defmacro handler-bind (bindings &body body)
   `(progn ,@(mapcar #'cadr bindings) (progn ,@body)))
 
-(export '(when unless cond and or prog1 prog2 case ecase ccase
+;; Until conditions are objects, an error carries only its name, so the first
+;; handler clause takes every error rather than dispatching on the type.
+(defmacro handler-case (form &rest clauses)
+  (let* ((no-error (assoc :no-error clauses))
+         (handlers (remove-if (lambda (clause) (eq (car clause) :no-error)) clauses))
+         (outcome (gensym "OUTCOME")))
+    (if (null handlers)
+        (if no-error
+            `(multiple-value-call (lambda ,(cadr no-error) ,@(cddr no-error)) ,form)
+            form)
+        `(let ((,outcome (multiple-value-list (%catch-error ,form))))
+           (if (car ,outcome)
+               ,(let ((clause (car handlers)))
+                  (if (cadr clause)
+                      `(let ((,(car (cadr clause)) (car ,outcome))) ,@(cddr clause))
+                      `(progn ,@(cddr clause))))
+               ,(if no-error
+                    `(apply (lambda ,(cadr no-error) ,@(cddr no-error)) (cdr ,outcome))
+                    `(values-list (cdr ,outcome))))))))
+
+(export '(lambda-list-keywords call-arguments-limit lambda-parameters-limit
+          multiple-values-limit
+          when unless cond and or prog1 prog2 case ecase ccase
           typecase etypecase ctypecase
           get-setf-expansion setf defsetf define-setf-expander
           push pop pushnew incf decf
-          defstruct otherwise nth-value handler-bind identity
+          defstruct otherwise nth-value locally handler-bind handler-case identity
           with-hash-table-iterator with-open-file
           with-input-from-string with-output-to-string
           do-symbols do-external-symbols do-all-symbols dolist-over defpackage

@@ -9,6 +9,7 @@ comptime {
     _ = @import("runtime/sweep_test.zig");
     _ = @import("runtime/stack_test.zig");
     _ = @import("eval/collect_test.zig");
+    _ = @import("eval/gc_copy_corpus_test.zig");
 
     _ = @import("runtime/symbol_test.zig");
     _ = @import("runtime/package_test.zig");
@@ -69,7 +70,9 @@ comptime {
     _ = @import("builtins/ansi_rt_package_test.zig");
     _ = @import("builtins/ansi_rt_test.zig");
     _ = @import("builtins/ansi_cl_test_package_test.zig");
+    _ = @import("builtins/ansi_do_tests_test.zig");
     _ = @import("builtins/compile_file_test.zig");
     _ = @import("repl/repl_test.zig");
+    _ = @import("lisp_corpus_test.zig");
     _ = @import("cli_test.zig");
 }

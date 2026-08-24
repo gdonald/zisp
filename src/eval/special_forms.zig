@@ -5,6 +5,7 @@ const symbol_mod = @import("../runtime/symbol.zig");
 const eval_mod = @import("eval.zig");
 const function = @import("function.zig");
 const lambda_list = @import("lambda_list.zig");
+const env_mod = @import("env.zig");
 const quasiquote = @import("quasiquote.zig");
 const package_mod = @import("../runtime/package.zig");
 
@@ -32,6 +33,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("THROW", &throwForm);
     try ev.registerSpecialForm("UNWIND-PROTECT", &unwindProtect);
     try ev.registerSpecialForm("IGNORE-ERRORS", &ignoreErrors);
+    try ev.registerSpecialForm("%CATCH-ERROR", &catchError);
     try ev.registerSpecialForm("THE", &theForm);
     try ev.registerSpecialForm("DECLARE", &declareForm);
     try ev.registerSpecialForm("VALUES", &valuesForm);
@@ -149,6 +151,7 @@ fn lambda(ev: *Evaluator, args: Value) Error!Value {
     const params = heap.car(args);
     const body = heap.cdr(args);
     try validateParams(ev, params);
+    env_mod.Frame.markCaptured(ev.env.top_value);
     return ev.set1(try function.allocClosure(
         ev.heap.allocator,
         null,
@@ -192,6 +195,7 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
         const params = heap.car(after_name);
         const fn_body = heap.cdr(after_name);
         try validateParams(ev, params);
+        env_mod.Frame.markCaptured(ev.env.top_value);
         const closure = try function.allocClosure(
             ev.heap.allocator,
             symbol_mod.symbol(name).name,
@@ -236,6 +240,7 @@ fn defun(ev: *Evaluator, args: Value) Error!Value {
     const body = heap.cdr(after_name);
     try lambda_list.validate(ev, params, false);
 
+    env_mod.Frame.markCaptured(ev.env.top_value);
     const closure = try function.allocClosure(
         ev.heap.allocator,
         symbol_mod.symbol(name).name,
@@ -631,6 +636,26 @@ fn ignoreErrors(ev: *Evaluator, args: Value) Error!Value {
             return ev.setValues(&.{ value.NIL, name });
         },
     };
+}
+
+/// `(%catch-error form*)` — evaluate the body and report whether it failed.
+/// The first value is the error name, or NIL on success; the body's own values
+/// follow it, so a successful run keeps every value it produced.
+/// Unlike `ignore-errors` the two outcomes stay distinguishable, which is what
+/// `handler-case` expands into. Non-local exits pass through untouched.
+fn catchError(ev: *Evaluator, args: Value) Error!Value {
+    _ = prognBody(ev, args) catch |err| switch (err) {
+        Error.BlockReturn, Error.Go, Error.Throw, Error.Quit, Error.OutOfMemory => return err,
+        else => {
+            const name = try ev.interner.internKeyword(@errorName(err));
+            return ev.setValues(&.{name});
+        },
+    };
+    var outcome = ev.heap.protect();
+    defer outcome.close();
+    try outcome.push(value.NIL);
+    for (ev.values.items) |v| try outcome.push(v);
+    return ev.setValues(outcome.items());
 }
 
 fn theForm(ev: *Evaluator, args: Value) Error!Value {

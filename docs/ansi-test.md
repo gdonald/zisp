@@ -63,7 +63,11 @@ loads each file and counts the ones that load and run to completion; when
 a file emits a `do-tests` tally the harness accumulates those per-test
 counts instead.
 
-The framework itself loads: `rt-package.lsp` defines the package and
-`rt.lsp` defines `deftest`, `do-tests`, and the entry structure. Driving
-the suite through `(do-tests)` additionally needs `gclload1.lsp`, which
-pulls in the pathname functions, the condition system, and `loop`.
+The framework itself runs: `rt-package.lsp` defines the package, `rt.lsp`
+defines `deftest`, `do-tests`, and the entry structure, and a test defined
+with `deftest` is reported by `(do-tests)`.
+
+Loading a category's own test files goes through `gclload1.lsp`, which
+loads `universe.lsp`. That file builds a generic function with `defgeneric`
+and asks for `find-class` and `find-method`, so the whole-suite driver
+waits on the object system.

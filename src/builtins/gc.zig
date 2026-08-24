@@ -49,6 +49,9 @@ fn roomFn(p: *anyopaque, args: []const Value) Error!Value {
 
     const entries = [_]struct { name: []const u8, count: usize }{
         .{ .name = "LIVE-BYTES", .count = stats.live_bytes },
+        .{ .name = "NURSERY-BYTES", .count = stats.nursery_bytes },
+        .{ .name = "NURSERY-CAPACITY", .count = ev.heap.objects.nursery_capacity },
+        .{ .name = "PROMOTED", .count = stats.promoted },
         .{ .name = "REGION-BYTES", .count = stats.region_bytes },
         .{ .name = "REGIONS", .count = ev.heap.objects.regionCount() },
         .{ .name = "FREE-BLOCKS", .count = stats.free_blocks },

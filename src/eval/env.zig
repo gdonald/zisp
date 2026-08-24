@@ -8,6 +8,9 @@ pub const HASH_THRESHOLD: usize = 16;
 
 pub const Frame = struct {
     parent: ?*Frame = null,
+    /// Set when a closure captured this frame. A tail call may not reuse
+    /// such a frame: the closure still reads the bindings it holds.
+    captured: bool = false,
     symbols: std.ArrayList(Value) = .empty,
     values: std.ArrayList(Value) = .empty,
     map: ?std.AutoHashMapUnmanaged(u64, Value) = null,
@@ -16,6 +19,16 @@ pub const Frame = struct {
         self.symbols.deinit(allocator);
         self.values.deinit(allocator);
         if (self.map) |*m| m.deinit(allocator);
+    }
+
+    /// Mark this frame and its parents as captured, stopping at the first
+    /// frame already marked, since everything above it is marked too.
+    pub fn markCaptured(frame: ?*Frame) void {
+        var current = frame;
+        while (current) |f| : (current = f.parent) {
+            if (f.captured) return;
+            f.captured = true;
+        }
     }
 
     pub fn reset(self: *Frame) void {

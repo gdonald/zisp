@@ -139,7 +139,12 @@ pub const Marker = struct {
     fn visitHeapObject(self: *Marker, v: Value) !void {
         switch (heap.heapType(v)) {
             // Nothing inside these points at another object.
-            .string, .bignum, .single_float, .double_float, .random_state, .package => {},
+            .bignum, .single_float, .double_float, .random_state, .package, .readtable => {},
+            // A displaced string's storage belongs to its target.
+            .string => {
+                const text = heap.asString(v);
+                if (text.isDisplaced()) try self.push(text.displaced_to);
+            },
             .ratio => {
                 const r = heap.asRatio(v);
                 try self.push(r.numerator);

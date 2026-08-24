@@ -24,6 +24,9 @@ const Fixture = struct {
         };
         try symbol_mod.initStandardSymbols(&fx.interner);
         fx.heap = zisp.Heap.init(fx.arena.allocator());
+        // Mark bits live on the regions, so these allocate straight into
+        // the tenured space rather than the nursery.
+        fx.heap.objects.nursery_capacity = 0;
         return fx;
     }
 

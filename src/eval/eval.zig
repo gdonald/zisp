@@ -53,6 +53,13 @@ pub const Evaluator = struct {
     quit_code: ?u8 = null,
     special_forms: std.AutoHashMapUnmanaged(u64, SpecialFormFn) = .{},
     macro_expander: MacroExpander = defaultMacroExpander,
+    // Expansion of each macro call form, keyed by the call's cons address.
+    // Re-expanding on every evaluation makes a macro inside a loop cost a
+    // full interpreted run of the macro body per iteration. An entry is
+    // used only while the head still names the same macro function, and the
+    // whole table is dropped at each collection so no entry outlives the
+    // cons it is keyed on.
+    macro_cache: std.AutoHashMapUnmanaged(u64, MacroExpansion) = .{},
     // Tail-position dispatch through these control forms reuses the caller's
     // frame instead of growing the native stack. Populated by registerStandard.
     sym_if: Value = undefined,
@@ -125,6 +132,7 @@ pub const Evaluator = struct {
     pub fn deinit(self: *Evaluator) void {
         self.env.deinit();
         self.special_forms.deinit(self.allocator);
+        self.macro_cache.deinit(self.allocator);
         self.block_stack.deinit(self.allocator);
         self.tagbody_stack.deinit(self.allocator);
         self.catch_stack.deinit(self.allocator);
@@ -348,6 +356,12 @@ pub const Evaluator = struct {
         try collect_mod.collect(fromOpaque(context));
     }
 
+    /// Evaluate a form the reader built for `#.`, through an opaque context
+    /// so the reader needs no evaluator type.
+    pub fn readEval(context: *anyopaque, form: Value) anyerror!Value {
+        return fromOpaque(context).eval(form);
+    }
+
     pub fn eval(self: *Evaluator, form: Value) Error!Value {
         if (!self.collector_installed) self.installCollector();
         // The form is held on the Lisp stack for as long as it is being
@@ -380,15 +394,27 @@ pub const Evaluator = struct {
                 self.current_form = form;
                 return handler(self, tail);
             }
-            if (try self.macro_expander(self, form)) |expanded| {
+            // A replaced expander sees every call form, so its own
+            // decisions stand; the standard one expands only macro calls,
+            // and those expansions are cached per call site.
+            if (@intFromPtr(self.macro_expander) != @intFromPtr(&defaultMacroExpander)) {
+                if (try self.macro_expander(self, form)) |expanded| {
+                    var held = self.heap.stack.open();
+                    defer held.close();
+                    try held.push(expanded);
+                    return self.eval(expanded);
+                }
+            }
+            const fn_v = self.env.lookupFunction(head) orelse
+                return self.unbound(head, Error.UnboundFunction);
+            if (function.isMacro(fn_v)) {
+                const expanded = try self.expandCached(form, fn_v);
                 // The expansion is fresh structure nothing else holds.
                 var held = self.heap.stack.open();
                 defer held.close();
                 try held.push(expanded);
                 return self.eval(expanded);
             }
-            const fn_v = self.env.lookupFunction(head) orelse
-                return self.unbound(head, Error.UnboundFunction);
             return self.applyFunction(fn_v, tail);
         }
 
@@ -414,6 +440,25 @@ pub const Evaluator = struct {
         }
 
         return self.callFunction(fn_v, args.items());
+    }
+
+    /// The expansion of one macro call, tagged with the macro function it
+    /// came from so a redefinition is not served from the cache.
+    const MacroExpansion = struct { expander: Value, expansion: Value };
+
+    /// Expand a macro call, reusing the previous expansion of this same call
+    /// form when the head still names the same macro function.
+    fn expandCached(self: *Evaluator, form: Value, expander: Value) Error!Value {
+        if (self.macro_cache.get(form.raw)) |cached| {
+            if (cached.expander.equalsRaw(expander)) return cached.expansion;
+        }
+        const expanded = (try self.macro_expander(self, form)) orelse return Error.NotCallable;
+        try self.macro_cache.put(
+            self.allocator,
+            form.raw,
+            .{ .expander = expander, .expansion = expanded },
+        );
+        return expanded;
     }
 
     /// Expand `form` once if its head names a macro. Returns null when the
@@ -507,13 +552,21 @@ pub const Evaluator = struct {
 
         while (true) {
             self.env.top_function = cur.captured_fenv;
-            if (frame) |f| {
+            if (if (frame) |f| !f.captured else false) {
                 // A tail jump leaves the previous iteration's dynamic
                 // bindings behind before rebinding into the reused frame.
+                const f = frame.?;
                 self.unwindSpecials(call_mark);
                 f.reset();
                 f.parent = cur.captured_env;
                 self.env.top_value = f;
+            } else if (frame != null) {
+                // The frame in hand outlives this call, so the next one
+                // gets a fresh frame rather than clearing what a closure
+                // still reads.
+                self.unwindSpecials(call_mark);
+                self.env.top_value = cur.captured_env;
+                frame = try self.env.pushValueFrame();
             } else {
                 self.env.top_value = cur.captured_env;
                 frame = try self.env.pushValueFrame();

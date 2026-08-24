@@ -62,6 +62,15 @@ pub const Stack = struct {
     }
 
     /// Everything in use, chunk by chunk. This is what a root scan walks.
+    /// The same values a collection may rewrite in place when it moves
+    /// what they point at.
+    pub fn liveMut(self: *Stack, index: usize) []Value {
+        if (index >= self.chunks.items.len) return &.{};
+        if (index > self.chunk) return &.{};
+        const used = if (index == self.chunk) self.top else self.heights.items[index];
+        return self.chunks.items[index][0..used];
+    }
+
     pub fn live(self: *const Stack, index: usize) []const Value {
         if (index >= self.chunks.items.len) return &.{};
         if (index > self.chunk) return &.{};

@@ -120,6 +120,17 @@ pub const standard_handlers: readtable_mod.StandardHandlers = .{
     .hash_minus = handleHashMinus,
     .hash_p = handleHashP,
     .hash_c = handleHashC,
+    .hash_star = handleHashStar,
+    .hash_dot = handleHashDot,
+};
+
+/// `readtable-case`: how an unescaped symbol name is folded.
+pub const SymbolCase = enum(u64) { upcase = 0, downcase = 1, preserve = 2, invert = 3 };
+
+/// How `#.` reaches an evaluator: the context is opaque to the reader.
+pub const ReadEval = struct {
+    context: *anyopaque,
+    call: *const fn (*anyopaque, Value) anyerror!Value,
 };
 
 /// Process-wide standard readtable, lazily initialized. Every `Reader.init`
@@ -150,6 +161,14 @@ pub const Reader = struct {
     /// `*read-suppress*`. Symbols are not interned and package prefixes
     /// naming absent packages read as NIL instead of signaling.
     suppress: bool = false,
+    /// The token whose reader-macro handler is running, so a handler can
+    /// see the text the tokenizer captured for it.
+    current_token: Token = .{ .kind = .eof, .pos = .{}, .text = "" },
+    /// Read-time evaluation for `#.`. Null when no evaluator is attached,
+    /// and then `#.` has nothing to run.
+    read_eval: ?ReadEval = null,
+    /// The active readtable's case, applied to unescaped symbol text.
+    case: SymbolCase = .upcase,
     /// One-token lookahead. The reader peeks when it needs to decide
     /// between dotted-pair and final-element in a list, and to detect
     /// EOF without consuming.
@@ -306,6 +325,7 @@ pub const Reader = struct {
         // overrides actually fire. Everything else is a fixed
         // shape the tokenizer already classified.
         if (self.readtable.get(t.kind)) |handler| {
+            self.current_token = t;
             return try handler(@ptrCast(self));
         }
         return switch (t.kind) {
@@ -324,7 +344,7 @@ pub const Reader = struct {
             // Reader-macro kinds without a handler shouldn't reach here —
             // the standard readtable populates them. A null means user code
             // explicitly cleared an entry; surface as BadToken.
-            .quote, .backquote, .comma, .comma_at, .hash_quote, .hash_lparen, .hash_plus, .hash_minus, .hash_p, .hash_c => self.errAt(t.pos, Error.BadToken),
+            .quote, .backquote, .comma, .comma_at, .hash_quote, .hash_lparen, .hash_plus, .hash_minus, .hash_p, .hash_c, .hash_star, .hash_dot => self.errAt(t.pos, Error.BadToken),
         };
     }
 
@@ -526,9 +546,9 @@ pub const Reader = struct {
         var name_buf: [256]u8 = undefined;
         if (findPackageMarker(text)) |marker| {
             var pkg_buf: [256]u8 = undefined;
-            const pkg_name = foldSymbolName(text[0..marker.start], &pkg_buf) catch |e|
+            const pkg_name = foldSymbolNameCase(text[0..marker.start], &pkg_buf, self.case) catch |e|
                 return self.errAt(p, e);
-            const sym_name = foldSymbolName(text[marker.end..], &name_buf) catch |e|
+            const sym_name = foldSymbolNameCase(text[marker.end..], &name_buf, self.case) catch |e|
                 return self.errAt(p, e);
             if (pkg_name.len == 0) {
                 return try self.interner.internKeyword(sym_name);
@@ -543,7 +563,7 @@ pub const Reader = struct {
             }
             return try self.interner.internIn(pkg, sym_name);
         }
-        const name = foldSymbolName(text, &name_buf) catch |e| return self.errAt(p, e);
+        const name = foldSymbolNameCase(text, &name_buf, self.case) catch |e| return self.errAt(p, e);
         return try self.interner.internCurrent(name);
     }
 
@@ -552,14 +572,14 @@ pub const Reader = struct {
         var buf: [256]u8 = undefined;
         // `::foo` reaches here with the first colon already consumed.
         const body = if (text.len != 0 and text[0] == ':') text[1..] else text;
-        const name = foldSymbolName(body, &buf) catch |e| return self.errAt(p, e);
+        const name = foldSymbolNameCase(body, &buf, self.case) catch |e| return self.errAt(p, e);
         return try self.interner.internKeyword(name);
     }
 
     fn parseUninternedAt(self: *Reader, text: []const u8, p: Position) Error!Value {
         if (self.suppress) return value.NIL;
         var buf: [256]u8 = undefined;
-        const name = foldSymbolName(text, &buf) catch |e| return self.errAt(p, e);
+        const name = foldSymbolNameCase(text, &buf, self.case) catch |e| return self.errAt(p, e);
         return try self.interner.makeUninterned(name);
     }
 
@@ -665,11 +685,34 @@ fn handleHashC(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
     return ReadStep{ .value = try self.readComplex() };
 }
 
+/// `#*0101` — a bit vector holding exactly those bits.
+fn handleHashStar(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
+    const self: *Reader = @ptrCast(@alignCast(ctx));
+    const bits = self.current_token.text;
+    if (self.suppress) return ReadStep{ .value = value.NIL };
+    const v = try self.heap.allocArray(&.{bits.len}, .bit);
+    for (heap_mod.arrayElements(v), bits) |*slot, bit| {
+        slot.* = Value.fromFixnum(if (bit == '1') 1 else 0);
+    }
+    return ReadStep{ .value = v };
+}
+
+/// `#.form` — read a form and evaluate it now, so the value is what the
+/// reader returns. Without an evaluator attached there is nothing to run.
+fn handleHashDot(ctx: *anyopaque) readtable_mod.HandlerError!ReadStep {
+    const self: *Reader = @ptrCast(@alignCast(ctx));
+    const form = (try self.read()) orelse return Error.EndOfInput;
+    if (self.suppress) return ReadStep{ .value = value.NIL };
+    const hook = self.read_eval orelse return Error.BadToken;
+    const v = hook.call(hook.context, form) catch return Error.BadToken;
+    return ReadStep{ .value = v };
+}
+
 /// Apply readtable-case `:upcase` to a symbol's source text. `|..|` runs
 /// are taken verbatim with the surrounding pipes stripped; backslash
 /// escapes one following character verbatim. `out` must have room for
 /// the full result.
-fn foldSymbolName(text: []const u8, out: []u8) Error![]const u8 {
+fn foldSymbolNameCase(text: []const u8, out: []u8, case: SymbolCase) Error![]const u8 {
     var i: usize = 0;
     var o: usize = 0;
     while (i < text.len) : (i += 0) {
@@ -707,7 +750,12 @@ fn foldSymbolName(text: []const u8, out: []u8) Error![]const u8 {
             i += 1;
         } else {
             if (o >= out.len) return Error.BadToken;
-            out[o] = std.ascii.toUpper(c);
+            out[o] = switch (case) {
+                .upcase => std.ascii.toUpper(c),
+                .downcase => std.ascii.toLower(c),
+                .preserve => c,
+                .invert => if (std.ascii.isUpper(c)) std.ascii.toLower(c) else std.ascii.toUpper(c),
+            };
             o += 1;
             i += 1;
         }
@@ -727,11 +775,13 @@ fn unescapeString(text: []const u8, out: []u32) ![]u32 {
         var c: u21 = text[i];
         var width: usize = 1;
         if (c == '\\') {
+            // A single escape makes the next character stand for itself,
+            // whatever it is (CLHS 2.4.5), so \n is the letter n.
             i += 1;
             if (i >= text.len) return error.BadToken;
             c = text[i];
-            if (c != '\\' and c != '"') return error.BadToken;
-        } else if (c >= 0x80) {
+        }
+        if (c >= 0x80) {
             width = std.unicode.utf8ByteSequenceLength(text[i]) catch return error.BadToken;
             if (i + width > text.len) return error.BadToken;
             c = std.unicode.utf8Decode(text[i .. i + width]) catch return error.BadToken;

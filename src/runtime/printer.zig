@@ -258,6 +258,9 @@ fn needsSymbolEscape(name: []const u8) bool {
 }
 
 fn looksLikeNumber(name: []const u8) bool {
+    // A potential number never ends in a sign (CLHS 2.3.1.1), which is what
+    // keeps `1+` and `1-` printing without escapes.
+    if (name.len != 0 and (name[name.len - 1] == '+' or name[name.len - 1] == '-')) return false;
     var i: usize = 0;
     if (i < name.len and (name[i] == '+' or name[i] == '-')) i += 1;
     if (i >= name.len) return false;
@@ -294,6 +297,7 @@ fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
             try ctx.writer.writeByte(')');
         },
         .random_state => try ctx.writer.writeAll("#<random-state>"),
+        .readtable => try ctx.writer.writeAll("#<readtable>"),
         .stream => try ctx.writer.writeAll("#<stream>"),
         .structure => try printStructure(ctx, v, depth),
         .pathname => {
@@ -445,6 +449,13 @@ fn printCons(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
 fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     const a = heap.asArray(v);
     const elements = heap.arrayActive(v);
+    if (a.rank == 1 and a.element_type == .bit) {
+        try ctx.writer.writeAll("#*");
+        for (elements) |elem| {
+            try ctx.writer.writeByte(if (elem.isFixnum() and elem.toFixnum() == 1) '1' else '0');
+        }
+        return;
+    }
     if (a.rank == 1) {
         try ctx.writer.writeAll("#(");
         for (elements, 0..) |elem, i| {

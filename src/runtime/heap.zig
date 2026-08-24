@@ -34,6 +34,7 @@ pub const HeapType = enum(u8) {
     closure = 13,
     structure = 14,
     random_state = 15,
+    readtable = 16,
     _,
 };
 
@@ -64,9 +65,16 @@ pub const HeapString = extern struct {
     len: u64,
     capacity: u64,
     codes: [*]u32,
+    /// The string this one is displaced to, or NIL. A displaced string owns
+    /// no storage: `codes` points into the target's, past its offset.
+    displaced_to: Value = .{ .raw = 0 },
     has_fill_pointer: bool,
     adjustable: bool,
     _pad: [6]u8 = .{0} ** 6,
+
+    pub fn isDisplaced(self: *const HeapString) bool {
+        return self.displaced_to.raw != 0;
+    }
 
     pub fn slice(self: *HeapString) []u32 {
         return self.codes[0..self.len];
@@ -212,6 +220,20 @@ pub const Span = struct { start: u32, len: u32 };
 pub const HeapRandomState = extern struct {
     header: HeapHeader,
     state: [4]u64,
+};
+
+/// Reader-macro dispatch table, plus the case the reader folds symbol
+/// names with. The handler table itself is Zig fn pointers, held opaquely
+/// here so this module stays free of a reader import.
+pub const HeapReadtable = extern struct {
+    header: HeapHeader,
+    /// `*reader.Readtable`, owned by the heap's allocator. Its byte length
+    /// travels with it so the sweep can hand the storage back without
+    /// knowing the reader's type.
+    handlers: *anyopaque,
+    handlers_size: u64,
+    /// `readtable-case`: 0 upcase, 1 downcase, 2 preserve, 3 invert.
+    case: u64,
 };
 
 /// Complex number. Both parts are reals of the same kind: either both
@@ -701,6 +723,19 @@ pub const Heap = struct {
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
 
+    /// The table pointer is borrowed: the caller allocated it and frees it
+    /// when the object is finalized.
+    pub fn allocReadtable(self: *Heap, handlers: []align(8) u8, case: u64) !Value {
+        const obj = try self.create(HeapReadtable);
+        obj.* = .{
+            .header = .{ .type_tag = .readtable, .size = @sizeOf(HeapReadtable) },
+            .handlers = @ptrCast(handlers.ptr),
+            .handlers_size = handlers.len,
+            .case = case,
+        };
+        return Value.fromHeapAddr(@intFromPtr(obj));
+    }
+
     pub fn allocComplex(self: *Heap, realpart: Value, imagpart: Value) !Value {
         var held = self.protect();
         defer held.close();
@@ -775,7 +810,13 @@ fn finalizeObject(context: *anyopaque, object: [*]align(gc.ALIGNMENT) u8) void {
     switch (obj.header.type_tag) {
         .string => {
             const text: *HeapString = @ptrCast(obj);
-            self.allocator.free(text.allocated());
+            // A displaced string borrows its target's storage.
+            if (!text.isDisplaced()) self.allocator.free(text.allocated());
+        },
+        .readtable => {
+            const table: *HeapReadtable = @ptrCast(@alignCast(obj));
+            const bytes: [*]align(8) u8 = @ptrCast(@alignCast(table.handlers));
+            self.allocator.free(bytes[0..table.handlers_size]);
         },
         .vector => {
             const array: *HeapArray = @ptrCast(obj);
@@ -875,6 +916,14 @@ pub fn asRandomState(v: Value) *HeapRandomState {
 
 pub fn isRandomState(v: Value) bool {
     return v.tag() == .heap and heapType(v) == .random_state;
+}
+
+pub fn asReadtable(v: Value) *HeapReadtable {
+    return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn isReadtable(v: Value) bool {
+    return v.tag() == .heap and heapType(v) == .readtable;
 }
 
 pub fn asComplex(v: Value) *HeapComplex {
@@ -982,11 +1031,21 @@ pub fn cdr(v: Value) Value {
     return cell.cdr;
 }
 
+/// Note that `container` now refers to `stored`. A generational collector
+/// has to learn when an already-tenured object starts pointing at a young
+/// one, which is what this call site set is for. One generation means
+/// there is nothing to record yet.
+pub inline fn writeBarrier(container: Value, stored: Value) void {
+    _ = container;
+    _ = stored;
+}
+
 pub fn setCar(v: Value, new_car: Value) void {
     const cell: *Cons = @ptrFromInt(v.toConsAddr());
     checkLive(v.toConsAddr());
     checkStored(new_car);
     cell.car = new_car;
+    writeBarrier(v, new_car);
 }
 
 pub fn setCdr(v: Value, new_cdr: Value) void {
@@ -994,4 +1053,23 @@ pub fn setCdr(v: Value, new_cdr: Value) void {
     checkLive(v.toConsAddr());
     checkStored(new_cdr);
     cell.cdr = new_cdr;
+    writeBarrier(v, new_cdr);
+}
+
+/// Store into one indexed slot of a heap object: an array element, a
+/// structure slot, or a hash-table entry's value. Together with `setCar`
+/// and `setCdr` this is where every Value written into an existing object
+/// goes, so the barrier above sees all of them.
+///
+/// A symbol's cells are not slots in this sense: symbols live in the
+/// interner's arena and every one of them is scanned as a root.
+pub fn setSlot(container: Value, index: usize, v: Value) void {
+    checkStored(v);
+    switch (heapType(container)) {
+        .vector => arrayElements(container)[index] = v,
+        .structure => asStructure(container).slice()[index] = v,
+        .hash_table => asHashTable(container).entries.items[index].value = v,
+        else => unreachable,
+    }
+    writeBarrier(container, v);
 }

@@ -113,7 +113,7 @@ test "what a finished call bound is not kept" {
     try testing.expect(fx.liveBytes() <= before);
 }
 
-test "a pinned value comes through a collection" {
+test "a pinned value comes through a collection, at its new address" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     const held = try fx.heap.allocCons(Value.fromFixnum(7), value.NIL);
@@ -121,7 +121,12 @@ test "a pinned value comes through a collection" {
 
     try collect.collect(&fx.ev);
 
-    try testing.expectEqual(@as(i64, 7), heap_mod.car(held).toFixnum());
+    // The collection copied the cell out of the nursery and rewrote the
+    // pin, so the pin is where the value is read back from. A Zig local
+    // that held the old value is stale from here on.
+    const moved = fx.ev.pinned.items[fx.ev.pinned.items.len - 1];
+    try testing.expect(!moved.equalsRaw(held));
+    try testing.expectEqual(@as(i64, 7), heap_mod.car(moved).toFixnum());
     try testing.expect(fx.heap.objects.stats.live_bytes > 0);
     fx.ev.unpin();
 }
@@ -177,7 +182,7 @@ test "room reports the heap figures" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
 
-    const regions = try fx.eval("(car (cdr (cdr (cdr (cdr (cdr (room)))))))");
+    const regions = try fx.eval("(getf (room) :regions)");
 
     try testing.expectEqual(
         @as(i64, @intCast(fx.heap.objects.regionCount())),

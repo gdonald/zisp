@@ -80,3 +80,36 @@ test "nested cons (a (b c) d)" {
     try std.testing.expectEqual(@as(u21, 'c'), heap.car(heap.cdr(second)).toChar());
     try std.testing.expectEqual(@as(u21, 'd'), heap.car(heap.cdr(heap.cdr(outer))).toChar());
 }
+
+test "setSlot writes an array element" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var h = heap.Heap.init(arena.allocator());
+
+    const v = try h.allocArray(&.{2}, .t);
+    heap.setSlot(v, 1, Value.fromFixnum(7));
+    try std.testing.expectEqual(@as(i64, 7), heap.arrayElements(v)[1].toFixnum());
+}
+
+test "setSlot writes a structure slot" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var h = heap.Heap.init(arena.allocator());
+
+    const name = Value.fromFixnum(0);
+    const v = try h.allocStructure(name, &.{ Value.fromFixnum(1), Value.fromFixnum(2) });
+    heap.setSlot(v, 0, Value.fromFixnum(9));
+    try std.testing.expectEqual(@as(i64, 9), heap.asStructure(v).slice()[0].toFixnum());
+    try std.testing.expectEqual(@as(i64, 2), heap.asStructure(v).slice()[1].toFixnum());
+}
+
+test "the write barrier is in place ahead of a generational heap" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var h = heap.Heap.init(arena.allocator());
+
+    // One generation records nothing, so the call is a no-op the mutators
+    // can already route every store through.
+    const cell = try h.allocCons(value.NIL, value.NIL);
+    heap.writeBarrier(cell, Value.fromFixnum(1));
+}

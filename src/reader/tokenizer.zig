@@ -319,11 +319,13 @@ pub const Tokenizer = struct {
 
     fn scanSymbolBody(self: *Tokenizer) void {
         while (self.peek()) |c| {
-            if (isTerminator(c)) break;
+            // A pipe opens a quoted run rather than ending the name, so it
+            // is checked ahead of the terminator set it belongs to.
             if (c == '|') {
                 self.scanQuotedRun() catch return;
                 continue;
             }
+            if (isTerminator(c)) break;
             if (c == '\\') {
                 self.advance();
                 if (self.peek() == null) return;
@@ -382,6 +384,27 @@ pub const Tokenizer = struct {
                 self.advance();
                 break :blk .{
                     .kind = .hash_c,
+                    .pos = start_pos,
+                    .text = self.src[start_idx..self.idx],
+                };
+            },
+            '*' => blk: {
+                self.advance(); // '*'
+                const bits_start = self.idx;
+                while (self.peek()) |bit| {
+                    if (bit != '0' and bit != '1') break;
+                    self.advance();
+                }
+                break :blk .{
+                    .kind = .hash_star,
+                    .pos = start_pos,
+                    .text = self.src[bits_start..self.idx],
+                };
+            },
+            '.' => blk: {
+                self.advance(); // '.'
+                break :blk .{
+                    .kind = .hash_dot,
                     .pos = start_pos,
                     .text = self.src[start_idx..self.idx],
                 };

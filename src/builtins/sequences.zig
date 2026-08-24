@@ -378,10 +378,9 @@ fn mapIntoFn(p: *anyopaque, args: []const Value) Error!Value {
             }
         },
         .vector => {
-            const slots = heap.arrayActive(target);
-            for (slots, 0..) |*slot, i| {
+            for (0..heap.arrayActive(target).len) |i| {
                 if (i >= produced.items.len) break;
-                slot.* = produced.items[i];
+                heap.setSlot(target, i, produced.items[i]);
             }
         },
         .string => {

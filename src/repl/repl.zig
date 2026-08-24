@@ -17,6 +17,7 @@ const reader_mod = @import("../reader.zig");
 const collect_mod = @import("../eval/collect.zig");
 const eval_pkg = @import("../eval.zig");
 const builtins = @import("../builtins/builtins.zig");
+const readtables = @import("../builtins/readtables.zig");
 
 const Value = value.Value;
 const Evaluator = eval_pkg.Evaluator;
@@ -96,6 +97,8 @@ pub const Repl = struct {
     pub fn run(self: *Repl, source: []const u8) Error!void {
         var tokenizer = reader_mod.Tokenizer.init(source);
         var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
+        rd.read_eval = .{ .context = @ptrCast(&self.ev), .call = &eval_pkg.Evaluator.readEval };
+        readtables.install(&self.ev, &rd);
         while (true) {
             try collect_mod.maybeCollect(&self.ev);
             const form = rd.read() catch |e| {
@@ -122,6 +125,8 @@ pub const Repl = struct {
     pub fn evalForms(self: *Repl, source: []const u8, print: bool) Error!void {
         var tokenizer = reader_mod.Tokenizer.init(source);
         var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
+        rd.read_eval = .{ .context = @ptrCast(&self.ev), .call = &eval_pkg.Evaluator.readEval };
+        readtables.install(&self.ev, &rd);
         while (true) {
             try collect_mod.maybeCollect(&self.ev);
             const form = rd.read() catch return Error.ProgramError;

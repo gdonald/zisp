@@ -18,11 +18,24 @@ const Evaluator = eval_mod.Evaluator;
 const Error = function.NativeError;
 const ElementType = heap.ElementType;
 
+/// Most axes an array may have. `make-array` rejects more, which is what
+/// `array-rank-limit` promises.
+pub const RANK_LIMIT: i64 = 128;
+
 fn evaluator(p: *anyopaque) *Evaluator {
     return Evaluator.fromOpaque(p);
 }
 
 pub fn registerArrays(ev: *Evaluator) !void {
+    for ([_]struct { name: []const u8, v: i64 }{
+        .{ .name = "ARRAY-RANK-LIMIT", .v = RANK_LIMIT },
+        .{ .name = "ARRAY-DIMENSION-LIMIT", .v = value.FIXNUM_MAX },
+        .{ .name = "ARRAY-TOTAL-SIZE-LIMIT", .v = value.FIXNUM_MAX },
+    }) |c| {
+        const sym = try ev.interner.intern(c.name);
+        symbol_mod.symbol(sym).value_cell = Value.fromFixnum(c.v);
+    }
+
     _ = try ev.defineNative("VECTOR", &vectorFn);
     _ = try ev.defineNative("MAKE-ARRAY", &makeArrayFn);
     _ = try ev.defineNative("AREF", &arefFn);
@@ -200,6 +213,7 @@ fn makeArrayFn(p: *anyopaque, args: []const Value) Error!Value {
     try dimensionList(ev, args[0], &sizes);
 
     if (options.fill_pointer != null and sizes.items.len != 1) return Error.TypeError;
+    if (sizes.items.len > RANK_LIMIT) return Error.TypeError;
 
     if (options.element_type == .character and sizes.items.len == 1) {
         return makeCharacterVector(ev, sizes.items[0], options);
@@ -210,7 +224,9 @@ fn makeArrayFn(p: *anyopaque, args: []const Value) Error!Value {
 /// A one-dimensional array of characters is a string, so it gets the
 /// string representation rather than a slot per character.
 fn makeCharacterVector(ev: *Evaluator, size: usize, options: MakeArrayOptions) Error!Value {
-    if (options.displaced_to != null) return Error.TypeError;
+    if (options.displaced_to) |target| {
+        return displacedString(ev, size, target, options);
+    }
     const result = try ev.heap.allocStringWithCapacity(size, size);
     const s = heap.asString(result);
     s.adjustable = options.adjustable;
@@ -229,6 +245,34 @@ fn makeCharacterVector(ev: *Evaluator, size: usize, options: MakeArrayOptions) E
             c.* = element.toChar();
         }
     }
+    if (options.fill_pointer) |fp| {
+        s.has_fill_pointer = true;
+        s.len = try fillPointerValue(fp, size);
+    }
+    return result;
+}
+
+/// A character vector displaced to a string borrows the target's storage
+/// from the offset on, so every string operation reaches the same
+/// characters the target holds.
+fn displacedString(
+    ev: *Evaluator,
+    size: usize,
+    target: Value,
+    options: MakeArrayOptions,
+) Error!Value {
+    if (!heap.isString(target)) return Error.TypeError;
+    const source = heap.asString(target);
+    const offset = options.displaced_index_offset;
+    if (offset + size > source.capacity) return Error.TypeError;
+    const result = try ev.heap.allocStringWithCapacity(0, 0);
+    ev.heap.allocator.free(heap.asString(result).allocated());
+    const s = heap.asString(result);
+    s.codes = source.codes + offset;
+    s.len = size;
+    s.capacity = size;
+    s.adjustable = options.adjustable;
+    s.displaced_to = target;
     if (options.fill_pointer) |fp| {
         s.has_fill_pointer = true;
         s.len = try fillPointerValue(fp, size);
@@ -384,7 +428,7 @@ fn setArefFn(p: *anyopaque, args: []const Value) Error!Value {
     }
     const a = try expectArray(args[0]);
     try checkElement(a.element_type, new_value);
-    heap.arrayElements(args[0])[try rowMajorIndex(a, subscripts)] = new_value;
+    heap.setSlot(args[0], try rowMajorIndex(a, subscripts), new_value);
     return new_value;
 }
 
@@ -419,7 +463,7 @@ fn setRowMajorArefFn(p: *anyopaque, args: []const Value) Error!Value {
     }
     const a = try expectArray(args[0]);
     try checkElement(a.element_type, args[2]);
-    heap.arrayElements(args[0])[try rowMajorOffset(args[0], args[1], a.totalSize())] = args[2];
+    heap.setSlot(args[0], try rowMajorOffset(args[0], args[1], a.totalSize()), args[2]);
     return args[2];
 }
 
@@ -520,7 +564,13 @@ fn arrayElementTypeFn(p: *anyopaque, args: []const Value) Error!Value {
 fn arrayDisplacementFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     const v = try oneArg(args);
-    if (heap.isString(v)) return ev.setValues(&.{ value.NIL, Value.fromFixnum(0) });
+    if (heap.isString(v)) {
+        const s = heap.asString(v);
+        if (!s.isDisplaced()) return ev.setValues(&.{ value.NIL, Value.fromFixnum(0) });
+        const source = heap.asString(s.displaced_to);
+        const offset = (@intFromPtr(s.codes) - @intFromPtr(source.codes)) / @sizeOf(u32);
+        return ev.setValues(&.{ s.displaced_to, Value.fromFixnum(@intCast(offset)) });
+    }
     const a = try expectArray(v);
     return ev.setValues(&.{ a.displaced_to, Value.fromFixnum(@intCast(a.displaced_offset)) });
 }
@@ -591,7 +641,7 @@ fn storeAt(v: Value, index: usize, element: Value) Error!void {
     }
     const a = heap.asArray(v);
     try checkElement(a.element_type, element);
-    heap.arrayElements(v)[index] = element;
+    heap.setSlot(v, index, element);
 }
 
 fn bumpFillPointer(v: Value, to: usize) void {

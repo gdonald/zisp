@@ -420,6 +420,8 @@ test "dispatch goes through the readtable" {
         .hash_minus = overrideQuoteHandler,
         .hash_p = overrideQuoteHandler,
         .hash_c = overrideQuoteHandler,
+        .hash_star = overrideQuoteHandler,
+        .hash_dot = overrideQuoteHandler,
     });
     var tk = Tokenizer.init("'foo");
     var rd = zisp.reader.Reader.initFull(&tk, &s.h, &s.interner, &rt, null, "");

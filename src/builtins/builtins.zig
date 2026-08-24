@@ -6,6 +6,7 @@ const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 
 pub const system = @import("system.zig");
+const readtables = @import("readtables.zig");
 pub const registerSystem = system.registerSystem;
 pub const packages = @import("packages.zig");
 pub const pathnames = @import("pathnames.zig");
@@ -162,9 +163,14 @@ pub fn registerStandard(ev: *Evaluator) !void {
     // Ahead of the prelude: reading the prelude interns every symbol it
     // mentions in the current package, so a name the prelude uses before
     // its native exists would shadow the later definition.
+    try readtables.registerReadtables(ev);
     try system.registerSystem(ev);
 
     try system.evalSource(ev, prelude_source);
+    try system.evalSource(ev, iteration_source);
+    try system.evalSource(ev, lists_source);
+    try system.evalSource(ev, loop_source);
+    try system.evalSource(ev, sequences_source);
 }
 
 // --- conses, plists, symbol cells ---
@@ -381,25 +387,25 @@ fn structureNameFn(p: *anyopaque, args: []const Value) Error!Value {
     return heap.asStructure(args[0]).name;
 }
 
-fn structureSlot(args: []const Value) Error!*Value {
+fn structureSlotIndex(args: []const Value) Error!usize {
     if (!heap.isStructure(args[0])) return Error.TypeError;
     const i = try eltIndex(args[1]);
     const obj = heap.asStructure(args[0]);
     if (i >= obj.len) return Error.TypeError;
-    return &obj.slice()[i];
+    return i;
 }
 
 fn structureRefFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    return (try structureSlot(args)).*;
+    const index = try structureSlotIndex(args);
+    return heap.asStructure(args[0]).slice()[index];
 }
 
 fn setStructureRefFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 3) return Error.WrongArgCount;
-    const cell = try structureSlot(args[0..2]);
-    cell.* = args[2];
+    heap.setSlot(args[0], try structureSlotIndex(args[0..2]), args[2]);
     return args[2];
 }
 
@@ -475,6 +481,10 @@ fn memberFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 const prelude_source = @embedFile("../lisp/prelude.lisp");
+const iteration_source = @embedFile("../lisp/iteration.lisp");
+const lists_source = @embedFile("../lisp/lists.lisp");
+const loop_source = @embedFile("../lisp/loop.lisp");
+const sequences_source = @embedFile("../lisp/sequences.lisp");
 
 /// `(error datum args...)`. Until the condition system exists this signals
 /// a program error; a string datum plus arguments is accepted in the

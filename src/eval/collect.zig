@@ -9,13 +9,27 @@ const std = @import("std");
 const value = @import("../runtime/value.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const mark_mod = @import("../runtime/mark.zig");
+const evacuate_mod = @import("../runtime/evacuate.zig");
+const env_mod = @import("env.zig");
 const eval_mod = @import("eval.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
 
-/// Mark everything reachable, then reclaim the rest.
+/// Copy what the nursery still holds into the tenured space, then mark
+/// everything reachable there and reclaim the rest.
 pub fn collect(ev: *Evaluator) !void {
+    // Cached expansions are keyed on a cons address and are reachable only
+    // from the cache, so they go before anything moves or is marked.
+    ev.macro_cache.clearRetainingCapacity();
+
+    // A torture collection runs from inside an allocation, where Zig
+    // locals hold values the root scan can see on the protect stack but
+    // cannot write back into the local. Marking copes with that; moving
+    // does not, so the nursery is left alone and only the tenured space
+    // is swept.
+    if (!ev.heap.collecting) try evacuateNursery(ev);
+
     var marker = mark_mod.Marker.init(ev.allocator, ev.heap);
     defer marker.deinit();
     try pushRoots(&marker, ev);
@@ -38,6 +52,73 @@ pub fn collect(ev: *Evaluator) !void {
     ev.heap.sweep();
     ev.gc_count += 1;
     ev.gc_requested = false;
+}
+
+/// Copy the nursery's survivors into the tenured space and hand the
+/// nursery back to its bump pointer. Every reference to a copied object
+/// is rewritten on the way, so nothing points into the nursery after
+/// this returns.
+fn evacuateNursery(ev: *Evaluator) !void {
+    var e = evacuate_mod.Evacuator.init(ev.allocator, ev.heap);
+    defer e.deinit();
+
+    try updateRoots(&e, ev);
+    try e.drain();
+    try e.rebuildTables();
+    try repositionMoved(&e, ev);
+
+    ev.heap.objects.resetNursery();
+    ev.heap.objects.stats.promoted = e.copied;
+}
+
+/// Every slot a collection may find a value in that nothing else points
+/// at: the symbol table, the environment, and the evaluator's own state.
+fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
+    for (ev.interner.registry.list.items) |pkg| {
+        for ([_]*const std.StringHashMapUnmanaged(Value){ &pkg.internal, &pkg.external }) |table| {
+            var it = table.valueIterator();
+            // A symbol never moves; its three cells are what get updated.
+            while (it.next()) |sym| {
+                var held = sym.*;
+                try e.update(&held);
+            }
+        }
+    }
+
+    try e.pushFrame(ev.env.top_value);
+    try e.pushFrame(ev.env.top_function);
+    for (ev.env.saved_chains.items) |frame| try e.pushFrame(frame);
+
+    var chunk: usize = 0;
+    while (chunk < ev.heap.stack.chunkCount()) : (chunk += 1) {
+        for (ev.heap.stack.liveMut(chunk)) |*v| try e.update(v);
+    }
+    for (ev.values.items) |*v| try e.update(v);
+    for (ev.transfer_values.items) |*v| try e.update(v);
+    for (ev.pinned.items) |*v| try e.update(v);
+    for (ev.block_stack.items) |*entry| try e.update(&entry.name);
+    for (ev.tagbody_stack.items) |*entry| try e.update(&entry.body);
+    for (ev.catch_stack.items) |*entry| try e.update(&entry.tag);
+    for (ev.dynamic_stack.items) |*entry| {
+        try e.update(&entry.sym);
+        try e.update(&entry.saved);
+    }
+    try e.update(&ev.current_form);
+    try e.update(&ev.go_target);
+    var hosts = ev.logical_hosts.valueIterator();
+    while (hosts.next()) |v| try e.update(v);
+}
+
+/// Source positions are keyed on a cons address, so a cons that moved
+/// takes its entry with it.
+fn repositionMoved(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
+    const table = ev.positions orelse return;
+    var it = e.moved_conses.iterator();
+    while (it.next()) |entry| {
+        const pos = table.map.get(entry.key_ptr.*) orelse continue;
+        _ = table.map.remove(entry.key_ptr.*);
+        try table.record(entry.value_ptr.*, pos);
+    }
 }
 
 /// How much may be handed out between collections.

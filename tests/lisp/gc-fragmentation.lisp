@@ -1,9 +1,12 @@
-;; Worst-case fragmentation and coalescing.
+;; Worst-case fragmentation and coalescing in the tenured space.
 ;;
 ;; Ten thousand objects of four different sizes are allocated and every
-;; other one is kept, so no two dead objects are neighbours. Once the
-;; survivors are dropped as well, every run of dead objects has to come
-;; back as a single free block: one per region at most.
+;; other one kept, so the first collection copies five thousand survivors
+;; out of the nursery and they sit side by side. Dropping every other one
+;; of those puts a dead object between every pair of live ones, which is
+;; the worst case for the sweep: nothing can merge. Once the rest are
+;; dropped as well, every run of dead objects has to come back as a
+;; single free block.
 ;;
 ;; Each top-level form is self-checking and evaluates to T.
 
@@ -49,12 +52,28 @@
 
 (gc)
 
-;; Every survivor sits between two dead objects, so next to nothing can
-;; merge and the free blocks are many.
-(> (room-value :free-blocks) 100)
-
-;; The survivors came through whole.
+;; The survivors came through the copy whole.
 (= (gc-c-x (car *gc-survivors*)) 9998)
+
+;; They are tenured now, and the nursery is back to nothing.
+(< (room-value :nursery-bytes) 4096)
+
+;; Drop every other one, so a dead object sits between every pair of
+;; live ones.
+(progn
+  (defun gc-thin (cells keep kept)
+    (if (null cells)
+        kept
+        (gc-thin (cdr cells)
+                 (not keep)
+                 (if keep (cons (car cells) kept) kept))))
+  (setq *gc-survivors* (gc-thin *gc-survivors* t nil))
+  (= (length *gc-survivors*) 2500))
+
+(gc)
+
+;; Nothing could merge, so the free blocks are many.
+(> (room-value :free-blocks) 100)
 
 (progn (setq *gc-survivors* nil) (gc))
 
@@ -69,4 +88,5 @@
 (progn
   (defparameter *gc-regions-before* (room-value :regions))
   (defparameter *gc-survivors* (gc-build 0 10000 nil))
+  (gc)
   (<= (room-value :regions) *gc-regions-before*))

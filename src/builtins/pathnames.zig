@@ -14,6 +14,7 @@ const pathname_mod = @import("../runtime/pathname.zig");
 const equality = @import("../runtime/equality.zig");
 const reader_mod = @import("../reader.zig");
 const eval_mod = @import("../eval/eval.zig");
+const readtables = @import("readtables.zig");
 const function = @import("../eval/function.zig");
 
 const Value = value.Value;
@@ -535,6 +536,8 @@ fn readFile(ev: *Evaluator, path: []const u8) ![]u8 {
 fn readOneForm(ev: *Evaluator, source: []const u8) Error!Value {
     var tokenizer = reader_mod.Tokenizer.init(source);
     var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    readtables.install(ev, &rd);
     const form = rd.read() catch return Error.ProgramError;
     return form orelse Error.ProgramError;
 }

@@ -127,6 +127,10 @@ pub const Value = extern struct {
 
 pub const SPECIAL_UNBOUND: Value = Value.fromSpecial(0);
 pub const SPECIAL_EOF: Value = Value.fromSpecial(1);
+/// Left in a cons a collection has copied out of the nursery: the car
+/// says the cell moved and the cdr says where to. The tag is one no real
+/// value carries, so a live cons cannot hold this by accident.
+pub const FORWARDED: Value = .{ .raw = @intFromEnum(Tag._reserved6) };
 
 // NIL and T are populated when the symbol table is initialized.
 // Their canonical Value forms are exposed so identity checks can use raw equality.

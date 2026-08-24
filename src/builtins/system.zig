@@ -14,6 +14,7 @@ const streams = @import("streams.zig");
 const reader_mod = @import("../reader.zig");
 const collect_mod = @import("../eval/collect.zig");
 const eval_mod = @import("../eval/eval.zig");
+const readtables = @import("readtables.zig");
 const special_forms = @import("../eval/special_forms.zig");
 const function = @import("../eval/function.zig");
 const pathnames = @import("pathnames.zig");
@@ -144,6 +145,8 @@ fn readFromStringFn(p: *anyopaque, args: []const Value) Error!Value {
 
     var tokenizer = reader_mod.Tokenizer.init(source);
     var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    readtables.install(ev, &rd);
     const form = rd.read() catch return Error.ProgramError;
     return ev.setValues(&.{
         form orelse return Error.ProgramError,
@@ -269,6 +272,8 @@ const PathVarBindings = struct {
 pub fn evalSource(ev: *Evaluator, source: []const u8) Error!void {
     var tokenizer = reader_mod.Tokenizer.init(source);
     var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    readtables.install(ev, &rd);
     while (true) {
         // Between top-level forms nothing but the evaluator's own state
         // holds a value, which is what makes a collection safe here.
@@ -365,6 +370,8 @@ fn keepForLoad(ev: *Evaluator, out: *std.ArrayList(Value), f: Value) Error!void 
 pub fn compileSource(ev: *Evaluator, source: []const u8, out: *std.ArrayList(Value)) Error!void {
     var tokenizer = reader_mod.Tokenizer.init(source);
     var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    readtables.install(ev, &rd);
     while (true) {
         const form = rd.read() catch return Error.ProgramError;
         const f = form orelse break;

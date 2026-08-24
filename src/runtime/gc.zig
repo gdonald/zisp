@@ -93,6 +93,14 @@ pub const CONS_BYTES: usize = 16;
 /// needs to thread itself through.
 pub const MIN_PAYLOAD: usize = @max(@sizeOf(FreeBlock), ALIGNMENT);
 
+/// How much the nursery holds. Everything is allocated here first and a
+/// collection evacuates what survives, so this is also how much garbage a
+/// program may make between collections before one is due.
+pub const NURSERY_BYTES: usize = 1 << 20;
+
+/// Which generation an object lives in.
+pub const Generation = enum { nursery, tenured };
+
 const Region = struct {
     memory: []align(ALIGNMENT) u8,
     /// How far the bump pointer has got through this region.
@@ -119,8 +127,14 @@ const Region = struct {
 };
 
 pub const Stats = struct {
-    /// Bytes handed out and not yet reclaimed.
+    /// Tenured bytes handed out and not yet reclaimed. The nursery is
+    /// counted on its own, since nothing there survives a collection
+    /// without being copied out first.
     live_bytes: usize = 0,
+    /// How far the nursery's bump pointer has got.
+    nursery_bytes: usize = 0,
+    /// Objects the last collection copied out of the nursery.
+    promoted: usize = 0,
     /// Bytes the regions hold in total.
     region_bytes: usize = 0,
     /// Blocks sitting on the object free lists.
@@ -139,6 +153,13 @@ pub const Stats = struct {
 
 pub const Allocator = struct {
     backing: std.mem.Allocator,
+    /// Bump-allocated young space. Allocation carves from here until it
+    /// is full; what survives a collection is copied into the regions
+    /// below, and the bump pointer goes back to zero.
+    nursery: ?[]align(ALIGNMENT) u8 = null,
+    nursery_used: usize = 0,
+    /// How large a nursery to make on first use.
+    nursery_capacity: usize = NURSERY_BYTES,
     regions: ?*Region = null,
     cons_regions: ?*Region = null,
     /// Conses are all one size, so they need only the one free list.
@@ -161,6 +182,9 @@ pub const Allocator = struct {
     }
 
     pub fn deinit(self: *Allocator) void {
+        if (self.nursery) |memory| self.backing.free(memory);
+        self.nursery = null;
+        self.nursery_used = 0;
         self.freeRegions(self.regions);
         self.freeRegions(self.cons_regions);
         self.regions = null;
@@ -197,13 +221,91 @@ pub const Allocator = struct {
 
     /// Space for one object. The bytes are not zeroed; the caller writes
     /// the object over them.
+    ///
+    /// The nursery is tried first. A request that no longer fits there
+    /// goes to the tenured space rather than forcing a collection:
+    /// allocation happens deep inside native code, and a collection is
+    /// only safe between top-level forms.
     pub fn alloc(self: *Allocator, size: usize) ![]align(ALIGNMENT) u8 {
+        const want = rounded(size);
+        self.stats.generation += 1;
+        if (try self.bumpNursery(BLOCK_HEADER_BYTES + want)) |bytes| {
+            self.stats.bytes_since_collection += want;
+            const header: *BlockHeader = @ptrCast(@alignCast(bytes.ptr));
+            header.set(want, false);
+            return header.payload()[0..want];
+        }
+        const block = self.popFree(want) orelse try self.bumpObject(want);
+        self.stats.live_bytes += block.len;
+        self.stats.bytes_since_collection += block.len;
+        return block;
+    }
+
+    /// Space for one object in the tenured space, which is where a
+    /// collection copies what it finds alive in the nursery.
+    pub fn allocTenured(self: *Allocator, size: usize) ![]align(ALIGNMENT) u8 {
         const want = rounded(size);
         const block = self.popFree(want) orelse try self.bumpObject(want);
         self.stats.generation += 1;
         self.stats.live_bytes += block.len;
-        self.stats.bytes_since_collection += block.len;
         return block;
+    }
+
+    /// Space for one cons in the tenured space.
+    pub fn allocTenuredCons(self: *Allocator) ![]align(ALIGNMENT) u8 {
+        self.stats.generation += 1;
+        self.stats.live_bytes += CONS_BYTES;
+        if (self.cons_free) |block| {
+            self.cons_free = block.next;
+            self.stats.free_conses -= 1;
+            const bytes: [*]align(ALIGNMENT) u8 = @ptrCast(block);
+            return bytes[0..CONS_BYTES];
+        }
+        return self.bumpIn(&self.cons_regions, .conses, CONS_BYTES);
+    }
+
+    /// The next `size` bytes of the nursery, or null once it is full.
+    fn bumpNursery(self: *Allocator, size: usize) !?[]align(ALIGNMENT) u8 {
+        if (self.nursery_capacity == 0) return null;
+        if (self.nursery == null) {
+            self.nursery = try self.backing.alignedAlloc(u8, .of(FreeBlock), self.nursery_capacity);
+        }
+        const memory = self.nursery.?;
+        if (self.nursery_used + size > memory.len) return null;
+        const start = self.nursery_used;
+        self.nursery_used += size;
+        self.stats.nursery_bytes = self.nursery_used;
+        return @alignCast(memory[start .. start + size]);
+    }
+
+    /// Whether `address` lies in the nursery, which is what tells a
+    /// collection the object has to be copied before it is read again.
+    pub fn inNursery(self: *const Allocator, address: usize) bool {
+        const memory = self.nursery orelse return false;
+        const base = @intFromPtr(memory.ptr);
+        return address >= base and address < base + self.nursery_used;
+    }
+
+    /// Give the nursery back to the bump pointer. Everything still wanted
+    /// has been copied out by the time this runs.
+    pub fn resetNursery(self: *Allocator) void {
+        if (self.nursery) |memory| {
+            // Every word reads as poison, so a reference that was missed
+            // is caught the same way a swept object's is.
+            if (checked) {
+                const words: [*]u64 = @ptrCast(memory.ptr);
+                for (0..self.nursery_used / 8) |i| words[i] = POISON;
+            }
+        }
+        self.nursery_used = 0;
+        self.stats.nursery_bytes = 0;
+    }
+
+    /// Whether the nursery has no room left, which is what makes a
+    /// collection due.
+    pub fn nurseryFull(self: *const Allocator) bool {
+        const memory = self.nursery orelse return false;
+        return self.nursery_used >= memory.len;
     }
 
     /// Hand a block back.
@@ -304,9 +406,13 @@ pub const Allocator = struct {
         return @alignCast(region.memory[0..size]);
     }
 
-    /// Space for one cons, which comes from the cons-only regions.
+    /// Space for one cons. The nursery first, then the cons-only regions.
     pub fn allocCons(self: *Allocator) ![]align(ALIGNMENT) u8 {
         self.stats.generation += 1;
+        if (try self.bumpNursery(CONS_BYTES)) |bytes| {
+            self.stats.bytes_since_collection += CONS_BYTES;
+            return bytes;
+        }
         self.stats.live_bytes += CONS_BYTES;
         self.stats.bytes_since_collection += CONS_BYTES;
         if (self.cons_free) |block| {
@@ -374,6 +480,7 @@ pub const Allocator = struct {
     /// Whether enough has been allocated since the last collection to
     /// make another one due.
     pub fn collectionDue(self: *const Allocator) bool {
+        if (self.nurseryFull()) return true;
         return self.stats.bytes_since_collection > self.collect_threshold;
     }
 
