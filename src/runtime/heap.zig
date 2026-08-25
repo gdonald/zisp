@@ -104,6 +104,17 @@ pub const HeapDoubleFloat = extern struct {
 /// Exact ratio of two fixnums — for now this only stores the lexeme's
 /// literal numerator/denominator. Arithmetic will normalize and promote
 /// to bignum when needed.
+/// A reference the collector does not follow.
+///
+/// The referent occupies the second word, which is where a copy leaves
+/// its forwarding pointer, so a weak pointer is copied like any other
+/// object. Once what it refers to has been reclaimed the slot reads as
+/// `BROKEN`, a tag no value a program can make ever carries.
+pub const HeapWeakPointer = extern struct {
+    header: HeapHeader,
+    referent: Value,
+};
+
 pub const HeapRatio = extern struct {
     header: HeapHeader,
     /// Both are integers, fixnum or bignum. The denominator is greater
@@ -354,7 +365,7 @@ pub const ListBuilder = struct {
             self.head = cell;
             self.held.setItem(0, cell);
         } else {
-            setCdr(self.tail, cell);
+            setCdr(self.heap, self.tail, cell);
         }
         self.tail = cell;
     }
@@ -366,7 +377,7 @@ pub const ListBuilder = struct {
             self.held.setItem(0, v);
             return;
         }
-        setCdr(self.tail, v);
+        setCdr(self.heap, self.tail, v);
     }
 
     pub fn finish(self: *ListBuilder) Value {
@@ -416,8 +427,28 @@ pub const Heap = struct {
         return self.stack.open();
     }
 
-    /// Collect ahead of an allocation when torture is on, so what comes
+    /// What runs ahead of every allocation: a collection when young
+    /// space has run out, and another when torture is on so what comes
     /// back is safe until the next one.
+    fn beforeAllocation(self: *Heap) void {
+        self.maybeReclaim();
+        self.maybeTorture();
+    }
+
+    /// Reclaim the nursery in place once it has spilled into the tenured
+    /// space. This runs between allocations rather than at a top level
+    /// form, so nothing moves: a form that allocates for a long time
+    /// keeps reusing the nursery instead of spilling all of what it
+    /// makes.
+    fn maybeReclaim(self: *Heap) void {
+        if (self.collecting) return;
+        if (!self.objects.nurseryDue()) return;
+        const collector = self.collector orelse return;
+        self.collecting = true;
+        defer self.collecting = false;
+        collector.run(collector.context) catch {};
+    }
+
     fn maybeTorture(self: *Heap) void {
         if (self.torture == 0 or self.collecting) return;
         const collector = self.collector orelse return;
@@ -436,7 +467,7 @@ pub const Heap = struct {
 
     /// Space for one object of type `T`, taken from the object regions.
     fn create(self: *Heap, comptime T: type) !*T {
-        self.maybeTorture();
+        self.beforeAllocation();
         const bytes = try self.objects.alloc(@sizeOf(T));
         return @ptrCast(@alignCast(bytes.ptr));
     }
@@ -444,7 +475,7 @@ pub const Heap = struct {
     /// Space for an object with a variable-length tail, such as a
     /// structure's slots.
     fn createSized(self: *Heap, total: usize) ![]align(gc.ALIGNMENT) u8 {
-        self.maybeTorture();
+        self.beforeAllocation();
         return self.objects.alloc(total);
     }
 
@@ -455,7 +486,7 @@ pub const Heap = struct {
         defer held.close();
         try held.push(car_v);
         try held.push(cdr_v);
-        self.maybeTorture();
+        self.beforeAllocation();
         const bytes = try self.objects.allocCons();
         const cell: *Cons = @ptrCast(@alignCast(bytes.ptr));
         cell.* = .{ .car = car_v, .cdr = cdr_v };
@@ -589,6 +620,20 @@ pub const Heap = struct {
         obj.* = .{
             .header = .{ .type_tag = .double_float, .size = @sizeOf(HeapDoubleFloat) },
             .value = x,
+        };
+        return Value.fromHeapAddr(@intFromPtr(obj));
+    }
+
+    /// A reference a collection does not follow. What it refers to is
+    /// reclaimed as if nothing held it, and the pointer is left broken.
+    pub fn allocWeakPointer(self: *Heap, referent: Value) !Value {
+        var held = self.protect();
+        defer held.close();
+        try held.push(referent);
+        const obj = try self.create(HeapWeakPointer);
+        obj.* = .{
+            .header = .{ .type_tag = .weak_pointer, .size = @sizeOf(HeapWeakPointer) },
+            .referent = referent,
         };
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
@@ -779,8 +824,8 @@ pub const Heap = struct {
 
     /// Reclaim every object left unmarked. What each dead object holds
     /// outside the collected heap goes with it.
-    pub fn sweep(self: *Heap) void {
-        self.objects.sweep(.{ .context = self, .run = finalizeObject });
+    pub fn sweep(self: *Heap, extent: gc.Allocator.Extent) void {
+        self.objects.sweep(extent, .{ .context = self, .run = finalizeObject });
     }
 
     pub fn allocStructure(self: *Heap, name: Value, slots: []const Value) !Value {
@@ -868,6 +913,14 @@ pub fn asDoubleFloat(v: Value) *HeapDoubleFloat {
 
 pub fn asRatio(v: Value) *HeapRatio {
     return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn asWeakPointer(v: Value) *HeapWeakPointer {
+    return @ptrFromInt(v.toHeapAddr());
+}
+
+pub fn isWeakPointer(v: Value) bool {
+    return v.isHeap() and heapType(v) == .weak_pointer;
 }
 
 pub fn asArray(v: Value) *HeapArray {
@@ -1031,29 +1084,37 @@ pub fn cdr(v: Value) Value {
     return cell.cdr;
 }
 
-/// Note that `container` now refers to `stored`. A generational collector
-/// has to learn when an already-tenured object starts pointing at a young
-/// one, which is what this call site set is for. One generation means
-/// there is nothing to record yet.
-pub inline fn writeBarrier(container: Value, stored: Value) void {
-    _ = container;
-    _ = stored;
+/// The address an object-holding value points at, or null for one that
+/// points at nothing in the heap.
+fn heapAddress(v: Value) ?usize {
+    if (v.isCons()) return v.toConsAddr();
+    if (v.tag() == .heap) return v.toHeapAddr();
+    return null;
 }
 
-pub fn setCar(v: Value, new_car: Value) void {
+/// Note that `container` now refers to `stored`. A tenured object that
+/// starts pointing at a young one is the case a collection cannot find
+/// on its own, so the card the container sits on is marked.
+pub inline fn writeBarrier(h: *Heap, container: Value, stored: Value) void {
+    const target = heapAddress(stored) orelse return;
+    const holder = heapAddress(container) orelse return;
+    h.objects.noteWrite(holder, target);
+}
+
+pub fn setCar(h: *Heap, v: Value, new_car: Value) void {
     const cell: *Cons = @ptrFromInt(v.toConsAddr());
     checkLive(v.toConsAddr());
     checkStored(new_car);
     cell.car = new_car;
-    writeBarrier(v, new_car);
+    writeBarrier(h, v, new_car);
 }
 
-pub fn setCdr(v: Value, new_cdr: Value) void {
+pub fn setCdr(h: *Heap, v: Value, new_cdr: Value) void {
     const cell: *Cons = @ptrFromInt(v.toConsAddr());
     checkLive(v.toConsAddr());
     checkStored(new_cdr);
     cell.cdr = new_cdr;
-    writeBarrier(v, new_cdr);
+    writeBarrier(h, v, new_cdr);
 }
 
 /// Store into one indexed slot of a heap object: an array element, a
@@ -1063,7 +1124,7 @@ pub fn setCdr(v: Value, new_cdr: Value) void {
 ///
 /// A symbol's cells are not slots in this sense: symbols live in the
 /// interner's arena and every one of them is scanned as a root.
-pub fn setSlot(container: Value, index: usize, v: Value) void {
+pub fn setSlot(h: *Heap, container: Value, index: usize, v: Value) void {
     checkStored(v);
     switch (heapType(container)) {
         .vector => arrayElements(container)[index] = v,
@@ -1071,5 +1132,5 @@ pub fn setSlot(container: Value, index: usize, v: Value) void {
         .hash_table => asHashTable(container).entries.items[index].value = v,
         else => unreachable,
     }
-    writeBarrier(container, v);
+    writeBarrier(h, container, v);
 }

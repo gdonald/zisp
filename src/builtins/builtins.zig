@@ -176,18 +176,18 @@ pub fn registerStandard(ev: *Evaluator) !void {
 // --- conses, plists, symbol cells ---
 
 fn rplacaFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
     if (!args[0].isCons()) return Error.TypeError;
-    heap.setCar(args[0], args[1]);
+    heap.setCar(ev.heap, args[0], args[1]);
     return args[0];
 }
 
 fn rplacdFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
     if (!args[0].isCons()) return Error.TypeError;
-    heap.setCdr(args[0], args[1]);
+    heap.setCdr(ev.heap, args[0], args[1]);
     return args[0];
 }
 
@@ -215,7 +215,7 @@ fn putFn(p: *anyopaque, args: []const Value) Error!Value {
         const rest = heap.cdr(plist);
         if (!rest.isCons()) return Error.TypeError;
         if (heap.car(plist).equalsRaw(args[1])) {
-            heap.setCar(rest, args[2]);
+            heap.setCar(ev.heap, rest, args[2]);
             return args[2];
         }
         plist = heap.cdr(rest);
@@ -316,7 +316,7 @@ fn eltFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn setEltFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 3) return Error.WrongArgCount;
     const i = try eltIndex(args[1]);
     if (args[0].isCons()) {
@@ -324,7 +324,7 @@ fn setEltFn(p: *anyopaque, args: []const Value) Error!Value {
         var n = i;
         while (cur.isCons()) {
             if (n == 0) {
-                heap.setCar(cur, args[2]);
+                heap.setCar(ev.heap, cur, args[2]);
                 return args[2];
             }
             n -= 1;
@@ -403,9 +403,9 @@ fn structureRefFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn setStructureRefFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 3) return Error.WrongArgCount;
-    heap.setSlot(args[0], try structureSlotIndex(args[0..2]), args[2]);
+    heap.setSlot(ev.heap, args[0], try structureSlotIndex(args[0..2]), args[2]);
     return args[2];
 }
 
@@ -902,7 +902,7 @@ fn mapDriver(ev: *Evaluator, args: []const Value, comptime kind: MapKind) Error!
                     head = cell;
                     held.setItem(0, head);
                 } else {
-                    heap.setCdr(tail, cell);
+                    heap.setCdr(ev.heap, tail, cell);
                 }
                 tail = cell;
             },
@@ -913,7 +913,7 @@ fn mapDriver(ev: *Evaluator, args: []const Value, comptime kind: MapKind) Error!
                     head = seg;
                     held.setItem(0, head);
                 } else {
-                    heap.setCdr(tail, seg);
+                    heap.setCdr(ev.heap, tail, seg);
                 }
                 while (seg.isCons() and !isNil(heap.cdr(seg))) seg = heap.cdr(seg);
                 tail = seg;

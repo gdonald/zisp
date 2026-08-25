@@ -29,8 +29,8 @@ test "setCar / setCdr modify in place" {
     var h = heap.Heap.init(arena.allocator());
 
     const v = try h.allocCons(Value.fromFixnum(1), Value.fromFixnum(2));
-    heap.setCar(v, Value.fromFixnum(10));
-    heap.setCdr(v, Value.fromFixnum(20));
+    heap.setCar(&h, v, Value.fromFixnum(10));
+    heap.setCdr(&h, v, Value.fromFixnum(20));
     try std.testing.expectEqual(@as(i64, 10), heap.car(v).toFixnum());
     try std.testing.expectEqual(@as(i64, 20), heap.cdr(v).toFixnum());
 }
@@ -87,7 +87,7 @@ test "setSlot writes an array element" {
     var h = heap.Heap.init(arena.allocator());
 
     const v = try h.allocArray(&.{2}, .t);
-    heap.setSlot(v, 1, Value.fromFixnum(7));
+    heap.setSlot(&h, v, 1, Value.fromFixnum(7));
     try std.testing.expectEqual(@as(i64, 7), heap.arrayElements(v)[1].toFixnum());
 }
 
@@ -98,18 +98,26 @@ test "setSlot writes a structure slot" {
 
     const name = Value.fromFixnum(0);
     const v = try h.allocStructure(name, &.{ Value.fromFixnum(1), Value.fromFixnum(2) });
-    heap.setSlot(v, 0, Value.fromFixnum(9));
+    heap.setSlot(&h, v, 0, Value.fromFixnum(9));
     try std.testing.expectEqual(@as(i64, 9), heap.asStructure(v).slice()[0].toFixnum());
     try std.testing.expectEqual(@as(i64, 2), heap.asStructure(v).slice()[1].toFixnum());
 }
 
-test "the write barrier is in place ahead of a generational heap" {
+test "storing into a tenured cons marks the card it sits on" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var h = heap.Heap.init(arena.allocator());
 
-    // One generation records nothing, so the call is a no-op the mutators
-    // can already route every store through.
-    const cell = try h.allocCons(value.NIL, value.NIL);
-    heap.writeBarrier(cell, Value.fromFixnum(1));
+    // Take the cell out of the tenured space directly: what the barrier
+    // records is a store into something a collection would otherwise
+    // pass over.
+    const bytes = try h.objects.allocTenuredCons();
+    const cell = Value.fromConsAddr(@intFromPtr(bytes.ptr));
+    heap.setCar(&h, cell, value.NIL);
+    heap.setCdr(&h, cell, value.NIL);
+    try std.testing.expect(!h.objects.cardMarked(@intFromPtr(bytes.ptr)));
+
+    const young = try h.allocCons(value.NIL, value.NIL);
+    heap.setCar(&h, cell, young);
+    try std.testing.expect(h.objects.cardMarked(@intFromPtr(bytes.ptr)));
 }

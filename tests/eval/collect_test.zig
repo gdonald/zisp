@@ -76,11 +76,13 @@ test "a value nothing holds is reclaimed" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     _ = try fx.eval("(defparameter *dropped* (list 1 2 3 4 5 6 7 8 9 10))");
-    try collect.collect(&fx.ev);
+    // The tenured space is what these figures are about, and a
+    // collection of the nursery alone leaves it where it is.
+    try collect.collectScoped(&fx.ev, .major);
     const before = fx.liveBytes();
 
     _ = try fx.eval("(setq *dropped* nil)");
-    try collect.collect(&fx.ev);
+    try collect.collectScoped(&fx.ev, .major);
 
     try testing.expect(fx.liveBytes() < before);
 }
@@ -228,17 +230,17 @@ test "a value held on the Lisp stack comes through a collection" {
 test "a value the Lisp stack no longer holds is reclaimed" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
-    try collect.collect(&fx.ev);
+    try collect.collectScoped(&fx.ev, .major);
     const before = fx.liveBytes();
     {
         var held = fx.ev.protect();
         defer held.close();
         try held.push(try fx.heap.allocCons(Value.fromFixnum(7), value.NIL));
-        try collect.collect(&fx.ev);
+        try collect.collectScoped(&fx.ev, .major);
         try testing.expect(fx.liveBytes() > before);
     }
 
-    try collect.collect(&fx.ev);
+    try collect.collectScoped(&fx.ev, .major);
 
     try testing.expectEqual(before, fx.liveBytes());
 }

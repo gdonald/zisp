@@ -103,7 +103,7 @@ test "a cycle terminates rather than looping" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     const cell = try fx.heap.allocCons(Value.fromFixnum(1), value.NIL);
-    heap_mod.setCdr(cell, cell);
+    heap_mod.setCdr(&fx.heap, cell, cell);
 
     var marker = fx.marker();
     defer marker.deinit();

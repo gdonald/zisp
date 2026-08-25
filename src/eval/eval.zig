@@ -112,6 +112,26 @@ pub const Evaluator = struct {
     pinned: std.ArrayList(Value) = .empty,
     // Collections run so far, which `room` reports.
     gc_count: u64 = 0,
+    /// What the tenured space held when the last major collection
+    /// finished, which is what says when the next one is due.
+    live_after_major: usize = 0,
+    /// How many of the collections so far walked the whole heap.
+    major_count: u64 = 0,
+    /// The smallest tenured space a major collection is asked to walk.
+    /// Below it a program is still starting up and there is nothing to
+    /// reclaim.
+    major_floor: usize = 1 << 20,
+    /// What to run once an object has been reclaimed. Each entry holds
+    /// the object through a weak pointer, so registering one does not
+    /// keep the object alive.
+    finalizers: std.ArrayListUnmanaged(Finalizer) = .empty,
+    /// Finalizers whose object has gone, waiting to be run. They are run
+    /// by whatever was evaluating rather than by the collector, where
+    /// allocating is not allowed.
+    pending: std.ArrayListUnmanaged(Value) = .empty,
+    /// Set while the pending queue is being run, so a collection a
+    /// finalizer sets off does not start a second pass over it.
+    draining: bool = false,
     // Set by `gc`, cleared by the collection it asks for.
     gc_requested: bool = false,
     // Whether the heap knows how to reach this evaluator's root scan.
@@ -129,7 +149,13 @@ pub const Evaluator = struct {
         };
     }
 
+    /// One registration: what to run, and a weak pointer to what has to
+    /// be gone before it runs.
+    pub const Finalizer = struct { object: Value, action: Value };
+
     pub fn deinit(self: *Evaluator) void {
+        self.finalizers.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
         self.env.deinit();
         self.special_forms.deinit(self.allocator);
         self.macro_cache.deinit(self.allocator);

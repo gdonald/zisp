@@ -147,15 +147,15 @@ fn puthashFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 3) return Error.WrongArgCount;
     const table = try expectTable(args[1]);
     if (findEntry(table, args[0])) |index| {
-        heap.setSlot(args[1], index, args[2]);
+        heap.setSlot(ev.heap, args[1], index, args[2]);
         return args[2];
     }
 
     const allocator = ev.heap.allocator;
     const index: u32 = @intCast(table.entries.items.len);
     try table.entries.append(allocator, .{ .key = args[0], .value = args[2], .live = true });
-    heap.writeBarrier(args[1], args[0]);
-    heap.writeBarrier(args[1], args[2]);
+    heap.writeBarrier(ev.heap, args[1], args[0]);
+    heap.writeBarrier(ev.heap, args[1], args[2]);
     const slot = try table.buckets.getOrPut(allocator, equality.hash(table.hash_test, args[0]));
     if (!slot.found_existing) slot.value_ptr.* = .empty;
     try slot.value_ptr.append(allocator, index);

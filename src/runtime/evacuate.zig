@@ -39,9 +39,13 @@ pub const Evacuator = struct {
     /// Conses that moved, as old-address to new value. The source
     /// position table is keyed on the old addresses.
     moved_conses: std.AutoHashMapUnmanaged(usize, Value) = .empty,
-    /// Objects that stayed put and have already been queued. A copied
-    /// object needs no entry: its forwarding pointer says it was seen.
+    /// Objects the collected heap does not own that have already been
+    /// queued. A copied object needs no entry: its forwarding pointer
+    /// says it was seen.
     visited: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// Weak pointers the walk reached. What they refer to is not copied
+    /// through them, so each is looked at again once the copy is done.
+    weak: std.ArrayListUnmanaged(Value) = .empty,
     copied: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, h: *Heap) Evacuator {
@@ -56,16 +60,20 @@ pub const Evacuator = struct {
         self.rehash.deinit(self.allocator);
         self.moved_conses.deinit(self.allocator);
         self.visited.deinit(self.allocator);
+        self.weak.deinit(self.allocator);
     }
 
     /// Rewrite one slot, copying what it points at when that is still in
     /// the nursery.
     ///
-    /// An object that is already tenured is followed rather than copied:
-    /// its own slots may still point into the nursery. That makes an
-    /// evacuation a full traversal for now. The card table records which
-    /// tenured objects hold a young pointer, and once it does the walk
-    /// can start from the roots and those cards alone.
+    /// An object that is already tenured is left where it is and not
+    /// descended into: a young object it holds is reached through its
+    /// card instead, which is what keeps the walk to the roots and the
+    /// cards rather than the whole live heap.
+    ///
+    /// An object the collected heap does not own is followed all the
+    /// same. A closure comes off the host allocator, so it sits on no
+    /// card and nothing else would record what it captured.
     pub fn update(self: *Evacuator, slot: *Value) Error!void {
         const v = slot.*;
         if (v.isSymbol()) return self.visitSymbol(v);
@@ -83,6 +91,7 @@ pub const Evacuator = struct {
                 try self.copyObject(address);
             return;
         }
+        if (self.heap.objects.owns(address)) return;
         if (try self.wasVisited(address)) return;
         try self.worklist.append(self.allocator, v);
     }
@@ -90,6 +99,33 @@ pub const Evacuator = struct {
     fn wasVisited(self: *Evacuator, address: usize) Error!bool {
         const slot = try self.visited.getOrPut(self.allocator, address);
         return slot.found_existing;
+    }
+
+    /// Read the slots of every dirty card. A tenured object that was made
+    /// to point at a young one is only reachable this way, since the walk
+    /// no longer descends into the tenured space.
+    pub fn scanCards(self: *Evacuator) Error!void {
+        self.heap.objects.scanConses(.dirty_cards, self, updateCell) catch |e| return cast(e);
+        self.heap.objects.scanObjects(.dirty_cards, self, updateObject) catch |e| return cast(e);
+    }
+
+    /// The scanners hand back whatever the callback failed with, and the
+    /// callbacks here fail only the one way.
+    fn cast(e: anyerror) Error {
+        return switch (e) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => unreachable,
+        };
+    }
+
+    fn updateCell(self: *Evacuator, cell: [*]align(gc.ALIGNMENT) u8) anyerror!void {
+        const pair: *heap.Cons = @ptrCast(@alignCast(cell));
+        try self.update(&pair.car);
+        try self.update(&pair.cdr);
+    }
+
+    fn updateObject(self: *Evacuator, payload: [*]align(gc.ALIGNMENT) u8) anyerror!void {
+        try self.scan(Value.fromHeapAddr(@intFromPtr(payload)));
     }
 
     fn copyCons(self: *Evacuator, address: usize) Error!Value {
@@ -222,6 +258,10 @@ pub const Evacuator = struct {
                 try self.update(&s.target);
                 try self.update(&s.delete_on_close);
             },
+            // A weak pointer keeps nothing alive, so what it refers to
+            // is not copied through it. It is looked at again after the
+            // copy, when a forwarding pointer says whether it survived.
+            .weak_pointer => try self.weak.append(self.allocator, v),
             .function, .closure => {
                 const f = function.asFunction(v);
                 if (f.kind != .closure) return;
@@ -247,6 +287,41 @@ pub const Evacuator = struct {
             if (!before.equalsRaw(entry.key)) moved = true;
         }
         if (moved) try self.rehash.append(self.allocator, v);
+    }
+
+    /// Follow every weak pointer to where its referent went, or break it
+    /// when nothing else copied the referent out of the nursery.
+    ///
+    /// A referent that is already tenured is left alone: the copy does
+    /// not reclaim the tenured space, so it is still there.
+    pub fn resolveWeakPointers(self: *Evacuator) void {
+        for (self.weak.items) |v| {
+            const pointer = heap.asWeakPointer(v);
+            const referent = pointer.referent;
+            const address = if (referent.isCons())
+                referent.toConsAddr()
+            else if (referent.tag() == .heap)
+                referent.toHeapAddr()
+            else
+                continue;
+            if (!self.heap.objects.inNursery(address)) continue;
+            pointer.referent = self.forwarded(referent, address) orelse value.BROKEN;
+        }
+    }
+
+    /// Where a copy left the object at `address`, or null when nothing
+    /// copied it.
+    fn forwarded(self: *Evacuator, referent: Value, address: usize) ?Value {
+        _ = self;
+        if (referent.isCons()) {
+            const cell: *const heap.Cons = @ptrFromInt(address);
+            if (!cell.car.equalsRaw(value.FORWARDED)) return null;
+            return cell.cdr;
+        }
+        const header: *const heap.HeapHeader = @ptrFromInt(address);
+        if (!header.forwarded) return null;
+        const words: [*]const Value = @ptrFromInt(address);
+        return words[1];
     }
 
     /// Rebuild the buckets of every table whose keys moved.

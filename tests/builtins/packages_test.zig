@@ -122,11 +122,13 @@ test "delete-package returns nil for an unknown or already deleted package" {
 test "list-all-packages holds the standard packages and omits deleted ones" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
-    try fx.runPrints("(length (list-all-packages))", "3");
-    _ = try fx.run("(make-package \"EXTRA\")");
+    // COMMON-LISP, COMMON-LISP-USER, KEYWORD, and EXTENSIONS, which is
+    // where what this implementation adds to the standard lives.
     try fx.runPrints("(length (list-all-packages))", "4");
+    _ = try fx.run("(make-package \"EXTRA\")");
+    try fx.runPrints("(length (list-all-packages))", "5");
     _ = try fx.run("(delete-package \"EXTRA\")");
-    try fx.runPrints("(length (list-all-packages))", "3");
+    try fx.runPrints("(length (list-all-packages))", "4");
 }
 
 test "packagep distinguishes packages from other values" {

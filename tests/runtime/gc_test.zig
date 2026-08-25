@@ -190,7 +190,7 @@ test "an unmarked block is reclaimed and a marked one is kept" {
     const dropped = try allocator.alloc(32);
     _ = allocator.mark(@intFromPtr(kept.ptr));
 
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
 
     try testing.expectEqual(kept.len, allocator.stats.live_bytes);
     try testing.expectEqual(@as(usize, 1), allocator.stats.free_blocks);
@@ -202,7 +202,7 @@ test "neighbouring dead blocks come back as one free block" {
     defer allocator.deinit();
     for (0..8) |_| _ = try allocator.alloc(24);
 
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
 
     try testing.expectEqual(@as(usize, 1), allocator.stats.free_blocks);
     try testing.expectEqual(@as(usize, 0), allocator.stats.live_bytes);
@@ -212,7 +212,7 @@ test "a merged block is split back down for a small request" {
     var allocator = newAllocator();
     defer allocator.deinit();
     for (0..8) |_| _ = try allocator.alloc(24);
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
     const before = allocator.stats.free_bytes;
 
     const block = try allocator.alloc(16);
@@ -226,7 +226,7 @@ test "a merged block serves an allocation too large for any original one" {
     var allocator = newAllocator();
     defer allocator.deinit();
     for (0..8) |_| _ = try allocator.alloc(24);
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
     const regions = allocator.regionCount();
 
     const block = try allocator.alloc(200);
@@ -243,7 +243,7 @@ test "a live block between two dead ones keeps their runs apart" {
     _ = try allocator.alloc(24);
     _ = allocator.mark(@intFromPtr(kept.ptr));
 
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
 
     try testing.expectEqual(@as(usize, 2), allocator.stats.free_blocks);
 }
@@ -252,11 +252,11 @@ test "sweeping twice leaves the free lists as they were" {
     var allocator = newAllocator();
     defer allocator.deinit();
     for (0..8) |_| _ = try allocator.alloc(24);
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
     const blocks = allocator.stats.free_blocks;
     const bytes = allocator.stats.free_bytes;
 
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
 
     try testing.expectEqual(blocks, allocator.stats.free_blocks);
     try testing.expectEqual(bytes, allocator.stats.free_bytes);
@@ -269,7 +269,7 @@ test "an unmarked cons cell goes back on the cons free list" {
     _ = try allocator.allocCons();
     _ = allocator.mark(@intFromPtr(kept.ptr));
 
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
 
     try testing.expectEqual(@as(usize, 1), allocator.stats.free_conses);
     try testing.expectEqual(gc.CONS_BYTES, allocator.stats.live_bytes);
@@ -279,7 +279,7 @@ test "a swept cons cell is handed out again before the region grows" {
     var allocator = newAllocator();
     defer allocator.deinit();
     const cell = try allocator.allocCons();
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
 
     const reused = try allocator.allocCons();
 
@@ -305,8 +305,8 @@ test "a finalizer runs once for each dead object and not for a live one" {
     _ = allocator.mark(@intFromPtr(kept.ptr));
 
     var context: usize = 0;
-    allocator.sweep(.{ .context = &context, .run = Counter.run });
-    allocator.sweep(.{ .context = &context, .run = Counter.run });
+    allocator.sweep(.everything, .{ .context = &context, .run = Counter.run });
+    allocator.sweep(.everything, .{ .context = &context, .run = Counter.run });
 
     try testing.expectEqual(@as(usize, 3), Counter.seen);
 }
@@ -324,13 +324,337 @@ test "worst-case fragmentation collapses once the survivors die" {
     for (blocks, 0..) |block, i| {
         if (i % 2 == 0) _ = allocator.mark(@intFromPtr(block.ptr));
     }
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
     try testing.expect(allocator.stats.free_blocks >= count / 2 - allocator.regionCount());
     try testing.expect(!allocator.isMarked(@intFromPtr(blocks[0].ptr)));
 
     // With the survivors gone, every run merges: what is left is one
     // free block per region.
-    allocator.sweep(null);
+    allocator.sweep(.everything, null);
     try testing.expectEqual(allocator.regionCount(), allocator.stats.free_blocks);
     try testing.expect(allocator.stats.free_blocks <= count / 100);
+}
+
+/// An allocator with the nursery in front, which is where a young
+/// allocation lands and where a collection between allocations reclaims.
+fn newNurseryAllocator() gc.Allocator {
+    var allocator = gc.Allocator.init(testing.allocator);
+    allocator.quarantine = false;
+    return allocator;
+}
+
+test "a young object is handed out from the nursery" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const block = try allocator.alloc(32);
+    try testing.expect(allocator.inNursery(@intFromPtr(block.ptr)));
+    try testing.expect(allocator.stats.nursery_bytes > 0);
+    // The nursery is counted on its own: nothing there has survived a
+    // collection yet.
+    try testing.expectEqual(@as(usize, 0), allocator.stats.live_bytes);
+}
+
+test "a freed young block is handed out again by the nursery" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const first = try allocator.alloc(32);
+    allocator.free(first);
+    const second = try allocator.alloc(32);
+    try testing.expectEqual(first.ptr, second.ptr);
+    try testing.expectEqual(@as(usize, 0), allocator.stats.live_bytes);
+}
+
+test "a freed young cons is handed out again by the nursery" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const first = try allocator.allocCons();
+    allocator.freeCons(first);
+    const second = try allocator.allocCons();
+    try testing.expectEqual(first.ptr, second.ptr);
+    try testing.expect(allocator.inNursery(@intFromPtr(second.ptr)));
+}
+
+test "a sweep reclaims the young cells nothing marked" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const kept = try allocator.allocCons();
+    const dropped = try allocator.allocCons();
+    _ = allocator.mark(@intFromPtr(kept.ptr));
+    allocator.sweep(.everything, null);
+
+    const next = try allocator.allocCons();
+    try testing.expectEqual(dropped.ptr, next.ptr);
+    // What the sweep reclaimed is young space still, so it never counts
+    // as tenured.
+    try testing.expectEqual(@as(usize, 0), allocator.stats.live_bytes);
+}
+
+test "a sweep reclaims the young objects nothing marked" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const kept = try allocator.alloc(32);
+    const dropped = try allocator.alloc(32);
+    _ = allocator.mark(@intFromPtr(kept.ptr));
+    allocator.sweep(.everything, null);
+
+    const next = try allocator.alloc(32);
+    try testing.expectEqual(dropped.ptr, next.ptr);
+}
+
+test "a young allocation the nursery cannot serve comes from the tenured space" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    allocator.nursery_capacity = 16 * gc.CONS_BYTES;
+    var young: usize = 0;
+    while (young < 16) : (young += 1) _ = try allocator.allocCons();
+
+    try testing.expect(allocator.nurseryFull());
+    // Nothing has had to spill yet, so there is nothing to reclaim.
+    try testing.expect(!allocator.nurseryDue());
+
+    const spilled = try allocator.allocCons();
+    try testing.expect(!allocator.inNursery(@intFromPtr(spilled.ptr)));
+    try testing.expectEqual(@as(usize, gc.CONS_BYTES), allocator.stats.live_bytes);
+    try testing.expect(allocator.nurseryDue());
+}
+
+test "a tenured allocation is never served out of the nursery" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const young_cons = try allocator.allocCons();
+    const young_object = try allocator.alloc(32);
+    allocator.freeCons(young_cons);
+    allocator.free(young_object);
+
+    const cell = try allocator.allocTenuredCons();
+    const object = try allocator.allocTenured(32);
+    try testing.expect(!allocator.inNursery(@intFromPtr(cell.ptr)));
+    try testing.expect(!allocator.inNursery(@intFromPtr(object.ptr)));
+}
+
+test "resetting the nursery puts its bump pointers back to the start" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const first = try allocator.allocCons();
+    _ = try allocator.alloc(32);
+    allocator.resetNursery();
+
+    try testing.expectEqual(@as(usize, 0), allocator.stats.nursery_bytes);
+    try testing.expect(!allocator.inNursery(@intFromPtr(first.ptr)));
+    try testing.expectEqual(first.ptr, (try allocator.allocCons()).ptr);
+}
+
+test "an allocator with no nursery never asks for a collection to make young room" {
+    var allocator = newAllocator();
+    defer allocator.deinit();
+    _ = try allocator.alloc(32);
+    _ = try allocator.allocCons();
+    try testing.expect(!allocator.nurseryFull());
+    try testing.expect(!allocator.nurseryDue());
+}
+
+test "a young cons region with no survivors goes back to its bump pointer" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    allocator.nursery_capacity = 64 * gc.CONS_BYTES;
+    const first = try allocator.allocCons();
+    var made: usize = 1;
+    while (made < 64) : (made += 1) _ = try allocator.allocCons();
+
+    allocator.sweep(.everything, null);
+
+    // Nothing was threaded onto a free list: the region is simply empty
+    // again.
+    try testing.expectEqual(@as(usize, 0), allocator.stats.nursery_bytes);
+    try testing.expectEqual(@as(usize, 0), allocator.stats.free_conses);
+    try testing.expectEqual(first.ptr, (try allocator.allocCons()).ptr);
+}
+
+test "a young cons region with room left keeps serving young allocations" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    allocator.nursery_capacity = 64 * gc.CONS_BYTES;
+    var cells: [64][]align(gc.ALIGNMENT) u8 = undefined;
+    for (&cells) |*cell| cell.* = try allocator.allocCons();
+    for (cells[0..10]) |cell| _ = allocator.mark(@intFromPtr(cell.ptr));
+
+    allocator.sweep(.everything, null);
+
+    try testing.expect(allocator.inNursery(@intFromPtr(cells[0].ptr)));
+    // Young bytes are counted on their own, so nothing here is tenured.
+    try testing.expectEqual(@as(usize, 0), allocator.stats.live_bytes);
+    try testing.expectEqual(@as(usize, 54), allocator.stats.free_conses);
+}
+
+test "a young cons region crowded with survivors is handed to the tenured space" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    allocator.nursery_capacity = 64 * gc.CONS_BYTES;
+    var cells: [64][]align(gc.ALIGNMENT) u8 = undefined;
+    for (&cells) |*cell| cell.* = try allocator.allocCons();
+    for (cells[0..40]) |cell| _ = allocator.mark(@intFromPtr(cell.ptr));
+
+    allocator.sweep(.everything, null);
+
+    try testing.expect(!allocator.inNursery(@intFromPtr(cells[0].ptr)));
+    try testing.expectEqual(@as(usize, 40 * gc.CONS_BYTES), allocator.stats.live_bytes);
+
+    // The next young allocation comes from a region of its own rather
+    // than from what is left of the one that filled up.
+    const fresh = try allocator.allocCons();
+    try testing.expect(allocator.inNursery(@intFromPtr(fresh.ptr)));
+}
+
+test "a pause is counted in the bucket for its order of magnitude" {
+    var allocator = newAllocator();
+    defer allocator.deinit();
+    allocator.recordPause(500);
+    allocator.recordPause(5 * std.time.ns_per_us);
+    allocator.recordPause(5 * std.time.ns_per_ms);
+    allocator.recordPause(5 * std.time.ns_per_s);
+
+    try testing.expectEqual(@as(u32, 1), allocator.stats.pauses[0]);
+    try testing.expectEqual(@as(u32, 1), allocator.stats.pauses[1]);
+    try testing.expectEqual(@as(u32, 1), allocator.stats.pauses[4]);
+    try testing.expectEqual(@as(u32, 1), allocator.stats.pauses[gc.PAUSE_BUCKETS - 1]);
+    try testing.expectEqual(@as(u64, 5 * std.time.ns_per_s), allocator.stats.gc_pause_max_ns);
+    try testing.expectEqual(
+        @as(u64, 500 + 5 * std.time.ns_per_us + 5 * std.time.ns_per_ms + 5 * std.time.ns_per_s),
+        allocator.stats.gc_time_ns,
+    );
+}
+
+test "every collection lands in a bucket" {
+    var allocator = newAllocator();
+    defer allocator.deinit();
+    for ([_]u64{ 0, 1, std.time.ns_per_s * 100 }) |nanoseconds| {
+        allocator.recordPause(nanoseconds);
+    }
+    var counted: u32 = 0;
+    for (allocator.stats.pauses) |count| counted += count;
+    try testing.expectEqual(@as(u32, 3), counted);
+}
+
+test "a tenured object made to point at a young one marks its card" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const old = try allocator.allocTenuredCons();
+    const young = try allocator.allocCons();
+
+    try testing.expect(!allocator.cardMarked(@intFromPtr(old.ptr)));
+    allocator.noteWrite(@intFromPtr(old.ptr), @intFromPtr(young.ptr));
+    try testing.expect(allocator.cardMarked(@intFromPtr(old.ptr)));
+}
+
+test "a pointer that stays inside one generation marks nothing" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const old = try allocator.allocTenuredCons();
+    const older = try allocator.allocTenuredCons();
+    const young = try allocator.allocCons();
+    const younger = try allocator.allocCons();
+
+    // Old to old: a collection of the nursery has no reason to read it.
+    allocator.noteWrite(@intFromPtr(old.ptr), @intFromPtr(older.ptr));
+    try testing.expect(!allocator.cardMarked(@intFromPtr(old.ptr)));
+
+    // Young to young: the roots reach both.
+    allocator.noteWrite(@intFromPtr(young.ptr), @intFromPtr(younger.ptr));
+    try testing.expect(!allocator.cardMarked(@intFromPtr(young.ptr)));
+}
+
+test "a collection that has read the cards forgets them" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const old = try allocator.allocTenuredCons();
+    const young = try allocator.allocCons();
+    allocator.noteWrite(@intFromPtr(old.ptr), @intFromPtr(young.ptr));
+
+    allocator.clearCards();
+
+    try testing.expect(!allocator.cardMarked(@intFromPtr(old.ptr)));
+}
+
+const Seen = struct {
+    conses: usize = 0,
+    objects: usize = 0,
+
+    fn cell(self: *Seen, address: [*]align(gc.ALIGNMENT) u8) anyerror!void {
+        _ = address;
+        self.conses += 1;
+    }
+
+    fn object(self: *Seen, address: [*]align(gc.ALIGNMENT) u8) anyerror!void {
+        _ = address;
+        self.objects += 1;
+    }
+};
+
+test "only the cards that were marked are handed to a scan" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const old = try allocator.allocTenuredCons();
+    const young = try allocator.allocCons();
+
+    var before: Seen = .{};
+    try allocator.scanConses(.dirty_cards, &before, Seen.cell);
+    try testing.expectEqual(@as(usize, 0), before.conses);
+
+    allocator.noteWrite(@intFromPtr(old.ptr), @intFromPtr(young.ptr));
+
+    var after: Seen = .{};
+    try allocator.scanConses(.dirty_cards, &after, Seen.cell);
+    try testing.expectEqual(@as(usize, 1), after.conses);
+}
+
+test "a cell the collector reclaimed is passed over by a card scan" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const kept = try allocator.allocTenuredCons();
+    const dropped = try allocator.allocTenuredCons();
+    const young = try allocator.allocCons();
+    allocator.noteWrite(@intFromPtr(kept.ptr), @intFromPtr(young.ptr));
+    allocator.noteWrite(@intFromPtr(dropped.ptr), @intFromPtr(young.ptr));
+
+    _ = allocator.mark(@intFromPtr(kept.ptr));
+    allocator.sweep(.everything, null);
+
+    // Both sit on the same card, and only the one that survived holds a
+    // pair for the scan to read.
+    var seen: Seen = .{};
+    try allocator.scanConses(.dirty_cards, &seen, Seen.cell);
+    try testing.expectEqual(@as(usize, 1), seen.conses);
+}
+
+test "a tenured object on a dirty card is handed to a scan" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    const old = try allocator.allocTenured(32);
+    const young = try allocator.allocCons();
+
+    var before: Seen = .{};
+    try allocator.scanObjects(.dirty_cards, &before, Seen.object);
+    try testing.expectEqual(@as(usize, 0), before.objects);
+
+    allocator.noteWrite(@intFromPtr(old.ptr), @intFromPtr(young.ptr));
+
+    var after: Seen = .{};
+    try allocator.scanObjects(.dirty_cards, &after, Seen.object);
+    try testing.expectEqual(@as(usize, 1), after.objects);
+}
+
+test "a young region handed to the tenured space starts every card dirty" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    allocator.nursery_capacity = 64 * gc.CONS_BYTES;
+    var cells: [64][]align(gc.ALIGNMENT) u8 = undefined;
+    for (&cells) |*cell| cell.* = try allocator.allocCons();
+    for (cells[0..40]) |cell| _ = allocator.mark(@intFromPtr(cell.ptr));
+
+    allocator.sweep(.everything, null);
+
+    // Nothing recorded what the cells pointed at while they were young,
+    // so the whole region has to be read.
+    try testing.expect(allocator.cardMarked(@intFromPtr(cells[0].ptr)));
+    try testing.expect(allocator.cardMarked(@intFromPtr(cells[63].ptr)));
 }

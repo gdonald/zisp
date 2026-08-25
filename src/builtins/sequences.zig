@@ -373,14 +373,14 @@ fn mapIntoFn(p: *anyopaque, args: []const Value) Error!Value {
             var rest = target;
             var i: usize = 0;
             while (rest.isCons() and i < produced.items.len) : (i += 1) {
-                heap.setCar(rest, produced.items[i]);
+                heap.setCar(ev.heap, rest, produced.items[i]);
                 rest = heap.cdr(rest);
             }
         },
         .vector => {
             for (0..heap.arrayActive(target).len) |i| {
                 if (i >= produced.items.len) break;
-                heap.setSlot(target, i, produced.items[i]);
+                heap.setSlot(ev.heap, target, i, produced.items[i]);
             }
         },
         .string => {

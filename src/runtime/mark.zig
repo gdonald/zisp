@@ -16,6 +16,20 @@ const env_mod = @import("../eval/env.zig");
 const Value = value.Value;
 const Heap = heap.Heap;
 
+/// The address a value refers to, or null when it refers to nothing the
+/// collector can reclaim.
+fn referentAddress(v: Value) ?usize {
+    if (v.isCons()) return v.toConsAddr();
+    if (v.tag() == .heap) return v.toHeapAddr();
+    return null;
+}
+
+/// How much of the heap a mark phase covers. A young one stops at an
+/// object the tenured space holds: what such an object refers to in the
+/// nursery is reached through its card instead, so the walk costs what
+/// the program has just made rather than everything it has kept.
+pub const Reach = enum { young, everything };
+
 /// The state one mark phase carries: the objects still to visit, and the
 /// symbols already descended into.
 ///
@@ -25,6 +39,7 @@ const Heap = heap.Heap;
 pub const Marker = struct {
     allocator: std.mem.Allocator,
     heap: *Heap,
+    reach: Reach = .everything,
     worklist: std.ArrayListUnmanaged(Value) = .empty,
     /// Environment frames still to visit. A frame is not a heap object,
     /// so a closure that captured one keeps it alive through here.
@@ -34,6 +49,9 @@ pub const Marker = struct {
     /// Objects outside the collected heap that have been descended
     /// into. Anything inside it records that in its mark bit instead.
     visited: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// Weak pointers the walk reached. What they refer to is not marked
+    /// through them, so each is looked at again once the walk is done.
+    weak: std.ArrayListUnmanaged(Value) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, h: *Heap) Marker {
         return .{ .allocator = allocator, .heap = h };
@@ -45,6 +63,7 @@ pub const Marker = struct {
         self.visited_frames.deinit(self.allocator);
         self.visited_symbols.deinit(self.allocator);
         self.visited.deinit(self.allocator);
+        self.weak.deinit(self.allocator);
     }
 
     /// What is being scanned, for the report when a root turns out to
@@ -104,14 +123,31 @@ pub const Marker = struct {
             return;
 
         if (self.heap.objects.owns(address)) {
+            if (self.reach == .young and !self.heap.objects.inNursery(address)) return;
             // The mark bit doubles as the record of what has been
             // descended into, so a cycle stops on its second visit.
             if (self.heap.objects.isMarked(address)) return;
             _ = self.heap.objects.mark(address);
         } else if (try self.wasVisited(address)) {
+            // An object the collected heap does not own, a closure among
+            // them, carries no mark bit and sits on no card, so it is
+            // followed whatever the reach.
             return;
         }
 
+        if (v.isCons()) {
+            try self.push(heap.car(v));
+            try self.push(heap.cdr(v));
+            return;
+        }
+        try self.visitHeapObject(v);
+    }
+
+    /// Queue what one object refers to without marking the object
+    /// itself. A young collection wants this of every object on a dirty
+    /// card: the card says the object holds a young reference, and the
+    /// object itself is not what is being collected.
+    pub fn pushSlots(self: *Marker, v: Value) !void {
         if (v.isCons()) {
             try self.push(heap.car(v));
             try self.push(heap.cdr(v));
@@ -189,7 +225,25 @@ pub const Marker = struct {
                 try self.push(s.delete_on_close);
             },
             .function, .closure => try self.visitFunction(v),
+            // A weak pointer keeps nothing alive, so what it refers to
+            // is not pushed. It is looked at again after the walk.
+            .weak_pointer => try self.weak.append(self.allocator, v),
             else => {},
+        }
+    }
+
+    /// Break every weak pointer whose referent the walk did not reach.
+    ///
+    /// A young walk marked the nursery alone, so only a referent there
+    /// can be told apart from one the walk simply stopped at.
+    pub fn breakDeadWeakPointers(self: *Marker) void {
+        for (self.weak.items) |v| {
+            const pointer = heap.asWeakPointer(v);
+            const address = referentAddress(pointer.referent) orelse continue;
+            if (!self.heap.objects.owns(address)) continue;
+            if (self.reach == .young and !self.heap.objects.inNursery(address)) continue;
+            if (self.heap.objects.isMarked(address)) continue;
+            pointer.referent = value.BROKEN;
         }
     }
 

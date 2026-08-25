@@ -132,6 +132,11 @@ pub const SPECIAL_EOF: Value = Value.fromSpecial(1);
 /// value carries, so a live cons cannot hold this by accident.
 pub const FORWARDED: Value = .{ .raw = @intFromEnum(Tag._reserved6) };
 
+/// Left in a weak pointer whose referent a collection reclaimed. Like
+/// `FORWARDED` it carries a tag no real value does, so it can never be
+/// mistaken for something the program put there.
+pub const BROKEN: Value = .{ .raw = @intFromEnum(Tag._reserved7) };
+
 // NIL and T are populated when the symbol table is initialized.
 // Their canonical Value forms are exposed so identity checks can use raw equality.
 pub var NIL: Value = .{ .raw = 0 };

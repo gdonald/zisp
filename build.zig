@@ -137,6 +137,38 @@ pub fn build(b: *std.Build) void {
     const fuzz_reader_step = b.step("fuzz-reader", "Run the reader fuzzer");
     fuzz_reader_step.dependOn(&run_fuzz_reader.step);
 
+    // `zig build gc-stress` runs the collector's long-running corpus at
+    // full size. The default size the corpus carries is what the unit
+    // suite runs; a hundred million cells takes far too long for that.
+    const gc_stress_run = b.addRunArtifact(exe);
+    gc_stress_run.addArgs(&.{
+        "--batch",
+        "--quiet",
+        "--eval",
+        "(defparameter *gc-stress-iterations* 100000000)",
+        "--load",
+        "tests/lisp/gc-stress.lisp",
+    });
+    const gc_stress_step = b.step("gc-stress", "Run the collector's long-running stress corpus");
+    gc_stress_step.dependOn(&gc_stress_run.step);
+
+    // `zig build gc-pause` runs the collector's pause corpus for a minute.
+    // The size the corpus carries by default is a short version of the
+    // same run, for when someone wants an answer sooner.
+    const gc_pause_run = b.addRunArtifact(exe);
+    gc_pause_run.addArgs(&.{
+        "--batch",
+        "--quiet",
+        "--eval",
+        "(defparameter *gc-pause-seconds* 60)",
+        "--load",
+        "tests/lisp/gc-pause.lisp",
+        "--eval",
+        "(room t)",
+    });
+    const gc_pause_step = b.step("gc-pause", "Measure what share of a run the collector takes");
+    gc_pause_step.dependOn(&gc_pause_run.step);
+
     // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh.
     // The harness needs the binary built first; depend on the install step
     // and pass ZISP=... so the script doesn't have to guess the path.

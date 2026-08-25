@@ -416,7 +416,7 @@ fn arefFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn setArefFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len < 2) return Error.WrongArgCount;
     const new_value = args[args.len - 1];
     const subscripts = args[1 .. args.len - 1];
@@ -428,7 +428,7 @@ fn setArefFn(p: *anyopaque, args: []const Value) Error!Value {
     }
     const a = try expectArray(args[0]);
     try checkElement(a.element_type, new_value);
-    heap.setSlot(args[0], try rowMajorIndex(a, subscripts), new_value);
+    heap.setSlot(ev.heap, args[0], try rowMajorIndex(a, subscripts), new_value);
     return new_value;
 }
 
@@ -453,7 +453,7 @@ fn rowMajorArefFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn setRowMajorArefFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 3) return Error.WrongArgCount;
     if (heap.isString(args[0])) {
         const s = heap.asString(args[0]);
@@ -463,7 +463,7 @@ fn setRowMajorArefFn(p: *anyopaque, args: []const Value) Error!Value {
     }
     const a = try expectArray(args[0]);
     try checkElement(a.element_type, args[2]);
-    heap.setSlot(args[0], try rowMajorOffset(args[0], args[1], a.totalSize()), args[2]);
+    heap.setSlot(ev.heap, args[0], try rowMajorOffset(args[0], args[1], a.totalSize()), args[2]);
     return args[2];
 }
 
@@ -633,7 +633,7 @@ fn pushTarget(v: Value) Error!PushTarget {
     return .{ .index = @intCast(a.fill_pointer), .capacity = a.totalSize() };
 }
 
-fn storeAt(v: Value, index: usize, element: Value) Error!void {
+fn storeAt(h: *heap.Heap, v: Value, index: usize, element: Value) Error!void {
     if (heap.isString(v)) {
         if (element.tag() != .char) return Error.TypeError;
         heap.asString(v).allocated()[index] = element.toChar();
@@ -641,7 +641,7 @@ fn storeAt(v: Value, index: usize, element: Value) Error!void {
     }
     const a = heap.asArray(v);
     try checkElement(a.element_type, element);
-    heap.setSlot(v, index, element);
+    heap.setSlot(h, v, index, element);
 }
 
 fn bumpFillPointer(v: Value, to: usize) void {
@@ -653,11 +653,11 @@ fn bumpFillPointer(v: Value, to: usize) void {
 }
 
 fn vectorPushFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
     const target = try pushTarget(args[1]);
     if (target.index >= target.capacity) return value.NIL;
-    try storeAt(args[1], target.index, args[0]);
+    try storeAt(ev.heap, args[1], target.index, args[0]);
     bumpFillPointer(args[1], target.index + 1);
     return Value.fromFixnum(@intCast(target.index));
 }
@@ -674,7 +674,7 @@ fn vectorPushExtendFn(p: *anyopaque, args: []const Value) Error!Value {
         try grow(ev, args[1], target.capacity + extension);
         target = try pushTarget(args[1]);
     }
-    try storeAt(args[1], target.index, args[0]);
+    try storeAt(ev.heap, args[1], target.index, args[0]);
     bumpFillPointer(args[1], target.index + 1);
     return Value.fromFixnum(@intCast(target.index));
 }

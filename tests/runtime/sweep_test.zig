@@ -25,7 +25,7 @@ test "a dead string releases its characters" {
     var h = newHeap();
     defer h.deinit();
     _ = try h.allocString("a string long enough to need its own storage");
-    h.sweep();
+    h.sweep(.everything);
 }
 
 test "a dead array releases its dimensions and its storage" {
@@ -33,7 +33,7 @@ test "a dead array releases its dimensions and its storage" {
     defer h.deinit();
     _ = try h.allocArray(&.{ 3, 4 }, .t);
     _ = try h.allocVector(&.{ value.NIL, value.NIL });
-    h.sweep();
+    h.sweep(.everything);
 }
 
 test "a dead bignum releases its limbs" {
@@ -42,7 +42,7 @@ test "a dead bignum releases its limbs" {
     const limbs = try testing.allocator.alloc(std.math.big.Limb, 4);
     @memset(limbs, 7);
     _ = try h.allocBignum(.{ .limbs = limbs, .positive = true });
-    h.sweep();
+    h.sweep(.everything);
 }
 
 test "a dead hash table releases its entries and buckets" {
@@ -56,7 +56,7 @@ test "a dead hash table releases its entries and buckets" {
         h.allocator,
         .{ .key = value.NIL, .value = value.NIL, .live = true },
     );
-    h.sweep();
+    h.sweep(.everything);
 }
 
 test "a live object keeps what it holds" {
@@ -65,20 +65,20 @@ test "a live object keeps what it holds" {
     const text = try h.allocString("kept");
     _ = h.objects.mark(text.toHeapAddr());
 
-    h.sweep();
+    h.sweep(.everything);
 
     try testing.expectEqualSlices(u32, &.{ 'k', 'e', 'p', 't' }, heap_mod.asString(text).slice());
 
     // Nothing else frees it, so the sweep that runs once it is dead has
     // to, or the testing allocator reports the leak.
-    h.sweep();
+    h.sweep(.everything);
 }
 
 test "a swept cons cell is handed out again" {
     var h = newHeap();
     defer h.deinit();
     const cell = try h.allocCons(Value.fromFixnum(1), value.NIL);
-    h.sweep();
+    h.sweep(.everything);
 
     const reused = try h.allocCons(Value.fromFixnum(2), value.NIL);
 

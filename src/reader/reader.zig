@@ -376,7 +376,7 @@ pub const Reader = struct {
                     const cdr_form = try self.readForm();
                     const closer = try self.nextToken();
                     if (closer.kind != .rparen) return self.errAt(closer.pos, Error.BadToken);
-                    heap_mod.setCdr(tail, cdr_form);
+                    heap_mod.setCdr(self.heap, tail, cdr_form);
                     return head;
                 },
                 else => {
@@ -394,7 +394,7 @@ pub const Reader = struct {
                                 tail = cell;
                                 held.setItem(0, head);
                             } else {
-                                heap_mod.setCdr(tail, cell);
+                                heap_mod.setCdr(self.heap, tail, cell);
                                 tail = cell;
                             }
                         },

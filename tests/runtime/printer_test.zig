@@ -160,7 +160,7 @@ test "print is cycle-safe" {
     var h = Heap.init(arena.allocator());
     // Build (1 . X) and patch X to point at the cell itself.
     const cell = try h.allocCons(Value.fromFixnum(1), value.NIL);
-    heap.setCdr(cell, cell);
+    heap.setCdr(&h, cell, cell);
 
     const s = try fmtValue(a, cell);
     defer a.free(s);
@@ -181,7 +181,7 @@ test "print is cycle-safe when a cons appears in its own car" {
 
     var h = Heap.init(arena.allocator());
     const cell = try h.allocCons(value.NIL, value.NIL);
-    heap.setCar(cell, cell);
+    heap.setCar(&h, cell, cell);
 
     const s = try fmtValue(a, cell);
     defer a.free(s);

@@ -22,6 +22,9 @@ pub const Symbol = struct {
 pub const CL_PACKAGE_NAME = "COMMON-LISP";
 pub const CL_USER_PACKAGE_NAME = "COMMON-LISP-USER";
 pub const KEYWORD_PACKAGE_NAME = "KEYWORD";
+/// Where what this implementation adds to the standard lives. Named as
+/// CMUCL names it, since that is where the shape of these comes from.
+pub const EXT_PACKAGE_NAME = "EXTENSIONS";
 
 /// Narrow a registry result whose non-allocation failures are impossible
 /// at the call site.
@@ -37,6 +40,7 @@ pub const Interner = struct {
     registry: package.Registry,
     cl: *Package = undefined,
     cl_user: *Package = undefined,
+    ext: *Package = undefined,
     keyword: *Package = undefined,
     /// The `*PACKAGE*` symbol, once interned. Its value cell is the single
     /// source of truth for the current package, so a dynamic rebinding of
@@ -67,7 +71,10 @@ pub const Interner = struct {
         self.cl_user = try onlyAllocFailure(self.registry.create(CL_USER_PACKAGE_NAME));
         try onlyAllocFailure(self.registry.addNickname(self.cl_user, "CL-USER"));
         self.keyword = try onlyAllocFailure(self.registry.create(KEYWORD_PACKAGE_NAME));
+        self.ext = try onlyAllocFailure(self.registry.create(EXT_PACKAGE_NAME));
+        try onlyAllocFailure(self.registry.addNickname(self.ext, "EXT"));
         try self.cl_user.addUse(self.cl);
+        try self.cl_user.addUse(self.ext);
     }
 
     pub fn currentPackage(self: *Interner) *Package {
@@ -115,6 +122,20 @@ pub const Interner = struct {
             try pkg.addExternal(owned, sym);
         } else {
             try pkg.addInternal(owned, sym);
+        }
+        return sym;
+    }
+
+    /// Intern a name this implementation adds to the standard, as an
+    /// `EXTENSIONS` external symbol.
+    pub fn internExtension(self: *Interner, sym_name: []const u8) !Value {
+        const sym = try self.internLocal(self.ext, sym_name);
+        const owned = symbol(sym).name;
+        if (self.ext.findPresent(sym_name)) |found| {
+            if (found.status == .internal) {
+                _ = self.ext.internal.remove(owned);
+                try self.ext.addExternal(owned, sym);
+            }
         }
         return sym;
     }
@@ -191,7 +212,7 @@ pub fn plistPut(h: *heap.Heap, sym: Value, key: Value, v: Value) !void {
         const rest = heap.cdr(plist);
         if (!rest.isCons()) break;
         if (heap.car(plist).equalsRaw(key)) {
-            heap.setCar(rest, v);
+            heap.setCar(h, rest, v);
             return;
         }
         plist = heap.cdr(rest);

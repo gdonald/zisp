@@ -5,11 +5,18 @@ comptime {
     _ = @import("runtime/value_test.zig");
     _ = @import("runtime/heap_test.zig");
     _ = @import("runtime/gc_test.zig");
+    _ = @import("runtime/card_fuzz_test.zig");
     _ = @import("runtime/mark_test.zig");
     _ = @import("runtime/sweep_test.zig");
     _ = @import("runtime/stack_test.zig");
     _ = @import("eval/collect_test.zig");
     _ = @import("eval/gc_copy_corpus_test.zig");
+    _ = @import("eval/gc_nursery_trigger_test.zig");
+    _ = @import("eval/card_scan_test.zig");
+    _ = @import("eval/major_gc_test.zig");
+    _ = @import("eval/weak_pointer_test.zig");
+    _ = @import("eval/finalizer_test.zig");
+    _ = @import("eval/gc_stress_test.zig");
 
     _ = @import("runtime/symbol_test.zig");
     _ = @import("runtime/package_test.zig");
