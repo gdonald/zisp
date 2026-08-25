@@ -36,14 +36,18 @@ pub fn collect(ev: *Evaluator) !void {
     try marker.run();
 
     // Source positions are keyed on a cons address, so an entry for a
-    // dead cons has to go before that address is handed out again.
+    // dead cons has to go before that address is handed out again. Only
+    // the tenured space has mark bits: a nursery address is alive when
+    // the copy was skipped, and gone from the table already when it ran.
     if (ev.positions) |table| {
         var it = table.map.iterator();
         var stale: std.ArrayListUnmanaged(u64) = .empty;
         defer stale.deinit(ev.allocator);
         while (it.next()) |entry| {
-            if (!ev.heap.objects.isMarked(entry.key_ptr.*)) {
-                try stale.append(ev.allocator, entry.key_ptr.*);
+            const address = entry.key_ptr.*;
+            if (!ev.heap.objects.owns(address)) continue;
+            if (!ev.heap.objects.isMarked(address)) {
+                try stale.append(ev.allocator, address);
             }
         }
         for (stale.items) |key| _ = table.map.remove(key);
@@ -110,14 +114,25 @@ fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
 }
 
 /// Source positions are keyed on a cons address, so a cons that moved
-/// takes its entry with it.
+/// takes its entry with it and one the copy left behind loses it: after
+/// this the nursery holds nothing anybody can name.
 fn repositionMoved(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     const table = ev.positions orelse return;
-    var it = e.moved_conses.iterator();
+
+    var young: std.ArrayListUnmanaged(u64) = .empty;
+    defer young.deinit(ev.allocator);
+    var it = table.map.iterator();
     while (it.next()) |entry| {
-        const pos = table.map.get(entry.key_ptr.*) orelse continue;
-        _ = table.map.remove(entry.key_ptr.*);
-        try table.record(entry.value_ptr.*, pos);
+        if (ev.heap.objects.inNursery(entry.key_ptr.*)) {
+            try young.append(ev.allocator, entry.key_ptr.*);
+        }
+    }
+
+    for (young.items) |address| {
+        const pos = table.map.get(address).?;
+        _ = table.map.remove(address);
+        const moved = e.movedCons(address) orelse continue;
+        try table.record(moved, pos);
     }
 }
 
