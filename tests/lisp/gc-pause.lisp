@@ -78,6 +78,11 @@
 ;; time the program itself got.
 (check (<= (* 100 *gc-us*) (* *gc-pause-limit-percent* *mutator-us*)))
 
+;; What the run came to: microseconds in the collector, microseconds in
+;; the program, the two together, and how many collections there were.
+;; `docs/perf-baseline.md` records the figures this line produces.
+(format t "GC-PAUSE ~d ~d ~d ~d~%" *gc-us* *mutator-us* *elapsed-us* *collections*)
+
 ;; Every collection landed in a bucket, so the histogram accounts for
 ;; all of them.
 (check (= (apply #'+ (room-value :gc-pauses)) (room-value :collections)))

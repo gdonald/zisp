@@ -258,12 +258,23 @@ That is where the copy runs. A form that allocates for a long time does
 not wait for it: the first young allocation the nursery cannot serve is
 served from the tenured space and records the spill, and a collection
 runs ahead of the next allocation once enough has been handed out since
-the last one. Enough is half a nursery, or a quarter of what is live
-once that is the larger, since a collection walks the whole live heap
-and would otherwise cost more per allocated byte the more a program
-retains. That collection reclaims the nursery in place rather than
-copying, so the loop goes on reusing the same megabyte. Survivors are
-promoted by the next copy, at the top of the form after.
+the last one. Enough is the largest of three figures: half a nursery, a
+quarter of what is live, and four times what the last collection read
+from dirty cards.
+
+The first two keep the walk from costing more per allocated byte the
+more a program retains. The third is about the cards. A young collection
+that cannot move leaves its survivors where they are, so a tenured
+object pointing at one keeps its card dirty and the next collection
+reads it again. A form that makes many such pointers pays that reading
+over and over, and the interval grows with it until what the nursery
+cannot hold spills to the tenured space instead, where a major
+collection reclaims it. That bounds what the cards can cost: a
+collection reads at most a byte of them for every four allocated.
+
+That collection reclaims the nursery in place rather than copying, so
+the loop goes on reusing the same megabyte. Survivors are promoted by
+the next copy, at the top of the form after.
 
 A collection also runs from inside an allocation, once the nursery has
 handed out its budget and a young allocation has had to come out of the
@@ -282,7 +293,13 @@ the nursery cannot land back in it.
 at a top level form. A collection also fires on its own once the nursery
 has handed out its budget, or once more than `*gc-trigger*` bytes have
 been handed out since the last one. Setting
-`*gc-verbose*` reports what each one reclaimed. `(room)` returns the
+`*gc-verbose*` reports what each one reclaimed.
+
+`*gc-nursery-bytes*` is what the nursery may hand out, and zero turns it
+off: every allocation then goes straight to the tenured space and is
+reclaimed by marking and sweeping, which is the collector without
+generations. That is what `zig build boyer` measures the generational
+collector against. `(room)` returns the
 heap figures as a property list, and `(room t)` prints them as well.
 
 Among those figures are what the collector has cost: `:gc-time-ns` is

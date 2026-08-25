@@ -45,7 +45,10 @@ fn majorDue(ev: *const Evaluator) bool {
 /// A collection someone asked for walks everything: `gc` means reclaim
 /// what you can, not reclaim what is cheapest.
 pub fn collect(ev: *Evaluator) !void {
-    const scope: Scope = if (ev.gc_requested or majorDue(ev)) .major else .minor;
+    // A heap with no nursery has nothing for a minor collection to
+    // reclaim, so every collection there marks and sweeps.
+    const nursery_off = ev.heap.objects.nursery_capacity == 0;
+    const scope: Scope = if (ev.gc_requested or nursery_off or majorDue(ev)) .major else .minor;
     return collectScoped(ev, scope);
 }
 
@@ -160,8 +163,7 @@ pub fn runFinalizers(ev: *Evaluator) !void {
 /// the tenured space.
 fn pushCardRoots(marker: *mark_mod.Marker, ev: *Evaluator) std.mem.Allocator.Error!void {
     mark_mod.Marker.source = "a dirty card";
-    ev.heap.objects.scanConses(.dirty_cards, marker, pushCell) catch |e| return narrow(e);
-    ev.heap.objects.scanObjects(.dirty_cards, marker, pushObject) catch |e| return narrow(e);
+    ev.heap.objects.scanDirtyCards(marker, pushCell, pushObject) catch |e| return narrow(e);
 }
 
 /// The scanners hand back whatever the callback failed with, and the
@@ -288,6 +290,10 @@ pub const TRIGGER_VARIABLE = "*GC-TRIGGER*";
 pub const MAJOR_FLOOR_VARIABLE = "*GC-MAJOR-FLOOR*";
 /// Whether each collection reports what it reclaimed.
 pub const VERBOSE_VARIABLE = "*GC-VERBOSE*";
+/// How much the nursery holds. Zero turns it off, and every allocation
+/// then goes straight to the tenured space and is reclaimed by marking
+/// and sweeping, which is the collector without generations.
+pub const NURSERY_VARIABLE = "*GC-NURSERY-BYTES*";
 
 /// Collect if `gc` asked for it, or if enough has been allocated since
 /// the last cycle.
@@ -312,9 +318,13 @@ pub fn maybeCollect(ev: *Evaluator) !void {
     try runFinalizers(ev);
 }
 
+/// The value of a tuning variable, resolved the way an unqualified read
+/// would resolve it, or null where the name has no value.
 fn specialValue(ev: *Evaluator, name: []const u8) ?Value {
-    const found = ev.interner.cl.findPresent(name) orelse return null;
-    return symbol_mod.symbol(found.sym).value_cell;
+    const sym = ev.interner.lookup(name) orelse return null;
+    const cell = symbol_mod.symbol(sym).value_cell;
+    if (cell.equalsRaw(value.SPECIAL_UNBOUND)) return null;
+    return cell;
 }
 
 fn applyTrigger(ev: *Evaluator) void {
@@ -323,6 +333,9 @@ fn applyTrigger(ev: *Evaluator) void {
     }
     if (byteSetting(ev, MAJOR_FLOOR_VARIABLE)) |bytes| {
         ev.major_floor = bytes;
+    }
+    if (byteSetting(ev, NURSERY_VARIABLE)) |bytes| {
+        ev.heap.objects.nursery_capacity = bytes;
     }
 }
 

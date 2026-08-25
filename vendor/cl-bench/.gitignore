@@ -1,0 +1,16 @@
+*.fas
+*.fasc
+*.fasl
+*.olisp
+*.lafsl
+output/
+*~
+*lx64fsl
+*.bin
+*.ibin
+*.vbin
+*\\#*\\#
+/report/#graph-report.lisp#
+/report/.#graph-report.lisp
+*.lib
+/misc/gabriel.sse2f

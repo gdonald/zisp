@@ -11,6 +11,7 @@ comptime {
     _ = @import("runtime/stack_test.zig");
     _ = @import("eval/collect_test.zig");
     _ = @import("eval/gc_copy_corpus_test.zig");
+    _ = @import("eval/gc_nursery_off_test.zig");
     _ = @import("eval/gc_nursery_trigger_test.zig");
     _ = @import("eval/card_scan_test.zig");
     _ = @import("eval/major_gc_test.zig");

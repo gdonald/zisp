@@ -446,10 +446,10 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
 - [x] 5.4. Write barrier scaffolding
   - [x] 5.4.1. Centralize all heap mutation through `setCar`, `setCdr`, `setSlot`
   - [x] 5.4.2. Barrier is a no-op now; in place for generational upgrade
-- [ ] 5.5. Generational follow-up
+- [x] 5.5. Generational follow-up
   - [x] 5.5.1. Two generations: nursery + tenured
   - [x] 5.5.2. Bump-pointer allocation in the nursery — verified via `(loop repeat 1000000 do (cons nil nil))` showing nursery growth in `(room)` with no tenured promotion until first GC
-  - [ ] 5.5.3. Minor GC: copy survivors to tenured. Split into 4 milestones:
+  - [x] 5.5.3. Minor GC: copy survivors to tenured. Split into 4 milestones:
     - [x] 5.5.3a-i. Copy phase for cons cells only: scan roots, copy reachable nursery cons to tenured, install forwarding pointer in old location. `tests/lisp/gc-copy-cons.lisp` — allocate 100 cons in nursery, force minor GC, all 100 accessible and now in tenured
     - [x] 5.5.3a-ii. Forwarding-pointer follow during copy: a cons whose `car` points to an already-copied object uses the forwarding pointer (not a stale nursery address). Test: build a graph with shared substructure, copy, assert sharing preserved
     - [x] 5.5.3a-iii. Extend copy to all heap types (symbol, string, vector, hash-table, function). One sub-test per type
@@ -457,11 +457,11 @@ Replace the arena with a real GC. Until this phase, long-running programs leak.
     - [x] 5.5.3b. Trigger heuristic: minor GC auto-fires when nursery exceeds 1MB. `(loop for i below 200000 do (cons nil nil))` shows nursery peak ≤ 1.05MB (trigger fires within 5% of threshold)
     - [x] 5.5.3c. Long-running stress: `(loop repeat 100000000 do (cons nil nil))` retaining every 1000th cell completes without OOM; tenured grows linearly with retained count
     - [x] 5.5.3d. Pause-time gate: minor GC pause ≤ 5% of total mutator time over a 60-second run on the CI Linux runner (specs in `docs/perf-baseline.md`)
-  - [ ] 5.5.4. Card table populated by the write barrier. Split into 4 milestones:
+  - [x] 5.5.4. Card table populated by the write barrier. Split into 4 milestones:
     - [x] 5.5.4a. Write-barrier wired through 5.4.1's centralized mutation points: every `setCar`/`setCdr`/`setSlot` that creates an old→young pointer marks the corresponding card. NOT bail-able to "barrier off in production"
     - [x] 5.5.4b. Card scan: minor GC scans dirty cards in tenured BEFORE scanning roots. `tests/lisp/card-scan.lisp` manually creates an old→young pointer, forces minor GC, verifies the young object survives (would be lost without card scan)
     - [x] 5.5.4c. Fuzz verification: 100k random mutations seeded such that ≥10% create cross-generation pointers (fuzz harness asserts this via counter — if not, fuzzer bug). Full-scan of tenured then asserts every cross-gen pointer's card is marked
-    - [ ] 5.5.4d. Performance gate: cl-bench `boyer` regression ≤ 5% vs. non-generational baseline (numbers committed to `docs/perf-baseline.md`)
+    - [x] 5.5.4d. Performance gate: cl-bench `boyer` regression ≤ 5% vs. non-generational baseline (numbers committed to `docs/perf-baseline.md`)
   - [x] 5.5.5. Major GC fallback (mark-sweep over tenured) — triggered when tenured exceeds 4× post-major size; verified by forcing repeated minor GCs and observing eventual major
 - [x] 5.6. Introspection and tuning
   - [x] 5.6.1. `room` built-in

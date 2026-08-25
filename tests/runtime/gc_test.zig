@@ -444,13 +444,38 @@ test "resetting the nursery puts its bump pointers back to the start" {
     try testing.expectEqual(first.ptr, (try allocator.allocCons()).ptr);
 }
 
-test "an allocator with no nursery never asks for a collection to make young room" {
+test "an allocator with no nursery collects on what it has handed out" {
     var allocator = newAllocator();
     defer allocator.deinit();
+    allocator.collect_threshold = 4096;
     _ = try allocator.alloc(32);
     _ = try allocator.allocCons();
+    // Nothing spills where there is no nursery, so the young figures
+    // say nothing and the threshold is what a collection waits on.
     try testing.expect(!allocator.nurseryFull());
     try testing.expect(!allocator.nurseryDue());
+
+    while (allocator.stats.bytes_since_collection <= 4096) _ = try allocator.allocCons();
+    try testing.expect(allocator.nurseryDue());
+}
+
+test "a collection waits longer the more the last one read from dirty cards" {
+    var allocator = newNurseryAllocator();
+    defer allocator.deinit();
+    allocator.nursery_capacity = 16 * gc.CONS_BYTES;
+    var young: usize = 0;
+    while (young < 17) : (young += 1) _ = try allocator.allocCons();
+    try testing.expect(allocator.nurseryDue());
+
+    // Half a nursery has been handed out, which is enough on its own.
+    // Reading four times that from the cards is what makes it not.
+    allocator.card_scan_bytes = allocator.stats.bytes_since_collection;
+    try testing.expect(!allocator.nurseryDue());
+
+    while (allocator.stats.bytes_since_collection < 4 * allocator.card_scan_bytes) {
+        _ = try allocator.allocCons();
+    }
+    try testing.expect(allocator.nurseryDue());
 }
 
 test "a young cons region with no survivors goes back to its bump pointer" {

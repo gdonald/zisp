@@ -169,6 +169,15 @@ pub fn build(b: *std.Build) void {
     const gc_pause_step = b.step("gc-pause", "Measure what share of a run the collector takes");
     gc_pause_step.dependOn(&gc_pause_run.step);
 
+    // `zig build boyer` measures cl-bench's Boyer benchmark with the
+    // nursery and without it, and fails if the generational collector
+    // has fallen behind the mark and sweep baseline.
+    const boyer_run = b.addSystemCommand(&.{ "bash", "tests/run-boyer.sh" });
+    boyer_run.setEnvironmentVariable("ZISP", b.getInstallPath(.bin, "zisp"));
+    boyer_run.step.dependOn(b.getInstallStep());
+    const boyer_step = b.step("boyer", "Measure the collector against cl-bench's Boyer benchmark");
+    boyer_step.dependOn(&boyer_run.step);
+
     // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh.
     // The harness needs the binary built first; depend on the install step
     // and pass ZISP=... so the script doesn't have to guess the path.

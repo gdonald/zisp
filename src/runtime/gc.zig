@@ -237,7 +237,6 @@ const Region = struct {
         const mask = (@as(u8, 1) << rest) - 1;
         return self.marks[granules / 8] & mask != 0;
     }
-
 };
 
 pub const Stats = struct {
@@ -284,6 +283,10 @@ pub const Allocator = struct {
     nursery_conses: ?*Region = null,
     /// What the two nursery regions may hand out between them.
     nursery_capacity: usize = NURSERY_BYTES,
+    /// Bytes the last collection read from dirty cards before it reached
+    /// anything of its own, which is what makes a young collection cost
+    /// more than the nursery it walks.
+    card_scan_bytes: usize = 0,
     /// Set when a young allocation had to come out of the tenured space
     /// because the nursery had nothing left, which is what makes a
     /// collection due before the next one.
@@ -532,6 +535,7 @@ pub const Allocator = struct {
         self.nursery_free.clear();
         self.nursery_spilled = false;
         self.stats.nursery_bytes = 0;
+        self.stats.bytes_since_collection = 0;
     }
 
     /// Whether the nursery has handed out its whole budget, which is what
@@ -541,16 +545,33 @@ pub const Allocator = struct {
         return self.nurseryUsed() >= self.nursery_capacity;
     }
 
+    /// How much a young collection may allocate for every byte the last
+    /// one read from dirty cards. A form that keeps making old to young
+    /// pointers pays that reading over and over, so the interval grows
+    /// with it and what the nursery cannot hold spills to the tenured
+    /// space instead, where a major collection reclaims it.
+    const CARD_SCAN_SHARE: usize = 4;
+
     /// Whether young space ran out since the last collection.
     ///
-    /// Reclaiming it takes a collection, and a collection walks the whole
-    /// live heap, so how often one may run is set by how much has been
-    /// handed out since the last: half a nursery, or a quarter of what is
-    /// live once that is the larger. Without the second term the walk
-    /// costs more per allocated byte the more a program retains.
+    /// Reclaiming it takes a collection, so how often one may run is set
+    /// by how much has been handed out since the last: half a nursery, a
+    /// quarter of what is live, or `CARD_SCAN_SHARE` times what the last
+    /// collection read from the cards, whichever is the largest. Without
+    /// the second term a collection costs more per allocated byte the
+    /// more a program retains, and without the third the cards do.
     pub fn nurseryDue(self: *const Allocator) bool {
+        // A heap with no nursery never spills, so what is due there is
+        // what the bytes handed out since the last collection say.
+        if (self.nursery_capacity == 0) {
+            return self.stats.bytes_since_collection > self.collect_threshold;
+        }
         if (!self.nursery_spilled) return false;
-        const since = @max(self.nursery_capacity / 2, self.stats.live_bytes / 4);
+        const since = @max(
+            self.nursery_capacity / 2,
+            self.stats.live_bytes / 4,
+            CARD_SCAN_SHARE * self.card_scan_bytes,
+        );
         return self.stats.bytes_since_collection >= since;
     }
 
@@ -796,6 +817,20 @@ pub const Allocator = struct {
     /// so a dirty card is read without knowing anything about its
     /// neighbours. A cell on a free list is passed over: its first word
     /// holds a marker no pair can.
+    /// Read every dirty card, cells first and then the objects that
+    /// carry a header. The bytes this covers are what the next young
+    /// collection is charged for.
+    pub fn scanDirtyCards(
+        self: *Allocator,
+        context: anytype,
+        comptime visitCell: fn (@TypeOf(context), [*]align(ALIGNMENT) u8) anyerror!void,
+        comptime visitObject: fn (@TypeOf(context), [*]align(ALIGNMENT) u8) anyerror!void,
+    ) anyerror!void {
+        self.card_scan_bytes = 0;
+        try self.scanConses(.dirty_cards, context, visitCell);
+        try self.scanObjects(.dirty_cards, context, visitObject);
+    }
+
     pub fn scanConses(
         self: *Allocator,
         reach: Reach,
@@ -813,6 +848,7 @@ pub const Allocator = struct {
                 while (offset + CONS_BYTES <= span.len) : (offset += CONS_BYTES) {
                     const cell: [*]align(ALIGNMENT) u8 = @alignCast(span.ptr + offset);
                     if (isReclaimedCons(@intFromPtr(cell))) continue;
+                    if (reach == .dirty_cards) self.card_scan_bytes += CONS_BYTES;
                     try visit(context, cell);
                 }
             }
@@ -841,7 +877,10 @@ pub const Allocator = struct {
                 const payload = header.payload();
                 const covered = reach == .everything or
                     current.cardDirty(current.cardOf(@intFromPtr(payload)));
-                if (!header.isFree() and covered) try visit(context, payload);
+                if (!header.isFree() and covered) {
+                    if (reach == .dirty_cards) self.card_scan_bytes += header.size();
+                    try visit(context, payload);
+                }
                 offset += BLOCK_HEADER_BYTES + header.size();
             }
         }

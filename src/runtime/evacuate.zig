@@ -105,8 +105,7 @@ pub const Evacuator = struct {
     /// to point at a young one is only reachable this way, since the walk
     /// no longer descends into the tenured space.
     pub fn scanCards(self: *Evacuator) Error!void {
-        self.heap.objects.scanConses(.dirty_cards, self, updateCell) catch |e| return cast(e);
-        self.heap.objects.scanObjects(.dirty_cards, self, updateObject) catch |e| return cast(e);
+        self.heap.objects.scanDirtyCards(self, updateCell, updateObject) catch |e| return cast(e);
     }
 
     /// The scanners hand back whatever the callback failed with, and the
