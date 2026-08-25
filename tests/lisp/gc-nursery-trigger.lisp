@@ -30,8 +30,12 @@
 (check (> *collections-during* 0))
 (check (<= *peak* (floor (* *capacity* 105) 100)))
 
-;; Each of those collections was timed and counted.
-(check (= (apply #'+ (getf (room) :gc-pauses)) (getf (room) :collections)))
+;; Every collection was timed and counted. Both figures come from one
+;; reading, since asking for a second one allocates and a build that
+;; collects on a counter would collect again between the two.
+(defvar *snapshot* (room))
+
+(check (= (apply #'+ (getf *snapshot* :gc-pauses)) (getf *snapshot* :collections)))
 
 ;; The clock those timings come from counts in the units it advertises
 ;; and only ever moves forward.

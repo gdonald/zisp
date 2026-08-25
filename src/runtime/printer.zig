@@ -27,9 +27,13 @@ const Value = value.Value;
 
 const MAX_DEPTH: u32 = 1024;
 
-/// Mirrors the CL `*print-...*` variables. The eventual special-variable
-/// plumbing will read these out of the dynamic environment; for now they
-/// are passed per call.
+/// How a symbol's name is cased on output, which is what
+/// `*print-case*` names.
+pub const Case = enum { upcase, downcase, capitalize };
+
+/// Mirrors the CL `*print-...*` variables. `format.printerSettings`
+/// reads them out of the dynamic environment; the defaults here are what
+/// a caller with no evaluator to hand gets.
 pub const Settings = struct {
     /// `*print-escape*` — wrap strings in quotes, escape symbols, etc.
     escape: bool = true,
@@ -45,6 +49,17 @@ pub const Settings = struct {
     /// Labels for `*print-circle*`. When set, an object that appears
     /// more than once prints as `#n=` the first time and `#n#` after.
     circle: ?*circle_mod.State = null,
+    /// `*print-case*` — how a symbol whose name is upper case is cased
+    /// on output. Only what escaping leaves unquoted is recased.
+    case: Case = .upcase,
+    /// `*print-level*` — how many levels down to print before an object
+    /// stands in as `#`. Null prints every level.
+    level: ?u32 = null,
+    /// `*print-length*` — how many elements of a list or vector to print
+    /// before the rest stands in as `...`. Null prints them all.
+    length: ?u32 = null,
+    /// `*print-gensym*` — mark an uninterned symbol with `#:`.
+    gensym: bool = true,
     /// Value of `*package*`. Symbols accessible in it print unqualified;
     /// everything else gets a `pkg:` or `pkg::` prefix. When null there is
     /// no package context and no symbol is qualified.
@@ -205,7 +220,7 @@ fn digitChar(d: u8) u8 {
 fn printSymbol(ctx: *PrintCtx, v: Value) PrintError!void {
     const name = symbol.name(v);
     if (!ctx.effectiveEscape()) {
-        try ctx.writer.writeAll(name);
+        try writeCased(ctx, name);
         return;
     }
     try printSymbolPrefix(ctx, v, name);
@@ -216,7 +231,7 @@ fn printSymbol(ctx: *PrintCtx, v: Value) PrintError!void {
 /// from `ctx.settings.current_package`.
 fn printSymbolPrefix(ctx: *PrintCtx, v: Value, name: []const u8) PrintError!void {
     const home = symbol.homePackage(v) orelse {
-        try ctx.writer.writeAll("#:");
+        if (ctx.settings.gensym) try ctx.writer.writeAll("#:");
         return;
     };
     if (std.mem.eql(u8, home.name, symbol.KEYWORD_PACKAGE_NAME)) {
@@ -234,7 +249,7 @@ fn printSymbolPrefix(ctx: *PrintCtx, v: Value, name: []const u8) PrintError!void
 
 fn printNamePart(ctx: *PrintCtx, part: []const u8) PrintError!void {
     if (!needsSymbolEscape(part)) {
-        try ctx.writer.writeAll(part);
+        try writeCased(ctx, part);
         return;
     }
     try ctx.writer.writeByte('|');
@@ -243,6 +258,25 @@ fn printNamePart(ctx: *PrintCtx, part: []const u8) PrintError!void {
         try ctx.writer.writeByte(c);
     }
     try ctx.writer.writeByte('|');
+}
+
+/// A name the reader would upcase again, written the way
+/// `*print-case*` asks for. A lower case character in the name is left
+/// as it is: only what the reader would have folded is recased.
+fn writeCased(ctx: *PrintCtx, part: []const u8) PrintError!void {
+    switch (ctx.settings.case) {
+        .upcase => try ctx.writer.writeAll(part),
+        .downcase => for (part) |c| try ctx.writer.writeByte(std.ascii.toLower(c)),
+        .capitalize => {
+            var starting = true;
+            for (part) |c| {
+                const alphanumeric = std.ascii.isAlphanumeric(c);
+                const out = if (starting and alphanumeric) c else std.ascii.toLower(c);
+                try ctx.writer.writeByte(out);
+                starting = !alphanumeric;
+            }
+        },
+    }
 }
 
 /// True if `name` needs `|...|` escaping to round-trip through the
@@ -331,18 +365,23 @@ fn structureSlotNames(name: Value) Value {
 }
 
 fn printStructure(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
+    if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     const obj = heap.asStructure(v);
     try ctx.writer.writeAll("#S(");
     try printValue(ctx, obj.name, depth + 1);
     var names = structureSlotNames(obj.name);
-    for (obj.constSlice()) |slot| {
+    for (obj.constSlice(), 0..) |slot, index| {
         try ctx.writer.writeByte(' ');
+        if (tooLong(ctx, index)) {
+            try ctx.writer.writeAll("...");
+            break;
+        }
         if (names.isCons()) {
             const slot_name = heap.car(names);
             names = heap.cdr(names);
             if (slot_name.isSymbol()) {
                 try ctx.writer.writeByte(':');
-                try ctx.writer.writeAll(symbol.name(slot_name));
+                try writeCased(ctx, symbol.name(slot_name));
                 try ctx.writer.writeByte(' ');
             }
         }
@@ -398,7 +437,24 @@ fn writeIntegerValue(ctx: *PrintCtx, v: Value, base: u8) PrintError!void {
     try ctx.writer.writeAll(text);
 }
 
+/// Whether an object this deep stands in as `#` rather than printing
+/// its parts, which is what `*print-level*` asks for. Only an object
+/// with parts is abbreviated; a number or a symbol prints whatever the
+/// level.
+fn tooDeep(ctx: *const PrintCtx, depth: u32) bool {
+    const level = ctx.settings.level orelse return false;
+    return depth >= level;
+}
+
+/// Whether the element at `index` is past what `*print-length*` asks
+/// for, so what is left stands in as `...`.
+fn tooLong(ctx: *const PrintCtx, index: usize) bool {
+    const length = ctx.settings.length orelse return false;
+    return index >= length;
+}
+
 fn printCons(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
+    if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     // With labels in play the cycle guard is unnecessary, and it would
     // stop the tail of a circular list from printing as a back-reference.
     if (ctx.settings.circle != null) return printConsLabelled(ctx, v, depth);
@@ -419,6 +475,7 @@ fn printCons(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     try ctx.writer.writeByte('(');
     var cur = v;
     var first = true;
+    var printed: usize = 0;
     while (cur.isCons()) {
         const cur_addr = cur.toConsAddr();
         if (!first and ctx.seen.contains(cur_addr)) {
@@ -429,7 +486,12 @@ fn printCons(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         try spine.append(ctx.allocator, cur_addr);
 
         if (!first) try ctx.writer.writeByte(' ');
+        if (tooLong(ctx, printed)) {
+            try ctx.writer.writeAll("...");
+            break;
+        }
         try printValue(ctx, heap.car(cur), depth + 1);
+        printed += 1;
         first = false;
 
         const tail = heap.cdr(cur);
@@ -447,6 +509,7 @@ fn printCons(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
 /// A vector prints as `#(...)`; a higher-rank array as `#nA` followed by
 /// its elements nested one list per dimension.
 fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
+    if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     const a = heap.asArray(v);
     const elements = heap.arrayActive(v);
     if (a.rank == 1 and a.element_type == .bit) {
@@ -460,6 +523,10 @@ fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         try ctx.writer.writeAll("#(");
         for (elements, 0..) |elem, i| {
             if (i != 0) try ctx.writer.writeByte(' ');
+            if (tooLong(ctx, i)) {
+                try ctx.writer.writeAll("...");
+                break;
+            }
             try printValue(ctx, elem, depth + 1);
         }
         try ctx.writer.writeByte(')');

@@ -129,7 +129,7 @@ pub fn streamOf(ev: *Evaluator, given: ?Value, side: Side) Error!*Stream {
     return heap.asStream(bound);
 }
 
-fn expectStream(v: Value) Error!*Stream {
+pub fn expectStream(v: Value) Error!*Stream {
     if (!heap.isStream(v)) return Error.TypeError;
     return heap.asStream(v);
 }

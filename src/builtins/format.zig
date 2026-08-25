@@ -17,12 +17,89 @@ const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
 const Error = function.NativeError;
 
+/// Give the printer and reader variables their standard values, where
+/// nothing has given them one already.
+pub fn registerVariables(ev: *Evaluator) !void {
+    try defineVariable(ev, "*PRINT-ESCAPE*", value.T);
+    try defineVariable(ev, "*PRINT-READABLY*", value.NIL);
+    try defineVariable(ev, "*PRINT-BASE*", Value.fromFixnum(10));
+    try defineVariable(ev, "*PRINT-RADIX*", value.NIL);
+    try defineVariable(ev, "*PRINT-CASE*", try ev.interner.internKeyword("UPCASE"));
+    try defineVariable(ev, "*PRINT-LEVEL*", value.NIL);
+    try defineVariable(ev, "*PRINT-LENGTH*", value.NIL);
+    try defineVariable(ev, "*PRINT-LINES*", value.NIL);
+    try defineVariable(ev, "*PRINT-ARRAY*", value.T);
+    try defineVariable(ev, "*PRINT-GENSYM*", value.T);
+    try defineVariable(ev, "*READ-BASE*", Value.fromFixnum(10));
+    try defineVariable(ev, "*READ-EVAL*", value.T);
+    try defineVariable(ev, "*READ-SUPPRESS*", value.NIL);
+    try defineVariable(ev, "*READ-DEFAULT-FLOAT-FORMAT*", try ev.interner.intern("SINGLE-FLOAT"));
+}
+
+fn defineVariable(ev: *Evaluator, name: []const u8, initial: Value) !void {
+    const sym = try ev.interner.intern(name);
+    symbol_mod.symbol(sym).special = true;
+    if (symbol_mod.symbol(sym).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
+        symbol_mod.symbol(sym).value_cell = initial;
+    }
+}
+
+/// What a printer variable holds now, or null where the name has no
+/// value.
+fn variable(ev: *Evaluator, name: []const u8) ?Value {
+    const sym = ev.interner.lookup(name) orelse return null;
+    const held = ev.env.lookupValue(sym) orelse return null;
+    if (held.equalsRaw(value.SPECIAL_UNBOUND)) return null;
+    return held;
+}
+
+fn flag(ev: *Evaluator, name: []const u8, fallback: bool) bool {
+    const held = variable(ev, name) orelse return fallback;
+    return !held.equalsRaw(value.NIL);
+}
+
+/// A count a printer variable holds, or null where it holds `nil` or
+/// something that is not one.
+fn count(ev: *Evaluator, name: []const u8) ?u32 {
+    const held = variable(ev, name) orelse return null;
+    if (!held.isFixnum()) return null;
+    const n = held.toFixnum();
+    if (n < 0) return null;
+    return @intCast(n);
+}
+
+fn printCase(ev: *Evaluator) printer.Case {
+    const held = variable(ev, "*PRINT-CASE*") orelse return .upcase;
+    if (!held.isSymbol()) return .upcase;
+    const name = symbol_mod.name(held);
+    if (std.mem.eql(u8, name, "DOWNCASE")) return .downcase;
+    if (std.mem.eql(u8, name, "CAPITALIZE")) return .capitalize;
+    return .upcase;
+}
+
+/// The settings the printer variables come to, with `escape` left to the
+/// caller: `prin1` and `princ` differ over that one alone.
+fn printerSettings(ev: *Evaluator, escaping: bool) printer.Settings {
+    const base = count(ev, "*PRINT-BASE*") orelse 10;
+    return .{
+        .escape = escaping,
+        .readably = flag(ev, "*PRINT-READABLY*", false),
+        .base = if (base >= 2 and base <= 36) @intCast(base) else 10,
+        .radix = flag(ev, "*PRINT-RADIX*", false),
+        .case = printCase(ev),
+        .level = count(ev, "*PRINT-LEVEL*"),
+        .length = count(ev, "*PRINT-LENGTH*"),
+        .gensym = flag(ev, "*PRINT-GENSYM*", true),
+        .current_package = ev.interner.currentPackage(),
+    };
+}
+
 pub fn prin1Settings(ev: *Evaluator) printer.Settings {
-    return .{ .escape = true, .current_package = ev.interner.currentPackage() };
+    return printerSettings(ev, flag(ev, "*PRINT-ESCAPE*", true));
 }
 
 pub fn princSettings(ev: *Evaluator) printer.Settings {
-    return .{ .escape = false, .current_package = ev.interner.currentPackage() };
+    return printerSettings(ev, false);
 }
 
 /// True when `*print-circle*` asks for shared structure to be labelled.
@@ -371,7 +448,9 @@ const Runner = struct {
     }
 };
 
-pub fn run(ev: *Evaluator, out: Output, ctrl: []const u32, args: []const Value) Error!void {
+/// Run `ctrl` against `args`, and say how many of them it used, which
+/// is what a `formatter` function reports back as the tail it left.
+pub fn run(ev: *Evaluator, out: Output, ctrl: []const u32, args: []const Value) Error!usize {
     var arena = std.heap.ArenaAllocator.init(ev.allocator);
     defer arena.deinit();
 
@@ -381,6 +460,7 @@ pub fn run(ev: *Evaluator, out: Output, ctrl: []const u32, args: []const Value) 
     var runner = Runner{ .ev = ev, .out = out, .allocator = arena.allocator() };
     var cursor = Args{ .items = args };
     _ = try runNodes(&runner, block.nodes, &cursor);
+    return cursor.index;
 }
 
 fn runNodes(r: *Runner, nodes: []const Node, args: *Args) Error!Flow {

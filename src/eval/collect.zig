@@ -59,10 +59,6 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
     const started: ?std.Io.Timestamp = if (ev.io) |io| .now(io, .awake) else null;
     defer if (started) |begin| recordPause(ev, begin);
 
-    // Cached expansions are keyed on a cons address and are reachable only
-    // from the cache, so they go before anything moves or is marked.
-    ev.macro_cache.clearRetainingCapacity();
-
     // A collection from inside an allocation runs where Zig locals hold
     // values the root scan can see on the protect stack but cannot write
     // back into the local. Marking copes with that and moving does not,
@@ -107,6 +103,8 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
         }
         for (stale.items) |key| _ = table.map.remove(key);
     }
+
+    try dropDeadExpansions(ev, scope);
 
     ev.heap.sweep(if (scope == .minor) .nursery else .everything);
     try harvestFinalizers(ev);
@@ -206,10 +204,12 @@ fn evacuateNursery(ev: *Evaluator) !void {
     // descends into the tenured space to find it.
     try e.scanCards();
     try updateRoots(&e, ev);
+    try updateExpansions(&e, ev);
     try e.drain();
     e.resolveWeakPointers();
     try e.rebuildTables();
     try repositionMoved(&e, ev);
+    try repositionExpansions(&e, ev);
 
     // Nothing points into the nursery any more, so nothing is recorded
     // against the tenured space either.
@@ -284,6 +284,57 @@ fn repositionMoved(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     }
 }
 
+/// A cached expansion is keyed on the address of the call form it came
+/// from, so an entry whose form has died has to go before that address is
+/// handed out again. What is left unmarked here is what died.
+fn dropDeadExpansions(ev: *Evaluator, scope: Scope) !void {
+    var stale: std.ArrayListUnmanaged(u64) = .empty;
+    defer stale.deinit(ev.allocator);
+
+    var it = ev.macro_cache.keyIterator();
+    while (it.next()) |key| {
+        const address = (Value{ .raw = key.* }).toConsAddr();
+        if (!ev.heap.objects.owns(address)) continue;
+        // A minor collection marked the nursery alone, so a tenured
+        // address carries no mark either way and is left as it is.
+        if (scope == .minor and !ev.heap.objects.inNursery(address)) continue;
+        if (!ev.heap.objects.isMarked(address)) try stale.append(ev.allocator, key.*);
+    }
+    for (stale.items) |key| _ = ev.macro_cache.remove(key);
+}
+
+/// What the cache holds: an expansion a form part-way through evaluation
+/// is reachable from nowhere else, so these are updated with the roots
+/// rather than after the copy has drained.
+fn updateExpansions(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
+    var it = ev.macro_cache.valueIterator();
+    while (it.next()) |cached| {
+        try e.update(&cached.expander);
+        try e.update(&cached.expansion);
+    }
+}
+
+/// The keys the cache is addressed by, which move with the call forms
+/// they name. An entry whose form the copy did not reach goes with it.
+fn repositionExpansions(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
+    var young: std.ArrayListUnmanaged(u64) = .empty;
+    defer young.deinit(ev.allocator);
+
+    var it = ev.macro_cache.keyIterator();
+    while (it.next()) |key| {
+        const address = (Value{ .raw = key.* }).toConsAddr();
+        if (ev.heap.objects.inNursery(address)) try young.append(ev.allocator, key.*);
+    }
+
+    for (young.items) |key| {
+        const cached = ev.macro_cache.get(key).?;
+        _ = ev.macro_cache.remove(key);
+        const address = (Value{ .raw = key }).toConsAddr();
+        const moved = e.movedCons(address) orelse continue;
+        try ev.macro_cache.put(ev.allocator, moved.raw, cached);
+    }
+}
+
 /// How much may be handed out between collections.
 pub const TRIGGER_VARIABLE = "*GC-TRIGGER*";
 /// The smallest tenured space a major collection is asked to walk.
@@ -352,12 +403,25 @@ fn verbose(ev: *Evaluator) bool {
     return !setting.equalsRaw(value.NIL);
 }
 
+/// The cached expansions, which running code holds only through the
+/// cache: a form part-way through evaluation is reachable from nowhere
+/// else.
+fn pushExpansions(marker: *mark_mod.Marker, ev: *Evaluator) !void {
+    var it = ev.macro_cache.valueIterator();
+    while (it.next()) |cached| {
+        try marker.push(cached.expander);
+        try marker.push(cached.expansion);
+    }
+}
+
 pub fn pushRoots(marker: *mark_mod.Marker, ev: *Evaluator) !void {
     mark_mod.Marker.source = "the symbol table";
     try pushSymbols(marker, ev);
     mark_mod.Marker.source = "the environment";
     try pushEnvironment(marker, ev);
     try pushEvaluatorState(marker, ev);
+    mark_mod.Marker.source = "a cached macro expansion";
+    try pushExpansions(marker, ev);
     mark_mod.Marker.source = "reachable structure";
 }
 

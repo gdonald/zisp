@@ -802,11 +802,15 @@ fn coerceFn(p: *anyopaque, args: []const Value) Error!Value {
     else
         headName(spec) orelse return Error.TypeError;
 
-    if (std.mem.eql(u8, name, "LIST") or std.mem.eql(u8, name, "VECTOR") or
-        std.mem.eql(u8, name, "STRING") or std.mem.eql(u8, name, "SIMPLE-VECTOR") or
-        std.mem.eql(u8, name, "SIMPLE-STRING") or std.mem.eql(u8, name, "ARRAY"))
-    {
-        return callNamed(ev, "CONCATENATE", &.{ spec, args[0] });
+    // What `concatenate` builds one of, given the same specifier.
+    const sequence_types = [_][]const u8{
+        "LIST",          "VECTOR",      "STRING",             "SIMPLE-VECTOR",
+        "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "ARRAY",
+    };
+    for (sequence_types) |candidate| {
+        if (std.mem.eql(u8, name, candidate)) {
+            return callNamed(ev, "CONCATENATE", &.{ spec, args[0] });
+        }
     }
     if (std.mem.eql(u8, name, "CHARACTER")) return callNamed(ev, "CHARACTER", &.{args[0]});
     if (std.mem.eql(u8, name, "FLOAT") or std.mem.eql(u8, name, "SINGLE-FLOAT") or

@@ -53,6 +53,7 @@ zig build -Dfreestanding=true       # embedded build (placeholder)
 - [docs/ansi-test.md](docs/ansi-test.md) — running the compliance suite
 - [docs/macros.md](docs/macros.md) - macro non-hygiene and gensym
 - [docs/gc.md](docs/gc.md) - the collector
+- [docs/printer.md](docs/printer.md) - the printer variables
 
 ## License
 

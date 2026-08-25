@@ -32,6 +32,7 @@ fn evaluator(p: *anyopaque) *Evaluator {
 
 pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORMAT", &formatFn);
+    _ = try ev.defineNative("%FORMAT-TAIL", &formatTailFn);
     _ = try ev.defineNative("LOAD", &loadFn);
     _ = try ev.defineNative("COMPILE-FILE", &compileFileFn);
     _ = try ev.defineNative("TRUENAME", &truenameFn);
@@ -89,6 +90,7 @@ fn formatFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len < 2) return Error.WrongArgCount;
     const dest = args[0];
     const control = args[1];
+    if (function.isFunction(control)) return formatThroughFunction(ev, dest, control, args[2..]);
     if (!heap.isString(control)) return Error.TypeError;
     const ctrl = heap.asString(control).constSlice();
     const fmt_args = args[2..];
@@ -98,14 +100,14 @@ fn formatFn(p: *anyopaque, args: []const Value) Error!Value {
         var aw = std.Io.Writer.Allocating.init(ev.allocator);
         defer aw.deinit();
         var column: usize = 0;
-        try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
+        _ = try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
         return ev.heap.allocString(aw.written());
     }
 
     const stream = try streams.streamOf(ev, dest, .output);
     if (stream.kind == .console) {
         const out = ev.out orelse return Error.NoOutputStream;
-        try format.run(ev, .{ .writer = out, .column = &ev.output_column }, ctrl, fmt_args);
+        _ = try format.run(ev, .{ .writer = out, .column = &ev.output_column }, ctrl, fmt_args);
         return value.NIL;
     }
 
@@ -113,9 +115,78 @@ fn formatFn(p: *anyopaque, args: []const Value) Error!Value {
     var aw = std.Io.Writer.Allocating.init(ev.allocator);
     defer aw.deinit();
     var column: usize = 0;
-    try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
+    _ = try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
     try streams.emitBytes(ev, stream, aw.written());
     return value.NIL;
+}
+
+/// `format` with a function for its control, which is what `formatter`
+/// hands back. The function does the writing, so all this settles is
+/// where it writes and what comes back.
+fn formatThroughFunction(ev: *Evaluator, dest: Value, control: Value, rest: []const Value) Error!Value {
+    var call: std.ArrayListUnmanaged(Value) = .empty;
+    defer call.deinit(ev.allocator);
+
+    const collecting = dest.equalsRaw(value.NIL);
+    const target = if (collecting)
+        try ev.heap.allocStream(streams.emptyStream(.string, .output))
+    else if (dest.equalsRaw(value.T))
+        try standardOutput(ev)
+    else
+        dest;
+
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(target);
+
+    try call.append(ev.allocator, target);
+    try call.appendSlice(ev.allocator, rest);
+    _ = try ev.callFunction(control, call.items);
+
+    if (!collecting) return value.NIL;
+    const stream = try streams.expectStream(target);
+    const text = try ev.heap.allocString(stream.output.items);
+    stream.output.clearRetainingCapacity();
+    return text;
+}
+
+/// What `*standard-output*` names, which is where a destination of `t`
+/// sends its output.
+fn standardOutput(ev: *Evaluator) Error!Value {
+    const sym = ev.interner.lookup("*STANDARD-OUTPUT*") orelse return Error.NoOutputStream;
+    return ev.env.lookupValue(sym) orelse Error.NoOutputStream;
+}
+
+/// Write `control` to `stream` and hand back the arguments it did not
+/// use, which is the contract a `formatter` function is called under.
+fn formatTailFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 2) return Error.WrongArgCount;
+    const control = args[1];
+    if (function.isFunction(control)) {
+        _ = try formatThroughFunction(ev, args[0], control, args[2..]);
+        return value.NIL;
+    }
+    if (!heap.isString(control)) return Error.TypeError;
+    const ctrl = heap.asString(control).constSlice();
+    const rest = args[2..];
+
+    const stream = try streams.streamOf(ev, args[0], .output);
+    var consumed: usize = 0;
+    if (stream.kind == .console) {
+        const out = ev.out orelse return Error.NoOutputStream;
+        consumed = try format.run(ev, .{ .writer = out, .column = &ev.output_column }, ctrl, rest);
+    } else {
+        var aw = std.Io.Writer.Allocating.init(ev.allocator);
+        defer aw.deinit();
+        var column: usize = 0;
+        consumed = try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, rest);
+        try streams.emitBytes(ev, stream, aw.written());
+    }
+
+    var builder = ev.heap.listBuilder();
+    for (rest[@min(consumed, rest.len)..]) |arg| try builder.append(arg);
+    return builder.finish();
 }
 
 // --- printing to a string ---

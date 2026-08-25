@@ -582,7 +582,57 @@ when the block will not fit before the right margin."
                     `(apply (lambda ,(cadr no-error) ,@(cddr no-error)) (cdr ,outcome))
                     `(values-list (cdr ,outcome))))))))
 
-(export '(lambda-list-keywords call-arguments-limit lambda-parameters-limit
+;; zisp interprets, so what there is to hand back is the function that
+;; was already there. The two flags say the same thing either way: no
+;; warnings, and nothing failed.
+(defun compile (name &optional definition)
+  (let ((fn (cond ((functionp definition) definition)
+                  ((consp definition) (eval (list 'function definition)))
+                  ((null name) (error "COMPILE needs a name or a definition."))
+                  (t (symbol-function name)))))
+    (when name (setf (symbol-function name) fn))
+    (values (or name fn) nil nil)))
+
+;; A control string in the shape of a function: it writes to the stream
+;; it is handed and gives back the arguments it did not use.
+(defmacro formatter (control-string)
+  `(lambda (stream &rest args) (apply #'%format-tail stream ,control-string args)))
+
+(defmacro assert (test-form &optional places datum &rest arguments)
+  (declare (ignore places))
+  (if datum
+      `(unless ,test-form (error ,datum ,@arguments))
+      `(unless ,test-form (error "The assertion ~s failed." ',test-form))))
+
+;; The printer and reader variables the standard names, each bound to
+;; what the standard says it holds, so what a form prints does not depend
+;; on what the program had set.
+(defmacro with-standard-io-syntax (&body body)
+  `(let ((*package* (find-package "COMMON-LISP-USER"))
+         (*print-array* t)
+         (*print-base* 10)
+         (*print-case* :upcase)
+         (*print-circle* nil)
+         (*print-escape* t)
+         (*print-gensym* t)
+         (*print-length* nil)
+         (*print-level* nil)
+         (*print-lines* nil)
+         (*print-miser-width* nil)
+         (*print-pprint-dispatch* (copy-pprint-dispatch nil))
+         (*print-pretty* nil)
+         (*print-radix* nil)
+         (*print-readably* t)
+         (*print-right-margin* nil)
+         (*read-base* 10)
+         (*read-default-float-format* 'single-float)
+         (*read-eval* t)
+         (*read-suppress* nil)
+         (*readtable* (copy-readtable nil)))
+     ,@body))
+
+(export '(with-standard-io-syntax formatter assert compile
+          lambda-list-keywords call-arguments-limit lambda-parameters-limit
           multiple-values-limit
           when unless cond and or prog1 prog2 case ecase ccase
           typecase etypecase ctypecase

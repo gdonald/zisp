@@ -31,6 +31,11 @@ const Fixture = struct {
         };
         try symbol_mod.initStandardSymbols(&fx.interner);
         fx.heap = zisp.Heap.init(fx.arena.allocator());
+        // The corpus reads what collections gave back, so a build that
+        // collects on a counter and holds reclaimed blocks back stays out
+        // of the way.
+        fx.heap.torture = 0;
+        fx.heap.objects.quarantine = false;
         fx.ev = Evaluator.init(allocator, &fx.heap, &fx.interner);
         fx.ev.out = &fx.aw.writer;
         fx.ev.io = testing.io;

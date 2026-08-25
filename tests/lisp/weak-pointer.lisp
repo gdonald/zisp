@@ -15,13 +15,18 @@
        (error "gc check failed: ~s" ',form)))
 
 (defvar *held* nil)
+(defvar *dropped* nil)
 (defvar *to-held* nil)
 (defvar *to-dropped* nil)
 (defvar *seen* nil)
 
 (setq *held* (list :held))
 (setq *to-held* (ext:make-weak-pointer *held*))
-(setq *to-dropped* (ext:make-weak-pointer (list :dropped)))
+;; Held by a variable to start with, so what breaks the pointer to it is
+;; the reference going away below rather than whenever a collection
+;; happened to run.
+(setq *dropped* (list :dropped))
+(setq *to-dropped* (ext:make-weak-pointer *dropped*))
 
 (check (ext:weak-pointerp *to-held*))
 (check (not (ext:weak-pointerp *held*)))
@@ -31,6 +36,8 @@
               '((:held) t)))
 (check (equal (multiple-value-list (ext:weak-pointer-value *to-dropped*))
               '((:dropped) t)))
+
+(setq *dropped* nil)
 
 ;; Two collections: the first copies the young objects out of the
 ;; nursery, and the second is where a tenured object nothing refers to is

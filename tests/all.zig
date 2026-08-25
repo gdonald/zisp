@@ -12,6 +12,7 @@ comptime {
     _ = @import("eval/collect_test.zig");
     _ = @import("eval/gc_copy_corpus_test.zig");
     _ = @import("eval/gc_nursery_off_test.zig");
+    _ = @import("eval/macro_cache_gc_test.zig");
     _ = @import("eval/gc_nursery_trigger_test.zig");
     _ = @import("eval/card_scan_test.zig");
     _ = @import("eval/major_gc_test.zig");
@@ -22,6 +23,7 @@ comptime {
     _ = @import("runtime/symbol_test.zig");
     _ = @import("runtime/package_test.zig");
     _ = @import("runtime/printer_test.zig");
+    _ = @import("runtime/printer_variables_test.zig");
     _ = @import("runtime/log_test.zig");
     _ = @import("runtime/read_all_test.zig");
     _ = @import("reader/tokenizer_test.zig");
@@ -55,6 +57,7 @@ comptime {
     _ = @import("eval/ignore_errors_test.zig");
     _ = @import("eval/special_vars_test.zig");
     _ = @import("builtins/system_test.zig");
+    _ = @import("builtins/format_function_test.zig");
     _ = @import("builtins/streams_test.zig");
     _ = @import("builtins/packages_test.zig");
     _ = @import("builtins/package_conflict_corpus_test.zig");

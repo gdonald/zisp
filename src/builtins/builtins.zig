@@ -18,6 +18,7 @@ pub const numbers = @import("numbers.zig");
 pub const characters = @import("characters.zig");
 pub const streams = @import("streams.zig");
 pub const types = @import("types.zig");
+pub const format = @import("format.zig");
 pub const pprint = @import("pprint.zig");
 pub const gc = @import("gc.zig");
 pub const registerGc = gc.registerGc;
@@ -92,6 +93,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("NULL", &nullFn);
     _ = try ev.defineNative("ENDP", &endpFn);
     _ = try ev.defineNative("SYMBOLP", &symbolpFn);
+    _ = try ev.defineNative("FUNCTIONP", &functionpFn);
     _ = try ev.defineNative("NUMBERP", &numberpFn);
     _ = try ev.defineNative("STRINGP", &stringpFn);
 
@@ -138,6 +140,12 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("%SET-STRUCTURE-REF", &setStructureRefFn);
     _ = try ev.defineNative("%COPY-STRUCTURE", &copyStructureFn);
 
+    // `values` and `values-list` are special forms as well, which is what
+    // a direct call goes through. These are what `apply` and `funcall`
+    // reach for.
+    function.asFunction(try ev.defineNative("VALUES", &valuesFn)).preserves_values = true;
+    function.asFunction(try ev.defineNative("VALUES-LIST", &valuesListFn)).preserves_values = true;
+
     // Pass-through natives keep the values channel of the call they make
     // (or the values they set themselves).
     const funcall_v = ev.env.lookupFunction(try ev.interner.intern("FUNCALL")).?;
@@ -158,6 +166,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try characters.registerCharacters(ev);
     try streams.registerStreams(ev);
     try types.registerTypes(ev);
+    try format.registerVariables(ev);
     try pprint.registerPprint(ev);
     try pathnames.registerPathnames(ev);
     // Ahead of the prelude: reading the prelude interns every symbol it
@@ -726,6 +735,12 @@ fn symbolpFn(p: *anyopaque, args: []const Value) Error!Value {
     return boolv(args[0].isSymbol());
 }
 
+fn functionpFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    return boolv(function.isFunction(args[0]) and !function.isMacro(args[0]));
+}
+
 fn numberpFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len != 1) return Error.WrongArgCount;
@@ -834,6 +849,24 @@ fn macroFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
     const f = ev.env.lookupFunction(args[0]) orelse return value.NIL;
     if (!function.isMacro(f)) return value.NIL;
     return f;
+}
+
+fn valuesFn(p: *anyopaque, args: []const Value) Error!Value {
+    return evaluator(p).setValues(args);
+}
+
+fn valuesListFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    var collected = ev.heap.protect();
+    defer collected.close();
+    var rest = args[0];
+    while (!rest.equalsRaw(value.NIL)) {
+        if (!rest.isCons()) return Error.TypeError;
+        try collected.push(heap.car(rest));
+        rest = heap.cdr(rest);
+    }
+    return ev.setValues(collected.items());
 }
 
 fn applyFn(p: *anyopaque, args: []const Value) Error!Value {

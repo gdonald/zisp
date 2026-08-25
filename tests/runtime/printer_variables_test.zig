@@ -1,8 +1,7 @@
-//! The collection that runs while one form is still going.
+//! The printer variables, and what binding them does to what comes out.
 //!
-//! `tests/lisp/gc-nursery-trigger.lisp` holds the checks: each one
-//! signals an error when it does not hold, and counts itself when it
-//! does.
+//! `tests/lisp/printer-variables.lisp` holds the checks: each one signals
+//! an error when it does not hold, and counts itself when it does.
 
 const std = @import("std");
 const testing = std.testing;
@@ -11,8 +10,8 @@ const value = zisp.value;
 const symbol_mod = zisp.symbol;
 const Evaluator = zisp.eval.Evaluator;
 
-const corpus_path = "tests/lisp/gc-nursery-trigger.lisp";
-const expected_checks = 6;
+const corpus_path = "tests/lisp/printer-variables.lisp";
+const expected_checks = 21;
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,
@@ -53,32 +52,17 @@ const Fixture = struct {
         const found = self.interner.cl_user.findSymbol(name).?;
         return symbol_mod.symbol(found.sym).value_cell;
     }
+
+    fn eval(self: *Fixture, source: []const u8) !void {
+        try zisp.builtins.system.evalSource(&self.ev, source);
+    }
 };
 
-test "every check in the nursery trigger corpus holds" {
+test "every check in the printer variables corpus holds" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
 
     try zisp.builtins.system.loadPath(&fx.ev, corpus_path);
     const checks = fx.global("*CHECKS*");
     try testing.expectEqual(@as(i64, expected_checks), checks.toFixnum());
-}
-
-test "the garbage a long-running form makes does not reach the tenured space" {
-    const fx = try Fixture.init(testing.allocator);
-    defer fx.deinit(testing.allocator);
-
-    // This one is about how much room the loop takes, which a build that
-    // holds reclaimed blocks back rather than handing them out again
-    // says nothing about. The checks in the corpus run either way.
-    fx.heap.torture = 0;
-    fx.heap.objects.quarantine = false;
-
-    try zisp.builtins.system.loadPath(&fx.ev, corpus_path);
-    // The loop hands out about 3.2 MB of conses. Without a collection
-    // while it runs, every byte past the first megabyte would come out
-    // of the tenured regions and they would have to grow to hold it.
-    const grown = fx.heap.objects.stats.region_bytes -
-        2 * fx.heap.objects.nursery_capacity;
-    try testing.expect(grown < fx.heap.objects.nursery_capacity);
 }

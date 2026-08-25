@@ -116,6 +116,15 @@ fn isReclaimedCons(address: usize) bool {
     return words[0] == POISON;
 }
 
+/// Say that a cell holds no pair any more, which is what a card scan
+/// reads to pass over it. A cell on a free list carries this in its first
+/// word, and so does one a checked build is holding back rather than
+/// handing out again.
+fn markReclaimedCons(cell: [*]align(ALIGNMENT) u8) void {
+    const words: [*]u64 = @ptrCast(cell);
+    words[0] = POISON;
+}
+
 fn poison(payload: [*]align(ALIGNMENT) u8, size: usize) void {
     if (!checked or size < 16) return;
     const words: [*]u64 = @ptrCast(payload);
@@ -1054,6 +1063,7 @@ pub const Allocator = struct {
                 if (region.generation == .tenured) self.stats.live_bytes += CONS_BYTES;
                 continue;
             }
+            markReclaimedCons(cell);
             poison(cell, CONS_BYTES);
             if (self.quarantine) continue;
             pushCons(self.listsFor(region), cell);
