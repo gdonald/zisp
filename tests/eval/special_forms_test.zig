@@ -437,7 +437,7 @@ test "let: bare-symbol binding defaults to NIL" {
     try std.testing.expect(r.equalsRaw(value.NIL));
 }
 
-test "let: parenthesised symbol with no init defaults to NIL" {
+test "let: parenthesized symbol with no init defaults to NIL" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 

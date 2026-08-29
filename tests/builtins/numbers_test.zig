@@ -633,7 +633,7 @@ test "comparisons are exact between a float and a rational" {
 test "a bignum compares exactly against a float that is near it" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    // 2^60 is exactly representable as a double, and its neighbours are not.
+    // 2^60 is exactly representable as a double, and its neighbors are not.
     try fx.expectT("(= 1152921504606846976 1.152921504606847d18)");
     try fx.expectT("(< 1152921504606846975 1.152921504606847d18)");
     try fx.expectT("(> 1152921504606846977 1.152921504606847d18)");

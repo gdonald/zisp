@@ -20,6 +20,18 @@ so it can gate CI without parsing output.
 build — useful for "run everything before I push" but too slow for
 day-to-day iteration.
 
+The slices that need rt and the auxiliary files the suite compiles
+before loading have a harness of their own:
+
+```sh
+tests/run-rt-tests.sh format                # pass rate, non-zero below the floor
+tests/run-rt-tests.sh typep subtypep        # several slices
+FLOOR=95 tests/run-rt-tests.sh typep        # raise the floor
+```
+
+A slice is a driver at `tests/lisp/ansi-<name>.lisp` naming the files it
+wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it.
+
 ## Layout
 
 `vendor/ansi-test/` is the upstream suite as a git submodule (GPL — kept

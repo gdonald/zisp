@@ -172,16 +172,25 @@
     (when (and descending (member test '(> >=)))
       (setq test (if (eq test '>) '< '<=)))
     (let ((limit-var (gensym "LIMIT"))
-          (step-var (gensym "STEP")))
-      (cons (%lp (append (%loop-binds pattern) (list (list limit-var nil) (list step-var nil)))
-                 (append (list `(setq ,limit-var ,limit) `(setq ,step-var ,(or step 1)))
-                         (%loop-setqs pattern (or start 0)))
+          (step-var (gensym "STEP"))
+          (stepping (list (if descending '- '+))))
+      ;; The bindings are sequential, so a variable takes its first value
+      ;; where the form giving it is still outside its own scope. That is
+      ;; what lets `for i from (if (< i 0) 2 1)` read the `i` it shadows
+      ;; while `for j from i` reads the loop variable before it.
+      (cons (%lp (if (symbolp pattern)
+                     (list (list pattern (or start 0))
+                           (list limit-var limit)
+                           (list step-var (or step 1)))
+                     (append (%loop-binds pattern)
+                             (list (list limit-var limit) (list step-var (or step 1)))))
+                 (if (symbolp pattern) nil (%loop-setqs pattern (or start 0)))
                  (if test (list `(if (,test ,(car (%loop-vars pattern)) ,limit-var)
                                      (go ,(%st-done state))))
                      nil)
                  (%loop-setqs pattern
-                              (list (if descending '- '+)
-                                    (car (%loop-vars pattern)) step-var))
+                              (append stepping
+                                      (list (car (%loop-vars pattern)) step-var)))
                  nil nil)
             forms))))
 
@@ -221,13 +230,22 @@
       ((%kw (car rest) "=")
        (let* ((initial (cadr rest))
               (after (cddr rest))
-              (then (if (%kw (car after) "THEN") (cadr after) nil))
-              (remaining (if (%kw (car after) "THEN") (cddr after) after)))
-         (cons (%lp (%loop-binds pattern)
-                    (%loop-setqs pattern initial)
-                    nil
-                    (%loop-setqs pattern (or then initial))
-                    nil nil)
+              (has-then (%kw (car after) "THEN"))
+              (then (if has-then (cadr after) nil))
+              (remaining (if has-then (cddr after) after)))
+         ;; Without THEN the form is evaluated at the top of every
+         ;; iteration, after the FOR clauses to its left have stepped, so
+         ;; it can read what they just set.
+         (cons (if has-then
+                   (%lp (%loop-binds pattern)
+                        (%loop-setqs pattern initial)
+                        nil
+                        (%loop-setqs pattern then)
+                        nil nil)
+                   (%lp (%loop-binds pattern)
+                        nil
+                        (%loop-setqs pattern initial)
+                        nil nil nil))
                remaining)))
       ((%kw (car rest) "BEING")
        (%loop-for-hash pattern rest state))
@@ -380,6 +398,25 @@
         (setq seen (cons (car bind) seen))
         (setq result (cons bind result))))))
 
+;; `loop-finish` leaves the loop through its epilogue, so it comes to a
+;; jump to the tag the termination tests use. The substitution happens
+;; before anything is expanded, which is what keeps a nested `loop` from
+;; taking the outer loop's tag: it rewrites its own when it expands.
+(defun %loop-substitute-finish (form tag)
+  (if (atom form)
+      form
+      (if (eq (car form) 'quote)
+          form
+          (if (eq (car form) 'loop)
+              form
+              (if (and (eq (car form) 'loop-finish) (null (cdr form)))
+                  (list 'go tag)
+                  (cons (%loop-substitute-finish (car form) tag)
+                        (%loop-substitute-finish (cdr form) tag)))))))
+
+(defmacro loop-finish ()
+  (error "LOOP-FINISH is only meaningful inside LOOP."))
+
 (defun %loop-expand (forms)
   (let ((*loop-into-tails* nil)
         (name nil))
@@ -392,19 +429,21 @@
            (top (gensym "TOP"))
            (tails (mapcar (lambda (entry) (list (cdr entry) nil)) *loop-into-tails*))
            (result (nth 5 part)))
-      `(block ,name
-         (let* ((,(%st-list state) nil) (,(%st-tail state) nil)
-                (,(%st-count state) 0) (,(%st-extreme state) nil)
-                ,@(%loop-dedupe-binds (append (nth 0 part) tails)))
-           (tagbody
-              ,@(nth 1 part)
-              ,top
-              ,@(nth 2 part)
-              ,@(nth 3 part)
-              (go ,top)
-              ,(%st-done state))
-           ,@(nth 4 part)
-           ,(if (eq result t) t result))))))
+      (%loop-substitute-finish
+       `(block ,name
+          (let* ((,(%st-list state) nil) (,(%st-tail state) nil)
+                 (,(%st-count state) 0) (,(%st-extreme state) nil)
+                 ,@(%loop-dedupe-binds (append (nth 0 part) tails)))
+            (tagbody
+               ,@(nth 1 part)
+               ,top
+               ,@(nth 2 part)
+               ,@(nth 3 part)
+               (go ,top)
+               ,(%st-done state))
+            ,@(nth 4 part)
+            ,(if (eq result t) t result)))
+       (%st-done state)))))
 
 (defmacro loop (&rest forms)
   (if (or (null forms) (consp (car forms)))
@@ -412,6 +451,6 @@
         `(block nil (tagbody ,top (progn ,@forms) (go ,top))))
       (%loop-expand forms)))
 
-(export '(loop))
+(export '(loop loop-finish))
 
 (in-package "COMMON-LISP-USER")

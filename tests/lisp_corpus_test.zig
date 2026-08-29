@@ -113,3 +113,13 @@ test "displaced string corpus" {
     const checked = try runCorpus("displaced-string", @embedFile("lisp/displaced-string-corpus.lisp"));
     try testing.expectEqual(@as(u32, 8), checked);
 }
+
+test "condition class corpus" {
+    const checked = try runCorpus("condition-class", @embedFile("lisp/condition-class-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 49), checked);
+}
+
+test "handler search corpus" {
+    const checked = try runCorpus("handler-search", @embedFile("lisp/handler-search.lisp"));
+    try testing.expectEqual(@as(u32, 12), checked);
+}

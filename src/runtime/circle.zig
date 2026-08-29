@@ -1,4 +1,4 @@
-//! Labelling for `*print-circle*`.
+//! Labeling for `*print-circle*`.
 //!
 //! An object reachable more than once from the form being printed gets a
 //! `#n=` label at its first appearance and `#n#` afterwards, which is what

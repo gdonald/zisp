@@ -402,6 +402,42 @@
 
 (defun identity (x) x)
 
+;; `write` and `write-to-string` take the printer variables as keyword
+;; arguments, each defaulting to what the variable already holds. Binding
+;; them around the call is what makes the argument and the variable mean
+;; the same thing.
+(defmacro %with-print-options (options &body body)
+  `(let ((*print-array* (getf ,options :array *print-array*))
+         (*print-base* (getf ,options :base *print-base*))
+         (*print-case* (getf ,options :case *print-case*))
+         (*print-circle* (getf ,options :circle *print-circle*))
+         (*print-escape* (getf ,options :escape *print-escape*))
+         (*print-gensym* (getf ,options :gensym *print-gensym*))
+         (*print-length* (getf ,options :length *print-length*))
+         (*print-level* (getf ,options :level *print-level*))
+         (*print-lines* (getf ,options :lines *print-lines*))
+         (*print-miser-width* (getf ,options :miser-width *print-miser-width*))
+         (*print-pprint-dispatch* (getf ,options :pprint-dispatch
+                                        *print-pprint-dispatch*))
+         (*print-pretty* (getf ,options :pretty *print-pretty*))
+         (*print-radix* (getf ,options :radix *print-radix*))
+         (*print-readably* (getf ,options :readably *print-readably*))
+         (*print-right-margin* (getf ,options :right-margin *print-right-margin*)))
+     ,@body))
+
+(defun write-to-string (object &rest options)
+  (%with-print-options options (%write-to-string object)))
+
+(defun write (object &rest options)
+  (%with-print-options options (%write object (getf options :stream nil)))
+  object)
+
+;; A declaration says nothing zisp acts on yet, so proclaiming one records
+;; nothing. `declaim` is the special form beside it.
+(defun proclaim (declaration)
+  (declare (ignore declaration))
+  nil)
+
 (defmacro pprint-logical-block ((stream-var object &key prefix per-line-prefix suffix)
                                 &body body)
   "Print BODY as one logical block, breaking its conditional newlines only
@@ -631,7 +667,8 @@ when the block will not fit before the right margin."
          (*readtable* (copy-readtable nil)))
      ,@body))
 
-(export '(with-standard-io-syntax formatter assert compile
+(export '(with-standard-io-syntax formatter assert compile proclaim
+          write write-to-string
           lambda-list-keywords call-arguments-limit lambda-parameters-limit
           multiple-values-limit
           when unless cond and or prog1 prog2 case ecase ccase

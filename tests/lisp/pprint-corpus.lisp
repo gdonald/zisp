@@ -205,7 +205,7 @@
 
 ;; 27. Without *print-circle* an ordinary list prints without labels.
 (string= (let ((*print-circle* nil))
-           (with-output-to-string (s) (write '(1 2 3) s)))
+           (with-output-to-string (s) (write '(1 2 3) :stream s)))
          "(1 2 3)")
 
 ;; --- the dispatch table ---

@@ -127,6 +127,9 @@ pub const Value = extern struct {
 
 pub const SPECIAL_UNBOUND: Value = Value.fromSpecial(0);
 pub const SPECIAL_EOF: Value = Value.fromSpecial(1);
+/// Held by a slot nothing has given a value to, which is what
+/// `slot-boundp` reads. A slot holding `nil` has a value.
+pub const SPECIAL_SLOT_UNBOUND: Value = Value.fromSpecial(2);
 /// Left in a cons a collection has copied out of the nursery: the car
 /// says the cell moved and the cdr says where to. The tag is one no real
 /// value carries, so a live cons cannot hold this by accident.

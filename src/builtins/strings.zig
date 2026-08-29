@@ -26,9 +26,18 @@ pub fn registerStrings(ev: *Evaluator) !void {
     _ = try ev.defineNative("CHAR", &charFn);
     _ = try ev.defineNative("SCHAR", &charFn);
     _ = try ev.defineNative("%SET-CHAR", &setCharFn);
-    _ = try ev.defineNative("STRING=", &stringEqFn);
-    _ = try ev.defineNative("STRING-EQUAL", &stringEqualFn);
-    _ = try ev.defineNative("STRING<", &stringLessFn);
+    _ = try ev.defineNative("STRING=", comparisonFn(.eq, false));
+    _ = try ev.defineNative("STRING/=", comparisonFn(.ne, false));
+    _ = try ev.defineNative("STRING<", comparisonFn(.lt, false));
+    _ = try ev.defineNative("STRING>", comparisonFn(.gt, false));
+    _ = try ev.defineNative("STRING<=", comparisonFn(.le, false));
+    _ = try ev.defineNative("STRING>=", comparisonFn(.ge, false));
+    _ = try ev.defineNative("STRING-EQUAL", comparisonFn(.eq, true));
+    _ = try ev.defineNative("STRING-NOT-EQUAL", comparisonFn(.ne, true));
+    _ = try ev.defineNative("STRING-LESSP", comparisonFn(.lt, true));
+    _ = try ev.defineNative("STRING-GREATERP", comparisonFn(.gt, true));
+    _ = try ev.defineNative("STRING-NOT-GREATERP", comparisonFn(.le, true));
+    _ = try ev.defineNative("STRING-NOT-LESSP", comparisonFn(.ge, true));
     _ = try ev.defineNative("STRING-UPCASE", &stringUpcaseFn);
     _ = try ev.defineNative("STRING-DOWNCASE", &stringDowncaseFn);
     _ = try ev.defineNative("STRING-CAPITALIZE", &stringCapitalizeFn);
@@ -203,40 +212,51 @@ const Operands = struct {
     }
 };
 
-fn stringEqFn(p: *anyopaque, args: []const Value) Error!Value {
-    var ops = Operands{};
-    try ops.resolve(evaluator(p), args);
-    return if (std.mem.eql(u32, ops.bounds.a, ops.bounds.b)) value.T else value.NIL;
-}
+/// How two strings ordered, and where they first differed. The index is
+/// into the first string, counted from the start of the whole string
+/// rather than from the region compared.
+const Ordering = struct {
+    index: usize,
+    order: enum { less, same, greater },
+};
 
-fn stringEqualFn(p: *anyopaque, args: []const Value) Error!Value {
-    var ops = Operands{};
-    try ops.resolve(evaluator(p), args);
-    const a = ops.bounds.a;
-    const b = ops.bounds.b;
-    if (a.len != b.len) return value.NIL;
-    for (a, b) |ca, cb| {
-        if (character.upcase(@intCast(ca)) != character.upcase(@intCast(cb))) return value.NIL;
-    }
-    return value.T;
-}
-
-/// `string<` returns the index of the first mismatch rather than T, so a
-/// caller can see where the two diverged.
-fn stringLessFn(p: *anyopaque, args: []const Value) Error!Value {
-    var ops = Operands{};
-    try ops.resolve(evaluator(p), args);
-    const a = ops.bounds.a;
-    const b = ops.bounds.b;
-    const offset = ops.bounds.a_offset;
+fn orderOf(a: []const u32, b: []const u32, offset: usize, folded: bool) Ordering {
     var i: usize = 0;
     while (i < a.len and i < b.len) : (i += 1) {
-        if (a[i] != b[i]) {
-            return if (a[i] < b[i]) Value.fromFixnum(@intCast(offset + i)) else value.NIL;
+        const ca = if (folded) character.upcase(@intCast(a[i])) else @as(u21, @intCast(a[i]));
+        const cb = if (folded) character.upcase(@intCast(b[i])) else @as(u21, @intCast(b[i]));
+        if (ca != cb) {
+            return .{ .index = offset + i, .order = if (ca < cb) .less else .greater };
         }
     }
-    if (a.len < b.len) return Value.fromFixnum(@intCast(offset + i));
-    return value.NIL;
+    if (a.len == b.len) return .{ .index = offset + i, .order = .same };
+    return .{ .index = offset + i, .order = if (a.len < b.len) .less else .greater };
+}
+
+/// Which of the twelve comparisons a name stands for. The four that ask
+/// about equality answer with `t` or `nil`; the rest answer with the
+/// index where the two strings first differed.
+const StringTest = enum { eq, ne, lt, gt, le, ge };
+
+fn comparisonFn(comptime which: StringTest, comptime folded: bool) function.NativeFn {
+    return struct {
+        fn f(p: *anyopaque, args: []const Value) Error!Value {
+            var ops = Operands{};
+            try ops.resolve(evaluator(p), args);
+            const found = orderOf(ops.bounds.a, ops.bounds.b, ops.bounds.a_offset, folded);
+            const holds = switch (which) {
+                .eq => found.order == .same,
+                .ne => found.order != .same,
+                .lt => found.order == .less,
+                .gt => found.order == .greater,
+                .le => found.order != .greater,
+                .ge => found.order != .less,
+            };
+            if (!holds) return value.NIL;
+            if (which == .eq) return value.T;
+            return Value.fromFixnum(@intCast(found.index));
+        }
+    }.f;
 }
 
 // --- case conversion ---

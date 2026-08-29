@@ -102,6 +102,12 @@ pub const Evaluator = struct {
     // NotCallable error, so the driver can name it in the message.
     error_symbol: Value = .{ .raw = 0 },
 
+    // The condition an in-flight `error` is carrying. A Zig error value
+    // says only what kind of failure it was, so a condition object rides
+    // here from the `error` call to whatever catches it. Fixnum zero
+    // when the failure came from a native rather than from Lisp.
+    error_condition: Value = .{ .raw = 0 },
+
     // Shallow-binding stack for special variables. `let`, `let*`, and
     // lambda-list binding push the old value cell here and restore on exit,
     // so a native function reading the cell sees the innermost binding.
@@ -136,6 +142,12 @@ pub const Evaluator = struct {
     gc_requested: bool = false,
     // Whether the heap knows how to reach this evaluator's root scan.
     collector_installed: bool = false,
+    /// How many `eval` frames are on the native stack. A collection that
+    /// moves is safe only at zero: above it a Zig local holds a value the
+    /// root scan can see on the Lisp stack but cannot write back into.
+    /// `load` runs its own read-eval loop, so a nested one sees a depth
+    /// the outer forms put there.
+    eval_depth: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -396,6 +408,8 @@ pub const Evaluator = struct {
         var held = self.heap.protect();
         defer held.close();
         try held.push(form);
+        self.eval_depth += 1;
+        defer self.eval_depth -= 1;
         if (form.equalsRaw(value.NIL)) return self.set1(form);
         if (form.equalsRaw(value.T)) return self.set1(form);
         switch (form.tag()) {

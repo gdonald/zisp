@@ -481,21 +481,21 @@ Phase 6: Condition System
 
 Common Lisp's condition system is more powerful than exceptions in most languages and is depended on by large parts of the standard library.
 
-- [ ] 6.1. Conditions as classes
-  - [ ] 6.1.1. `define-condition`. Bootstrap plan documented in `docs/condition-bootstrap.md` BEFORE implementation (covers: minimal class layout, slot model, what 7.4.7 will rip out). Acceptance: doc reviewed; minimal class system has a single source file `src/runtime/proto_class.zig` named so it's grep-able for 7.4.7's deletion
-  - [ ] 6.1.2. Standard hierarchy: `condition`, `serious-condition`, `error`, `warning`, `simple-condition`, `simple-error`, `simple-warning`, `type-error`, `program-error`, `control-error`, `arithmetic-error`, `division-by-zero`, `floating-point-overflow`, `floating-point-underflow`, `cell-error`, `unbound-variable`, `undefined-function`, `unbound-slot`, `package-error`, `stream-error`, `end-of-file`, `file-error`, `parse-error`, `reader-error`, `print-not-readable`, `storage-condition`
-  - [ ] 6.1.3. `make-condition`
-  - [ ] 6.1.4. Condition slot access via standard CLOS-style accessors
-- [ ] 6.2. Signaling
-  - [ ] 6.2.1. `signal`, `error`, `cerror`, `warn`
-  - [ ] 6.2.2. `*break-on-signals*`
-  - [ ] 6.2.3. Type-coercion: `(error "msg ~A" x)` → `simple-error`
-  - [ ] 6.2.4. Condition designators (symbol, condition, format string)
-- [ ] 6.3. Handling
-  - [ ] 6.3.1. `handler-case` (unwinding)
-  - [ ] 6.3.2. `handler-bind` (non-unwinding)
-  - [ ] 6.3.3. `ignore-errors`
-  - [ ] 6.3.4. Handler search walks dynamically-bound handler stack: most-recently-bound matching handler fires first; `handler-bind` handlers can decline (return normally) and search continues to outer handlers; `handler-case` handlers always unwind. Acceptance: 10 cases in `tests/lisp/handler-search.lisp` covering: nested `handler-bind` with mixed condition types, `handler-bind` declining and falling through to outer handler, mixed `handler-bind`/`handler-case` nesting, handler that signals a different condition (must search from where it was bound, not from the original signal site)
+- [x] 6.1. Conditions as classes
+  - [x] 6.1.1. `define-condition`. Bootstrap plan documented in `docs/condition-bootstrap.md` BEFORE implementation (covers: minimal class layout, slot model, what 7.4.7 will rip out). Acceptance: doc reviewed; minimal class system has a single source file `src/runtime/proto_class.zig` named so it's grep-able for 7.4.7's deletion
+  - [x] 6.1.2. Standard hierarchy: `condition`, `serious-condition`, `error`, `warning`, `simple-condition`, `simple-error`, `simple-warning`, `type-error`, `program-error`, `control-error`, `arithmetic-error`, `division-by-zero`, `floating-point-overflow`, `floating-point-underflow`, `cell-error`, `unbound-variable`, `undefined-function`, `unbound-slot`, `package-error`, `stream-error`, `end-of-file`, `file-error`, `parse-error`, `reader-error`, `print-not-readable`, `storage-condition`
+  - [x] 6.1.3. `make-condition`
+  - [x] 6.1.4. Condition slot access via standard CLOS-style accessors
+- [x] 6.2. Signaling
+  - [x] 6.2.1. `signal`, `error`, `cerror`, `warn`
+  - [x] 6.2.2. `*break-on-signals*`
+  - [x] 6.2.3. Type-coercion: `(error "msg ~A" x)` → `simple-error`
+  - [x] 6.2.4. Condition designators (symbol, condition, format string)
+- [x] 6.3. Handling
+  - [x] 6.3.1. `handler-case` (unwinding)
+  - [x] 6.3.2. `handler-bind` (non-unwinding)
+  - [x] 6.3.3. `ignore-errors`
+  - [x] 6.3.4. Handler search walks dynamically-bound handler stack: most-recently-bound matching handler fires first; `handler-bind` handlers can decline (return normally) and search continues to outer handlers; `handler-case` handlers always unwind. Acceptance: 10 cases in `tests/lisp/handler-search.lisp` covering: nested `handler-bind` with mixed condition types, `handler-bind` declining and falling through to outer handler, mixed `handler-bind`/`handler-case` nesting, handler that signals a different condition (must search from where it was bound, not from the original signal site)
 - [ ] 6.4. Restarts (split per facility)
   - [ ] 6.4.1a. `restart-bind` (non-unwinding) — establishes named restarts available via `find-restart`/`invoke-restart`. 3 cases
   - [ ] 6.4.1b. `restart-case` (unwinding) — clauses with bodies; `invoke-restart` unwinds to the matching clause and runs its body. 4 cases

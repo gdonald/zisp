@@ -23,6 +23,7 @@ pub const pprint = @import("pprint.zig");
 pub const gc = @import("gc.zig");
 pub const registerGc = gc.registerGc;
 const equality = @import("../runtime/equality.zig");
+const proto_class = @import("../runtime/proto_class.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -115,6 +116,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAPC", &mapcFn);
     _ = try ev.defineNative("MAPCAN", &mapcanFn);
     _ = try ev.defineNative("ERROR", &errorFn);
+    _ = try ev.defineNative("%RAISE-CONDITION", &raiseConditionFn);
+    _ = try ev.defineNative("%LAST-ERROR-SYMBOL", &lastErrorSymbolFn);
 
     _ = try ev.defineNative("RPLACA", &rplacaFn);
     _ = try ev.defineNative("RPLACD", &rplacdFn);
@@ -166,6 +169,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try characters.registerCharacters(ev);
     try streams.registerStreams(ev);
     try types.registerTypes(ev);
+    try proto_class.registerProtoClass(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
     try pathnames.registerPathnames(ev);
@@ -180,6 +184,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try system.evalSource(ev, lists_source);
     try system.evalSource(ev, loop_source);
     try system.evalSource(ev, sequences_source);
+    try system.evalSource(ev, conditions_source);
 }
 
 // --- conses, plists, symbol cells ---
@@ -494,13 +499,38 @@ const iteration_source = @embedFile("../lisp/iteration.lisp");
 const lists_source = @embedFile("../lisp/lists.lisp");
 const loop_source = @embedFile("../lisp/loop.lisp");
 const sequences_source = @embedFile("../lisp/sequences.lisp");
+const conditions_source = @embedFile("../lisp/conditions.lisp");
 
-/// `(error datum args...)`. Until the condition system exists this signals
-/// a program error; a string datum plus arguments is accepted in the
-/// standard `format`-control shape.
+/// `(error datum args...)` as the prelude needs it before the condition
+/// system is loaded. `conditions.lisp` replaces it with the one that
+/// builds a condition and signals it.
 fn errorFn(p: *anyopaque, args: []const Value) Error!Value {
     _ = p;
     if (args.len == 0) return Error.WrongArgCount;
+    return Error.ProgramError;
+}
+
+/// `(%last-error-symbol)` names what the most recent unbound-variable,
+/// undefined-function or not-callable failure was about, which is the
+/// one piece of a native failure's payload the evaluator records.
+fn lastErrorSymbolFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    return if (ev.error_symbol.raw == 0) value.NIL else ev.error_symbol;
+}
+
+/// `(%raise-condition condition kind)` unwinds carrying `condition`.
+/// `kind` names the Zig error to raise, which is what decides how the
+/// driver reports the failure when nothing catches it.
+fn raiseConditionFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    ev.error_condition = args[0];
+    if (!args[1].isSymbol()) return Error.ProgramError;
+    const name = symbol_mod.symbol(args[1]).name;
+    inline for (@typeInfo(Error).error_set.?) |member| {
+        if (std.mem.eql(u8, member.name, name)) return @field(Error, member.name);
+    }
     return Error.ProgramError;
 }
 

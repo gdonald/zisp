@@ -95,7 +95,8 @@ fn codeCharFn(p: *anyopaque, args: []const Value) Error!Value {
 fn charNameFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     const c = try oneChar(args);
-    const name = character.nameForCode(c) orelse return value.NIL;
+    var buf: [character.NAME_BUFFER]u8 = undefined;
+    const name = character.nameForCodeInto(c, &buf) orelse return value.NIL;
     return ev.heap.allocString(name);
 }
 
@@ -147,7 +148,7 @@ fn compareFn(comptime op: CompareOp, comptime kind: CompareCase) function.Native
             for (args) |a| _ = try expectChar(a);
             if (op == .ne) {
                 // `char/=` holds only when every pair differs, so it is not
-                // a chain of neighbours like the others.
+                // a chain of neighbors like the others.
                 for (args, 0..) |a, i| {
                     for (args[i + 1 ..]) |b| {
                         if (keyOf(kind, a.toChar()) == keyOf(kind, b.toChar())) return value.NIL;

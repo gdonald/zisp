@@ -8,6 +8,7 @@ const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
+const proto_class = @import("../runtime/proto_class.zig");
 const package_mod = @import("../runtime/package.zig");
 const equality = @import("../runtime/equality.zig");
 const bignum = @import("../runtime/bignum.zig");
@@ -347,10 +348,22 @@ pub fn typep(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     return typepCompound(ev, v, spec);
 }
 
+/// The class `define-condition` recorded under `name`, or null where the
+/// name is not a condition type.
+fn conditionClassNamed(ev: *Evaluator, name: Value) Error!?Value {
+    const key = try ev.interner.intern("%CONDITION-CLASS");
+    const held = symbol_mod.plistGet(name, key) orelse return null;
+    return if (proto_class.isClass(ev, held)) held else null;
+}
+
 fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     const name = symbol_mod.symbol(spec).name;
     if (std.mem.eql(u8, name, "BIT")) {
         return v.isFixnum() and (v.toFixnum() == 0 or v.toFixnum() == 1);
+    }
+    if (try conditionClassNamed(ev, spec)) |class| {
+        if (!proto_class.isInstance(ev, v)) return false;
+        return proto_class.descendsFrom(proto_class.classOf(v), class);
     }
     if (classNamed(name)) |class| {
         if (class == .nil_type) return false;
@@ -784,6 +797,13 @@ fn combinatorAnswer(ev: *Evaluator, a_spec: Value, b_spec: Value) Error!?Answer 
 fn subtypepFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
+    if (args[0].isSymbol() and args[1].isSymbol()) {
+        if (try conditionClassNamed(ev, args[0])) |sub| {
+            if (try conditionClassNamed(ev, args[1])) |super| {
+                return ev.setValues(&.{ boolv(proto_class.descendsFrom(sub, super)), value.T });
+            }
+        }
+    }
     const answer = try subtypep(ev, args[0], args[1]);
     return ev.setValues(&.{ boolv(answer.yes), boolv(answer.certain) });
 }

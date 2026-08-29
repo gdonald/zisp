@@ -122,6 +122,7 @@ pub fn registerNumbers(ev: *Evaluator) !void {
     }) |entry| {
         function.asFunction(try ev.defineNative(entry.name, entry.native)).preserves_values = true;
     }
+    try registerFloatParts(ev);
 }
 
 fn boolv(b: bool) Value {
@@ -216,25 +217,33 @@ fn applyFix(op: BinaryOp, a: i128, b: i128) i128 {
     };
 }
 
+/// One step of the fold. Every bignum here outlives an allocation that
+/// can collect, so each goes on the Lisp stack as it is made.
 fn combine(ev: *Evaluator, op: BinaryOp, a: Rational, b: Rational) Error!Rational {
     const h = ev.heap;
-    return switch (op) {
-        .mul => .{
-            .num = try bignum.mul(h, a.num, b.num),
-            .den = try bignum.mul(h, a.den, b.den),
+    var held = ev.heap.protect();
+    defer held.close();
+    for ([_]Value{ a.num, a.den, b.num, b.den }) |v| try held.push(v);
+
+    switch (op) {
+        .mul => {
+            const num = try bignum.mul(h, a.num, b.num);
+            try held.push(num);
+            return .{ .num = num, .den = try bignum.mul(h, a.den, b.den) };
         },
-        .add, .sub => blk: {
+        .add, .sub => {
             const left = try bignum.mul(h, a.num, b.den);
+            try held.push(left);
             const right = try bignum.mul(h, b.num, a.den);
-            break :blk .{
-                .num = if (op == .add)
-                    try bignum.add(h, left, right)
-                else
-                    try bignum.sub(h, left, right),
-                .den = try bignum.mul(h, a.den, b.den),
-            };
+            try held.push(right);
+            const num = if (op == .add)
+                try bignum.add(h, left, right)
+            else
+                try bignum.sub(h, left, right);
+            try held.push(num);
+            return .{ .num = num, .den = try bignum.mul(h, a.den, b.den) };
         },
-    };
+    }
 }
 
 /// Fold `args` left with `op`, starting from `seed`.
@@ -249,8 +258,19 @@ fn fold(ev: *Evaluator, op: BinaryOp, seed: i128, args: []const Value) Error!Val
         for (args) |a| acc = applyFix(op, acc, a.toFixnum());
         return bignum.fromI128(ev.heap, acc);
     }
+    // The accumulator is the one value the fold carries across the
+    // allocations each step makes, so it is held where a collection can
+    // see it and written back after each step.
+    var held = ev.heap.protect();
+    defer held.close();
     var acc = Rational{ .num = try bignum.fromI128(ev.heap, seed), .den = ONE };
-    for (args) |a| acc = try combine(ev, op, acc, try Rational.of(a));
+    try held.push(acc.num);
+    try held.push(acc.den);
+    for (args) |a| {
+        acc = try combine(ev, op, acc, try Rational.of(a));
+        held.setItem(0, acc.num);
+        held.setItem(1, acc.den);
+    }
     return bignum.makeRatio(ev.heap, acc.num, acc.den);
 }
 
@@ -1403,4 +1423,163 @@ fn shortName(ev: *Evaluator, name: []const u8, from: []const u8, to: []const u8)
     @memcpy(alias_buf[written..][0..rest.len], rest);
     written += rest.len;
     return alias_buf[0..written];
+}
+
+// --- float introspection ---
+
+/// The two float types zisp has, as the width and the exponent bias its
+/// bit layout uses.
+const FloatShape = struct {
+    digits: u32,
+    single: bool,
+};
+
+fn floatShape(v: Value) Error!FloatShape {
+    if (heap.isSingleFloat(v)) return .{ .digits = 24, .single = true };
+    if (heap.isDoubleFloat(v)) return .{ .digits = 53, .single = false };
+    return Error.TypeError;
+}
+
+fn oneFloat(args: []const Value) Error!Value {
+    if (args.len != 1) return Error.WrongArgCount;
+    _ = try floatShape(args[0]);
+    return args[0];
+}
+
+/// The mantissa, exponent and sign `integer-decode-float` reports. The
+/// mantissa is the whole significand as an integer, so the value is
+/// `mantissa * 2^exponent * sign`.
+const Decoded = struct {
+    mantissa: u64,
+    exponent: i64,
+    negative: bool,
+};
+
+fn decodeBits(v: Value) Error!Decoded {
+    const shape = try floatShape(v);
+    if (shape.single) {
+        const bits: u32 = @bitCast(heap.asSingleFloat(v).value);
+        const raw = (bits >> 23) & 0xFF;
+        const frac: u64 = bits & 0x7FFFFF;
+        return .{
+            .mantissa = if (raw == 0) frac else frac | (1 << 23),
+            .exponent = if (raw == 0) -149 else @as(i64, raw) - 150,
+            .negative = bits >> 31 == 1,
+        };
+    }
+    const bits: u64 = @bitCast(heap.asDoubleFloat(v).value);
+    const raw = (bits >> 52) & 0x7FF;
+    const frac: u64 = bits & 0xFFFFFFFFFFFFF;
+    return .{
+        .mantissa = if (raw == 0) frac else frac | (1 << 52),
+        .exponent = if (raw == 0) -1074 else @as(i64, @intCast(raw)) - 1075,
+        .negative = bits >> 63 == 1,
+    };
+}
+
+fn floatRadixFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    _ = try oneFloat(args);
+    return Value.fromFixnum(2);
+}
+
+fn floatDigitsFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    const shape = try floatShape(try oneFloat(args));
+    return Value.fromFixnum(shape.digits);
+}
+
+/// How many digits of the significand carry information: all of them for
+/// a normal float, fewer for a denormal, none for zero.
+fn floatPrecisionFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    const decoded = try decodeBits(try oneFloat(args));
+    if (decoded.mantissa == 0) return Value.fromFixnum(0);
+    return Value.fromFixnum(64 - @as(i64, @clz(decoded.mantissa)));
+}
+
+fn integerDecodeFloatFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    const decoded = try decodeBits(try oneFloat(args));
+    const mantissa = try bignum.fromI128(ev.heap, @intCast(decoded.mantissa));
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(mantissa);
+    return ev.setValues(&.{
+        mantissa,
+        Value.fromFixnum(decoded.exponent),
+        Value.fromFixnum(if (decoded.negative) -1 else 1),
+    });
+}
+
+/// `decode-float` reports the significand scaled into `[1/2, 1)`, the
+/// exponent that scaling took, and the sign as a float of the same type.
+fn decodeFloatFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    const v = try oneFloat(args);
+    const shape = try floatShape(v);
+    const negative = std.math.signbit(asF64(v));
+    if (shape.single) {
+        const x: f32 = heap.asSingleFloat(v).value;
+        const parts = std.math.frexp(@abs(x));
+        var held = ev.heap.protect();
+        defer held.close();
+        const significand = try boxFloat(ev, f32, parts.significand);
+        try held.push(significand);
+        const sign = try boxFloat(ev, f32, if (negative) @as(f32, -1) else 1);
+        try held.push(sign);
+        return ev.setValues(&.{ significand, Value.fromFixnum(parts.exponent), sign });
+    }
+    const x: f64 = heap.asDoubleFloat(v).value;
+    const parts = std.math.frexp(@abs(x));
+    var held = ev.heap.protect();
+    defer held.close();
+    const significand = try boxFloat(ev, f64, parts.significand);
+    try held.push(significand);
+    const sign = try boxFloat(ev, f64, if (negative) @as(f64, -1) else 1);
+    try held.push(sign);
+    return ev.setValues(&.{ significand, Value.fromFixnum(parts.exponent), sign });
+}
+
+fn scaleFloatFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    const shape = try floatShape(args[0]);
+    if (!args[1].isFixnum()) return Error.TypeError;
+    const n: i32 = @intCast(args[1].toFixnum());
+    if (shape.single) {
+        return boxFloat(ev, f32, std.math.ldexp(heap.asSingleFloat(args[0]).value, n));
+    }
+    return boxFloat(ev, f64, std.math.ldexp(heap.asDoubleFloat(args[0]).value, n));
+}
+
+/// `float-sign` puts the sign of its first argument on the magnitude of
+/// its second, which defaults to one of the same type.
+fn floatSignFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
+    const shape = try floatShape(args[0]);
+    const negative = std.math.signbit(asF64(args[0]));
+    const magnitude: f64 = if (args.len == 2) blk: {
+        _ = try floatShape(args[1]);
+        break :blk @abs(asF64(args[1]));
+    } else 1;
+    const signed = if (negative) -magnitude else magnitude;
+    const wide = if (args.len == 2) !(try floatShape(args[1])).single else !shape.single;
+    if (wide) return boxFloat(ev, f64, signed);
+    return boxFloat(ev, f32, @floatCast(signed));
+}
+
+pub fn registerFloatParts(ev: *Evaluator) !void {
+    _ = try ev.defineNative("FLOAT-RADIX", &floatRadixFn);
+    _ = try ev.defineNative("FLOAT-DIGITS", &floatDigitsFn);
+    _ = try ev.defineNative("FLOAT-PRECISION", &floatPrecisionFn);
+    // Both report three values, so the dispatcher must not collapse the
+    // channel to the one they return.
+    function.asFunction(try ev.defineNative("INTEGER-DECODE-FLOAT", &integerDecodeFloatFn))
+        .preserves_values = true;
+    function.asFunction(try ev.defineNative("DECODE-FLOAT", &decodeFloatFn))
+        .preserves_values = true;
+    _ = try ev.defineNative("SCALE-FLOAT", &scaleFloatFn);
+    _ = try ev.defineNative("FLOAT-SIGN", &floatSignFn);
 }

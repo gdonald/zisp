@@ -43,6 +43,21 @@ abbreviated: a number at any depth prints as itself.
 `*print-array*` and `*print-lines*` are defined and hold their standard
 values. Nothing reads them yet.
 
+## Character names
+
+A character with a name prints as `#\` and that name: `#\Space`,
+`#\Newline`, `#\Rubout`. One that has no name of its own and is not a
+graphic character is spelled `#\U+` and its code in hexadecimal, which
+`char-name` gives back and the reader takes.
+
+    (char-name (code-char 1))   ; => "U+0001"
+
+## Conditions
+
+A condition prints as its report where nothing asked for output that
+reads back, and as `#<TYPE>` where something did. `princ` and `~A` give
+the report, `prin1` and `~S` the type.
+
 ## The reader variables
 
 `*read-base*`, `*read-eval*`, `*read-suppress*` and

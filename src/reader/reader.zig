@@ -334,10 +334,10 @@ pub const Reader = struct {
             .dot => self.errAt(t.pos, Error.BadToken), // dot only legal inside a list
             .integer => ReadStep{ .value = try self.parseIntegerAt(t.text, t.pos) },
             .ratio => ReadStep{ .value = try self.parseRatioAt(t.text, t.pos) },
-            .float => ReadStep{ .value = try self.parseFloatAt(t.text, t.pos) },
+            .float => ReadStep{ .value = try self.parseFloatOrIntegerAt(t.text, t.pos) },
             .string => ReadStep{ .value = try self.parseStringAt(t.text, t.pos) },
             .character => ReadStep{ .value = try self.parseCharacterAt(t.text, t.pos) },
-            .symbol => ReadStep{ .value = try self.parseSymbolAt(t.text, t.pos) },
+            .symbol => ReadStep{ .value = try self.parseSymbolOrIntegerAt(t.text, t.pos) },
             .keyword => ReadStep{ .value = try self.parseKeywordAt(t.text, t.pos) },
             .uninterned => ReadStep{ .value = try self.parseUninternedAt(t.text, t.pos) },
             .eof => self.errAt(t.pos, Error.EndOfInput),
@@ -596,13 +596,47 @@ pub const Reader = struct {
         return try self.heap.allocStringFromChars(out);
     }
 
+    /// A token the tokenizer read as a symbol is a number after all when
+    /// every character of it is a digit in the current read base, which
+    /// is how `ff` reads as 255 in base sixteen.
+    fn parseSymbolOrIntegerAt(self: *Reader, text: []const u8, p: Position) Error!Value {
+        if (self.readsAsInteger(text)) return self.parseIntegerAt(text, p);
+        return self.parseSymbolAt(text, p);
+    }
+
+    /// An exponent marker is a digit once the read base reaches its
+    /// letter, so `483d4` is an integer in base fourteen rather than a
+    /// float.
+    fn parseFloatOrIntegerAt(self: *Reader, text: []const u8, p: Position) Error!Value {
+        if (self.readsAsInteger(text)) return self.parseIntegerAt(text, p);
+        return self.parseFloatAt(text, p);
+    }
+
+    fn readsAsInteger(self: *Reader, text: []const u8) bool {
+        const base = self.readBase();
+        return base > 10 and isDigitsIn(text, base);
+    }
+
+    /// The radix a token with no prefix of its own is read in, which is
+    /// what `*read-base*` holds. Bindings are shallow, so the symbol's
+    /// value cell is the innermost one.
+    fn readBase(self: *Reader) u8 {
+        const sym = self.interner.lookup("*READ-BASE*") orelse return 10;
+        const held = symbol.symbol(sym).value_cell;
+        if (!held.isFixnum()) return 10;
+        const n = held.toFixnum();
+        if (n < 2 or n > 36) return 10;
+        return @intCast(n);
+    }
+
     fn parseIntegerAt(self: *Reader, text: []const u8, p: Position) Error!Value {
-        if (parseIntegerLexeme(text)) |n| {
+        const base = self.readBase();
+        if (parseIntegerLexeme(text, base)) |n| {
             if (n >= value.FIXNUM_MIN and n <= value.FIXNUM_MAX) return Value.fromFixnum(n);
         } else |e| {
             if (e != IntegerParseError.Overflow) return self.errAt(p, Error.BadToken);
         }
-        const lexeme = splitIntegerLexeme(text) catch return self.errAt(p, Error.BadToken);
+        const lexeme = splitIntegerLexeme(text, base) catch return self.errAt(p, Error.BadToken);
         const big = bignum.parse(self.heap, lexeme.digits, lexeme.radix, lexeme.negative) catch
             return self.errAt(p, Error.BadToken);
         return big orelse self.errAt(p, Error.BadToken);
@@ -799,15 +833,25 @@ const IntegerParseError = error{ Overflow, BadDigit };
 /// A numeric lexeme split into its radix prefix, sign, and digit text.
 const IntegerLexeme = struct { radix: u8, negative: bool, digits: []const u8 };
 
-fn splitIntegerLexeme(text: []const u8) IntegerParseError!IntegerLexeme {
+fn splitIntegerLexeme(text: []const u8, base: u8) IntegerParseError!IntegerLexeme {
     if (text.len == 0) return IntegerParseError.BadDigit;
-    var i: usize = 0;
 
-    var radix: u32 = 10;
-    if (text[i] == '#') {
+    // A trailing point says the digits are decimal whatever the read base
+    // is, which is what `8114.` means.
+    var body = text;
+    var radix: u32 = base;
+    if (body[body.len - 1] == '.') {
+        body = body[0 .. body.len - 1];
+        radix = 10;
+        if (body.len == 0) return IntegerParseError.BadDigit;
+    }
+    const text_ = body;
+
+    var i: usize = 0;
+    if (text_[i] == '#') {
         i += 1;
-        if (i >= text.len) return IntegerParseError.BadDigit;
-        switch (text[i]) {
+        if (i >= text_.len) return IntegerParseError.BadDigit;
+        switch (text_[i]) {
             'b', 'B' => {
                 radix = 2;
                 i += 1;
@@ -823,13 +867,13 @@ fn splitIntegerLexeme(text: []const u8) IntegerParseError!IntegerLexeme {
             else => {
                 // Explicit `#nnRdigits`.
                 var r: u32 = 0;
-                while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {
-                    r = r * 10 + (text[i] - '0');
+                while (i < text_.len and std.ascii.isDigit(text_[i])) : (i += 1) {
+                    r = r * 10 + (text_[i] - '0');
                     if (r > 36) return IntegerParseError.BadDigit;
                 }
                 if (r < 2) return IntegerParseError.BadDigit;
-                if (i >= text.len) return IntegerParseError.BadDigit;
-                if (text[i] != 'r' and text[i] != 'R') return IntegerParseError.BadDigit;
+                if (i >= text_.len) return IntegerParseError.BadDigit;
+                if (text_[i] != 'r' and text_[i] != 'R') return IntegerParseError.BadDigit;
                 i += 1;
                 radix = r;
             },
@@ -837,23 +881,24 @@ fn splitIntegerLexeme(text: []const u8) IntegerParseError!IntegerLexeme {
     }
 
     var negative = false;
-    if (i < text.len and (text[i] == '+' or text[i] == '-')) {
-        negative = text[i] == '-';
+    if (i < text_.len and (text_[i] == '+' or text_[i] == '-')) {
+        negative = text_[i] == '-';
         i += 1;
     }
-    if (i >= text.len) return IntegerParseError.BadDigit;
+    if (i >= text_.len) return IntegerParseError.BadDigit;
 
-    for (text[i..]) |c| {
+    for (text_[i..]) |c| {
         const d = digitValue(c) orelse return IntegerParseError.BadDigit;
         if (d >= radix) return IntegerParseError.BadDigit;
     }
-    return .{ .radix = @intCast(radix), .negative = negative, .digits = text[i..] };
+    return .{ .radix = @intCast(radix), .negative = negative, .digits = text_[i..] };
 }
 
 /// Decode a numeric lexeme into i64, honoring optional sign and any
-/// of `#b`/`#o`/`#x`/`#nR` radix prefixes the tokenizer accepted.
-fn parseIntegerLexeme(text: []const u8) IntegerParseError!i64 {
-    const lexeme = try splitIntegerLexeme(text);
+/// of `#b`/`#o`/`#x`/`#nR` radix prefixes the tokenizer accepted. A
+/// token with no prefix is read in `base`.
+fn parseIntegerLexeme(text: []const u8, base: u8) IntegerParseError!i64 {
+    const lexeme = try splitIntegerLexeme(text, base);
     var acc: i128 = 0;
     for (lexeme.digits) |c| {
         acc = acc * @as(i128, lexeme.radix) + @as(i128, digitValue(c).?);
@@ -861,6 +906,19 @@ fn parseIntegerLexeme(text: []const u8) IntegerParseError!i64 {
     }
     if (lexeme.negative) acc = -acc;
     return @intCast(acc);
+}
+
+/// Whether every character of `text`, past an optional sign, is a digit
+/// in `base`, and there is at least one of them.
+fn isDigitsIn(text: []const u8, base: u8) bool {
+    var i: usize = 0;
+    if (text.len > 0 and (text[0] == '+' or text[0] == '-')) i += 1;
+    if (i >= text.len) return false;
+    for (text[i..]) |c| {
+        const d = digitValue(c) orelse return false;
+        if (d >= base) return false;
+    }
+    return true;
 }
 
 fn digitValue(c: u8) ?u32 {

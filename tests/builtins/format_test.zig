@@ -341,7 +341,10 @@ test "tilde circumflex compares its parameters instead when given any" {
 test "tilde colon circumflex ends the whole iteration" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try fx.expectFormat("(format nil \"~:{~A~:^ ~}\" '((1) (2)))", "1");
+    // The escape tests the list being walked rather than the sublist the
+    // body is reading, so the separator goes in between and not after.
+    try fx.expectFormat("(format nil \"~:{~A~:^ ~}\" '((1) (2)))", "1 2");
+    try fx.expectFormat("(format nil \"~:{~A~:^ ~}\" '((1)))", "1");
 }
 
 // --- ~? and ~/ ---

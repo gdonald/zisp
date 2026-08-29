@@ -31,7 +31,7 @@ pub fn registerPprint(ev: *Evaluator) !void {
     _ = try ev.defineNative("PPRINT", &pprintFn);
     _ = try ev.defineNative("PRIN1", writerFn(.escape));
     _ = try ev.defineNative("PRINC", writerFn(.plain));
-    _ = try ev.defineNative("WRITE", writerFn(.escape));
+    _ = try ev.defineNative("%WRITE", writerFn(.escape));
     _ = try ev.defineNative("PRINT", &printFn);
     _ = try ev.defineNative("TERPRI", &terpriFn);
     _ = try ev.defineNative("FRESH-LINE", &freshLineFn);
@@ -261,15 +261,24 @@ fn listPrinter(comptime style: ListStyle) function.NativeFn {
         fn f(p: *anyopaque, args: []const Value) Error!Value {
             const ev = evaluator(p);
             if (args.len < 2) return Error.WrongArgCount;
+            // CLHS 22.2.1: the parentheses go on unless the caller said
+            // otherwise, and an object that is not a list is written as
+            // it stands.
+            const parens = if (args.len >= 3) !args[2].equalsRaw(value.NIL) else true;
+            const object = args[1];
+            if (!object.isCons() and !object.equalsRaw(value.NIL)) {
+                try writeValue(ev, object, args[0], .escape);
+                return value.NIL;
+            }
             // Writing onto a stream that is already pretty joins its
             // layout; any other stream gets one of its own.
             if (try prettyTargetOf(ev, args[0])) |s| {
-                try printList(ev, s, args[1], style);
+                try printList(ev, s, object, style, parens);
                 return value.NIL;
             }
             const wrapper = try openPretty(ev, args[0]);
-            try attachCircle(ev, heap.asStream(wrapper), args[1]);
-            try printList(ev, heap.asStream(wrapper), args[1], style);
+            try attachCircle(ev, heap.asStream(wrapper), object);
+            try printList(ev, heap.asStream(wrapper), object, style, parens);
             return finishFn(p, &.{wrapper});
         }
     }.f;
@@ -282,9 +291,15 @@ fn openPretty(ev: *Evaluator, target: Value) Error!Value {
     return ev.heap.allocStream(stream);
 }
 
-fn printList(ev: *Evaluator, s: *Stream, list: Value, style: ListStyle) Error!void {
+fn printList(
+    ev: *Evaluator,
+    s: *Stream,
+    list: Value,
+    style: ListStyle,
+    parens: bool,
+) Error!void {
     const allocator = ev.heap.allocator;
-    const open = try intern(ev, s, "(");
+    const open = try intern(ev, s, if (parens) "(" else "");
     const empty = try intern(ev, s, "");
     try s.tokens.append(allocator, .{ .block_start = .{
         .prefix = open,
@@ -295,10 +310,10 @@ fn printList(ev: *Evaluator, s: *Stream, list: Value, style: ListStyle) Error!vo
     var rest = list;
     var first = true;
     while (rest.isCons()) {
-        // A labelled tail is a back-reference, which has to be written
+        // A labeled tail is a back-reference, which has to be written
         // after a dot rather than walked into.
-        const labelled = if (s.circle) |state| !first and state.get(rest) != null else false;
-        if (labelled) break;
+        const labeled = if (s.circle) |state| !first and state.get(rest) != null else false;
+        if (labeled) break;
         if (!first) {
             try recordText(ev, s, " ");
             try s.tokens.append(allocator, .{
@@ -313,7 +328,7 @@ fn printList(ev: *Evaluator, s: *Stream, list: Value, style: ListStyle) Error!vo
         try recordText(ev, s, " . ");
         try recordValue(ev, s, rest);
     }
-    try recordText(ev, s, ")");
+    if (parens) try recordText(ev, s, ")");
     try s.tokens.append(allocator, .{ .block_end = empty });
 }
 
@@ -338,7 +353,7 @@ fn recordValue(ev: *Evaluator, s: *Stream, v: Value) Error!void {
             try recordText(ev, s, text);
         }
     }
-    if (v.isCons()) return printList(ev, s, v, .linear);
+    if (v.isCons()) return printList(ev, s, v, .linear, true);
     var settings = format.prin1Settings(ev);
     settings.circle = s.circle;
     const text = try printer.writeToOwnedSlice(ev.allocator, v, settings);
@@ -454,6 +469,13 @@ fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyl
         try recordValue(ev, heap.asStream(wrapper), v);
         _ = try finish(ev, heap.asStream(wrapper));
         return;
+    }
+    if (style == .plain) {
+        var arena = std.heap.ArenaAllocator.init(ev.allocator);
+        defer arena.deinit();
+        if (try format.conditionReport(ev, arena.allocator(), v)) |text| {
+            return streams.emitBytes(ev, target, text);
+        }
     }
     var settings = if (style == .escape) format.prin1Settings(ev) else format.princSettings(ev);
     var state: ?circle_mod.State = null;

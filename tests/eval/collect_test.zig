@@ -152,32 +152,38 @@ test "the trigger fires once enough has been allocated" {
     _ = try fx.eval("(setq *gc-trigger* 4096)");
     _ = try fx.eval("(defun churn (n) (if (> n 0) (progn (list 1 2 3) (churn (- n 1))) t))");
 
+    // Bringing the prelude up costs collections of its own, so what the
+    // trigger did is what this counts, not what the run has done so far.
+    const before = fx.ev.gc_count;
+
     _ = try fx.eval("(churn 500)");
     try collect.maybeCollect(&fx.ev);
 
-    try testing.expectEqual(@as(u64, 1), fx.ev.gc_count);
+    try testing.expectEqual(before + 1, fx.ev.gc_count);
 }
 
 test "the trigger holds off until the threshold is passed" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     _ = try fx.eval("(setq *gc-trigger* 1000000000)");
+    const before = fx.ev.gc_count;
 
     try collect.maybeCollect(&fx.ev);
 
-    try testing.expectEqual(@as(u64, 0), fx.ev.gc_count);
+    try testing.expectEqual(before, fx.ev.gc_count);
 }
 
 test "gc asks for a collection at the next safe point" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     _ = try fx.eval("(setq *gc-trigger* 1000000000)");
+    const before = fx.ev.gc_count;
 
     _ = try fx.eval("(gc)");
-    try testing.expectEqual(@as(u64, 0), fx.ev.gc_count);
+    try testing.expectEqual(before, fx.ev.gc_count);
 
     try collect.maybeCollect(&fx.ev);
-    try testing.expectEqual(@as(u64, 1), fx.ev.gc_count);
+    try testing.expectEqual(before + 1, fx.ev.gc_count);
 }
 
 test "room reports the heap figures" {

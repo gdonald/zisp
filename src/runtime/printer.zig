@@ -40,6 +40,10 @@ pub const Settings = struct {
     /// `*print-readably*` — when true, escape regardless of `escape`.
     /// CLHS 22.1.3.5: readably output must round-trip via `read`.
     readably: bool = false,
+    /// `*read-default-float-format*`, as the exponent marker its type
+    /// carries. A float of that type prints its exponent with `e` and
+    /// needs no marker in fixed form.
+    default_float: u8 = 'f',
     /// `*print-base*` — radix used for integer/ratio output; clamped to
     /// `[2, 36]`. Defaults to 10.
     base: u8 = 10,
@@ -129,8 +133,8 @@ fn printValue(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         return;
     }
     if (v.equalsRaw(value.NIL)) {
-        try ctx.writer.writeAll("NIL");
-        return;
+        // `nil` is a symbol, so its name is cased like any other.
+        return writeCased(ctx, "NIL");
     }
     // A shared object announces its label the first time and refers back
     // to it after, which is what lets a cycle terminate on paper.
@@ -364,9 +368,39 @@ fn structureSlotNames(name: Value) Value {
     return value.NIL;
 }
 
+/// The name a condition class carries where a `defstruct` instance
+/// carries the symbol it was defined under. Matching it by name keeps the
+/// printer free of an interner reference.
+const CONDITION_CLASS = "%CONDITION-CLASS";
+
+fn isConditionClass(name: Value) bool {
+    return name.isSymbol() and std.mem.eql(u8, symbol.name(name), CONDITION_CLASS);
+}
+
+/// A condition names itself with its class and a class names itself with
+/// `%condition-class`, so neither has slot names on a symbol's plist and
+/// neither reads as `#S(...)`.
+fn printConditionish(ctx: *PrintCtx, v: Value) PrintError!void {
+    const obj = heap.asStructure(v);
+    try ctx.writer.writeAll("#<");
+    if (isConditionClass(obj.name)) {
+        try writeCased(ctx, "CONDITION-CLASS");
+        try ctx.writer.writeByte(' ');
+        const named = obj.constSlice()[0];
+        if (named.isSymbol()) try writeCased(ctx, symbol.name(named));
+    } else {
+        const named = heap.asStructure(obj.name).constSlice()[0];
+        if (named.isSymbol()) try writeCased(ctx, symbol.name(named));
+    }
+    try ctx.writer.writeByte('>');
+}
+
 fn printStructure(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     const obj = heap.asStructure(v);
+    if (!obj.name.isSymbol() or isConditionClass(obj.name)) {
+        return printConditionish(ctx, v);
+    }
     try ctx.writer.writeAll("#S(");
     try printValue(ctx, obj.name, depth + 1);
     var names = structureSlotNames(obj.name);
@@ -560,11 +594,6 @@ fn printArrayAxis(
     try ctx.writer.writeByte(')');
 }
 
-/// The float type `e` stands for, which is what CLHS calls
-/// `*read-default-float-format*`. A float of this type prints with no
-/// exponent marker in fixed form; any other type carries its own.
-const DEFAULT_FLOAT_MARKER: u8 = 'f';
-
 /// Fixed-point form covers the magnitudes CLHS 22.1.3.1.3 names, and
 /// exponential form covers the rest.
 fn usesFixedForm(magnitude: f64) bool {
@@ -588,7 +617,7 @@ fn printFloat(ctx: *PrintCtx, comptime T: type, x: T, marker: u8) PrintError!voi
         try ctx.writer.writeAll(digits);
         if (std.mem.indexOfScalar(u8, digits, '.') == null) try ctx.writer.writeAll(".0");
         // A fixed-form float of a non-default type still needs its marker.
-        if (marker != DEFAULT_FLOAT_MARKER) try ctx.writer.print("{c}0", .{marker});
+        if (marker != ctx.settings.default_float) try ctx.writer.print("{c}0", .{marker});
         return;
     }
 
@@ -599,20 +628,20 @@ fn printFloat(ctx: *PrintCtx, comptime T: type, x: T, marker: u8) PrintError!voi
     try ctx.writer.writeAll(mantissa);
     if (std.mem.indexOfScalar(u8, mantissa, '.') == null) try ctx.writer.writeAll(".0");
     // A float of the default type spells its exponent with `e`.
-    try ctx.writer.writeByte(if (marker == DEFAULT_FLOAT_MARKER) 'e' else marker);
+    try ctx.writer.writeByte(if (marker == ctx.settings.default_float) 'e' else marker);
     try ctx.writer.writeAll(if (split < digits.len) digits[split + 1 ..] else "0");
 }
 
 /// The list form, where every tail is a candidate for a back-reference,
-/// so a labelled tail becomes a dotted `. #n#`.
+/// so a labeled tail becomes a dotted `. #n#`.
 fn printConsLabelled(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     try ctx.writer.writeByte('(');
     try printValue(ctx, heap.car(v), depth + 1);
     var tail = heap.cdr(v);
     while (true) {
         if (tail.equalsRaw(value.NIL)) break;
-        const labelled = if (ctx.settings.circle) |state| state.get(tail) != null else false;
-        if (!tail.isCons() or labelled) {
+        const labeled = if (ctx.settings.circle) |state| state.get(tail) != null else false;
+        if (!tail.isCons() or labeled) {
             try ctx.writer.writeAll(" . ");
             try printValue(ctx, tail, depth + 1);
             break;
@@ -630,7 +659,8 @@ fn printChar(ctx: *PrintCtx, c: u21) PrintError!void {
         return;
     }
     try ctx.writer.writeAll("#\\");
-    if (character.nameForCode(c)) |name| return ctx.writer.writeAll(name);
+    var buf: [character.NAME_BUFFER]u8 = undefined;
+    if (character.nameForCodeInto(c, &buf)) |name| return ctx.writer.writeAll(name);
     try writeRawChar(ctx.writer, c);
 }
 

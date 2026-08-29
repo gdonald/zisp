@@ -40,7 +40,7 @@ pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("FILE-WRITE-DATE", &fileWriteDateFn);
     _ = try ev.defineNative("PRIN1-TO-STRING", toStringFn(true));
     _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(false));
-    _ = try ev.defineNative("WRITE-TO-STRING", toStringFn(true));
+    _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(true));
     function.asFunction(try ev.defineNative("READ-FROM-STRING", &readFromStringFn))
         .preserves_values = true;
     _ = try ev.defineNative("QUIT", &quitFn);
@@ -198,6 +198,13 @@ fn toStringFn(comptime escape: bool) function.NativeFn {
             if (args.len != 1) return Error.WrongArgCount;
             var aw = std.Io.Writer.Allocating.init(ev.allocator);
             defer aw.deinit();
+            if (!escape) {
+                var arena = std.heap.ArenaAllocator.init(ev.allocator);
+                defer arena.deinit();
+                if (try format.conditionReport(ev, arena.allocator(), args[0])) |text| {
+                    return ev.heap.allocString(text);
+                }
+            }
             const settings = if (escape) format.prin1Settings(ev) else format.princSettings(ev);
             try printer.write(ev.allocator, &aw.writer, args[0], settings);
             return ev.heap.allocString(aw.written());
@@ -307,11 +314,14 @@ fn fileWriteDateFn(p: *anyopaque, args: []const Value) Error!Value {
 
 /// Saved global cells for a pathname/truename variable pair, rebound for
 /// the duration of a load or compile-file.
+/// The previous contents of the two variables `load` rebinds. A nested
+/// `load` collects while these are out of their symbols' cells, so they
+/// are pinned rather than held in the struct alone.
 const PathVarBindings = struct {
+    ev: *Evaluator,
     pathname_sym: Value,
     truename_sym: Value,
-    old_pathname: Value,
-    old_truename: Value,
+    pin_mark: usize,
 
     fn bind(
         ev: *Evaluator,
@@ -323,19 +333,23 @@ const PathVarBindings = struct {
         const p_sym = try ev.interner.intern(pathname_var);
         const t_sym = try ev.interner.intern(truename_var);
         const saved = PathVarBindings{
+            .ev = ev,
             .pathname_sym = p_sym,
             .truename_sym = t_sym,
-            .old_pathname = symbol_mod.symbol(p_sym).value_cell,
-            .old_truename = symbol_mod.symbol(t_sym).value_cell,
+            .pin_mark = ev.pinMark(),
         };
+        try ev.pin(symbol_mod.symbol(p_sym).value_cell);
+        try ev.pin(symbol_mod.symbol(t_sym).value_cell);
         symbol_mod.symbol(p_sym).value_cell = try ev.heap.allocString(path);
         symbol_mod.symbol(t_sym).value_cell = try ev.heap.allocString(truename);
         return saved;
     }
 
     fn restore(self: *PathVarBindings) void {
-        symbol_mod.symbol(self.pathname_sym).value_cell = self.old_pathname;
-        symbol_mod.symbol(self.truename_sym).value_cell = self.old_truename;
+        const pins = self.ev.pinned.items;
+        symbol_mod.symbol(self.pathname_sym).value_cell = pins[self.pin_mark];
+        symbol_mod.symbol(self.truename_sym).value_cell = pins[self.pin_mark + 1];
+        self.ev.unpinTo(self.pin_mark);
     }
 };
 

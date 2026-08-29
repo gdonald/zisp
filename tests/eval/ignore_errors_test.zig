@@ -66,27 +66,38 @@ test "an empty body returns nil" {
     try testing.expect((try fx.evalStr("(ignore-errors)")).equalsRaw(value.NIL));
 }
 
-test "an error yields nil and a keyword naming it" {
+/// The type of the condition `(ignore-errors body)` hands back second.
+fn caughtType(fx: anytype, body: []const u8) ![]const u8 {
+    var buf: [256]u8 = undefined;
+    const src = try std.fmt.bufPrint(
+        &buf,
+        "(condition-type-name (nth-value 1 (ignore-errors {s})))",
+        .{body},
+    );
+    return symbol_mod.name(try fx.evalStr(src));
+}
+
+test "an error yields nil and the condition it failed with" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     const v = try fx.evalStr("(ignore-errors (no-such-function))");
     try testing.expect(v.equalsRaw(value.NIL));
     try testing.expectEqual(@as(usize, 2), fx.ev.values.items.len);
-    try testing.expectEqualStrings("UnboundFunction", symbol_mod.name(fx.ev.values.items[1]));
+    try testing.expectEqualStrings("UNDEFINED-FUNCTION", try caughtType(fx, "(no-such-function)"));
 }
 
 test "an unbound variable is absorbed too" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try testing.expect((try fx.evalStr("(ignore-errors no-such-variable)")).equalsRaw(value.NIL));
-    try testing.expectEqualStrings("UnboundVariable", symbol_mod.name(fx.ev.values.items[1]));
+    try testing.expectEqualStrings("UNBOUND-VARIABLE", try caughtType(fx, "no-such-variable"));
 }
 
 test "a type error from a builtin is absorbed" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try testing.expect((try fx.evalStr("(ignore-errors (rplaca 1 2))")).equalsRaw(value.NIL));
-    try testing.expectEqualStrings("TypeError", symbol_mod.name(fx.ev.values.items[1]));
+    try testing.expectEqualStrings("TYPE-ERROR", try caughtType(fx, "(rplaca 1 2)"));
 }
 
 test "forms before the failing one still run for effect" {
@@ -132,5 +143,5 @@ test "a malformed body is absorbed like any other error" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try testing.expect((try fx.evalStr("(ignore-errors . 5)")).equalsRaw(value.NIL));
-    try testing.expectEqualStrings("BadArgList", symbol_mod.name(fx.ev.values.items[1]));
+    try testing.expectEqualStrings("PROGRAM-ERROR", try caughtType(fx, ". 5"));
 }

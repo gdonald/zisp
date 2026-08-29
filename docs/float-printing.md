@@ -11,7 +11,7 @@ that solve that problem and records which one zisp uses.
 The 1990 paper *How to print floating-point numbers accurately* gives the
 first algorithm that is both correct and shortest. It works by exact
 rational arithmetic: the value and the two half-way points to its
-neighbours are held as big-integer fractions, and digits are generated one
+neighbors are held as big-integer fractions, and digits are generated one
 at a time until the emitted prefix can only read back as the original
 value.
 

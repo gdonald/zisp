@@ -11,7 +11,9 @@
 (string= (format nil "~:@(~S~)" 'ab) "AB")
 (string= (format nil "~(~S ~S~)" 'ab 'cd) "ab cd")
 (string= (format nil "a~<~%~:; ~>b") "a b")
-(string= (format nil "~<~@{~S~^, ~:_~}~:>" 1 2) "1, 2")
+;; `~@<` hands the block the rest of the argument list, where `~<`
+;; would take one list argument.
+(string= (format nil "~@<~@{~S~^, ~:_~}~:>" 1 2) "1, 2")
 (string= (format nil "a~
       b") "ab")
 (string= (format nil "a~:

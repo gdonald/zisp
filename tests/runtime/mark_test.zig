@@ -51,7 +51,7 @@ fn newFx() !*Fixture {
     return Fixture.init(testing.allocator);
 }
 
-test "marking one cons sets its bit and leaves its neighbour alone" {
+test "marking one cons sets its bit and leaves its neighbor alone" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     const marked = try fx.heap.allocCons(value.NIL, value.NIL);

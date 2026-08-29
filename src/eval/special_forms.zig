@@ -32,7 +32,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("CATCH", &catchForm);
     try ev.registerSpecialForm("THROW", &throwForm);
     try ev.registerSpecialForm("UNWIND-PROTECT", &unwindProtect);
-    try ev.registerSpecialForm("IGNORE-ERRORS", &ignoreErrors);
+    try ev.registerSpecialForm("%IGNORE-ERRORS", &ignoreErrors);
     try ev.registerSpecialForm("%CATCH-ERROR", &catchError);
     try ev.registerSpecialForm("THE", &theForm);
     try ev.registerSpecialForm("DECLARE", &declareForm);
@@ -628,14 +628,25 @@ fn unwindProtect(ev: *Evaluator, args: Value) Error!Value {
 /// `(values nil <error-name>)`. Non-local exits (`return-from`, `go`,
 /// `throw`) and `quit` pass through untouched. The second value becomes a
 /// real condition object once the condition system exists.
+/// `(%ignore-errors form*)` is the catcher `ignore-errors` is built on:
+/// it hands back what failed without saying anything about its type,
+/// which is what the Lisp side turns into a condition.
 fn ignoreErrors(ev: *Evaluator, args: Value) Error!Value {
     return prognBody(ev, args) catch |err| switch (err) {
         Error.BlockReturn, Error.Go, Error.Throw, Error.Quit, Error.OutOfMemory => err,
-        else => {
-            const name = try ev.interner.internKeyword(@errorName(err));
-            return ev.setValues(&.{ value.NIL, name });
-        },
+        else => return ev.setValues(&.{ value.NIL, try caughtBy(ev, err) }),
     };
+}
+
+/// What a caught failure hands its catcher: the condition an `error` was
+/// carrying, or the name of the Zig error where a native raised it.
+fn caughtBy(ev: *Evaluator, err: Error) Error!Value {
+    if (ev.error_condition.raw != 0) {
+        const condition = ev.error_condition;
+        ev.error_condition = .{ .raw = 0 };
+        return condition;
+    }
+    return ev.interner.internKeyword(@errorName(err));
 }
 
 /// `(%catch-error form*)` — evaluate the body and report whether it failed.
@@ -646,10 +657,7 @@ fn ignoreErrors(ev: *Evaluator, args: Value) Error!Value {
 fn catchError(ev: *Evaluator, args: Value) Error!Value {
     _ = prognBody(ev, args) catch |err| switch (err) {
         Error.BlockReturn, Error.Go, Error.Throw, Error.Quit, Error.OutOfMemory => return err,
-        else => {
-            const name = try ev.interner.internKeyword(@errorName(err));
-            return ev.setValues(&.{name});
-        },
+        else => return ev.setValues(&.{try caughtBy(ev, err)}),
     };
     var outcome = ev.heap.protect();
     defer outcome.close();

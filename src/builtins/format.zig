@@ -10,6 +10,10 @@ const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
+const equality = @import("../runtime/equality.zig");
+const proto_class = @import("../runtime/proto_class.zig");
+const package = @import("../runtime/package.zig");
+const character = @import("../runtime/character.zig");
 const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 
@@ -68,6 +72,17 @@ fn count(ev: *Evaluator, name: []const u8) ?u32 {
     return @intCast(n);
 }
 
+/// The exponent marker the type in `*read-default-float-format*`
+/// carries, which is the one a float of that type does without.
+fn defaultFloatMarker(ev: *Evaluator) u8 {
+    const held = variable(ev, "*READ-DEFAULT-FLOAT-FORMAT*") orelse return 'f';
+    if (!held.isSymbol()) return 'f';
+    const name = symbol_mod.name(held);
+    if (std.mem.eql(u8, name, "DOUBLE-FLOAT")) return 'd';
+    if (std.mem.eql(u8, name, "LONG-FLOAT")) return 'd';
+    return 'f';
+}
+
 fn printCase(ev: *Evaluator) printer.Case {
     const held = variable(ev, "*PRINT-CASE*") orelse return .upcase;
     if (!held.isSymbol()) return .upcase;
@@ -87,6 +102,7 @@ fn printerSettings(ev: *Evaluator, escaping: bool) printer.Settings {
         .base = if (base >= 2 and base <= 36) @intCast(base) else 10,
         .radix = flag(ev, "*PRINT-RADIX*", false),
         .case = printCase(ev),
+        .default_float = defaultFloatMarker(ev),
         .level = count(ev, "*PRINT-LEVEL*"),
         .length = count(ev, "*PRINT-LENGTH*"),
         .gensym = flag(ev, "*PRINT-GENSYM*", true),
@@ -102,7 +118,7 @@ pub fn princSettings(ev: *Evaluator) printer.Settings {
     return printerSettings(ev, false);
 }
 
-/// True when `*print-circle*` asks for shared structure to be labelled.
+/// True when `*print-circle*` asks for shared structure to be labeled.
 pub fn circleWanted(ev: *Evaluator) bool {
     const sym = ev.interner.lookup("*PRINT-CIRCLE*") orelse return false;
     const v = ev.env.lookupValue(sym) orelse return false;
@@ -151,10 +167,10 @@ pub const Output = struct {
 /// `#`; both resolve against the argument list at execution time.
 const Param = union(enum) { absent, number: i64, next_arg, arg_count };
 
-const MAX_PARAMS = 4;
+const MAX_PARAMS = 7;
 
 const Directive = struct {
-    params: [MAX_PARAMS]Param = .{ .absent, .absent, .absent, .absent },
+    params: [MAX_PARAMS]Param = .{ .absent, .absent, .absent, .absent, .absent, .absent, .absent },
     colon: bool = false,
     at: bool = false,
     char: u8 = 0,
@@ -201,6 +217,9 @@ const Justification = struct {
     segments: []const []const Node,
     /// Whether the first segment was introduced as the overflow prefix.
     has_overflow: bool,
+    /// Whether `~:>` closed it, which makes it a logical block rather
+    /// than a field to justify in.
+    logical: bool = false,
 };
 
 const Parser = struct {
@@ -242,7 +261,27 @@ fn parseBlock(p: *Parser, terminators: []const u8) Error!Block {
     return .{ .nodes = try nodes.toOwnedSlice(p.allocator), .stop = .{} };
 }
 
+/// How many parameters a directive takes. More than this is a program
+/// error, which is what keeps `~1,2,3,4,5D` from being read as `~D`.
+fn maxParams(char: u8) usize {
+    return switch (char) {
+        'E', 'G' => 7,
+        'R', 'F' => 5,
+        'A', 'S', 'D', 'B', 'O', 'X', '$', '<' => 4,
+        '^' => 3,
+        'T' => 2,
+        '%', '&', '~', '|', '*', '[', '{', '_', 'I' => 1,
+        'C', 'P', 'W', '?', '(' => 0,
+        else => MAX_PARAMS,
+    };
+}
+
 fn parseNode(p: *Parser, directive: Directive) Error!Node {
+    var highest: usize = 0;
+    for (directive.params, 0..) |param, slot| {
+        if (param != .absent) highest = slot + 1;
+    }
+    if (highest > maxParams(directive.char)) return Error.ProgramError;
     return switch (directive.char) {
         '[' => .{ .conditional = try parseConditional(p, directive) },
         '{' => .{ .iteration = .{
@@ -255,7 +294,7 @@ fn parseNode(p: *Parser, directive: Directive) Error!Node {
             .body = (try parseBlock(p, ")")).nodes,
         } },
         '<' => .{ .justification = try parseJustification(p, directive) },
-        'A', 'S', 'D', '%', '&', '~', '*', 'T', '?', '^', 'P', '_', 'I', 'W' => .{ .simple = directive },
+        'A', 'S', 'D', 'B', 'O', 'X', 'R', 'C', 'F', 'E', 'G', '$', '%', '&', '~', '|', '*', 'T', '?', '^', 'P', '_', 'I', 'W' => .{ .simple = directive },
         // `~<newline>` continues a control string across source lines: the
         // newline goes unless `@` keeps it, and the indentation after it
         // goes unless `:` keeps that.
@@ -288,16 +327,23 @@ fn parseConditional(p: *Parser, directive: Directive) Error!Conditional {
 fn parseJustification(p: *Parser, directive: Directive) Error!Justification {
     var segments: std.ArrayList([]const Node) = .empty;
     var has_overflow = false;
+    var logical = false;
     while (true) {
         const block = try parseBlock(p, ">;");
         try segments.append(p.allocator, block.nodes);
-        if (block.stop.char == '>') break;
+        if (block.stop.char == '>') {
+            // `~:>` closes a logical block, where `~<` closes a field to
+            // justify text in.
+            logical = block.stop.colon;
+            break;
+        }
         if (block.stop.colon and segments.items.len == 1) has_overflow = true;
     }
     return .{
         .directive = directive,
         .segments = try segments.toOwnedSlice(p.allocator),
         .has_overflow = has_overflow,
+        .logical = logical,
     };
 }
 
@@ -387,8 +433,10 @@ fn parseParam(p: *Parser) Error!?Param {
     var i = p.pos + if (signed) @as(usize, 1) else 0;
     const start = i;
     var n: i64 = 0;
+    // A control string may carry a parameter far larger than any width
+    // it could mean, so the digits saturate rather than wrap.
     while (i < p.ctrl.len and isDigit(p.ctrl[i])) : (i += 1) {
-        n = n * 10 + @as(i64, @intCast(p.ctrl[i] - '0'));
+        n = n *| 10 +| @as(i64, @intCast(p.ctrl[i] - '0'));
     }
     if (i == start) return null;
     p.pos = i;
@@ -422,6 +470,9 @@ const Runner = struct {
     ev: *Evaluator,
     out: Output,
     allocator: std.mem.Allocator,
+    /// The list a `~:{` is walking, which is what `~:^` tests rather
+    /// than the sublist the body is reading.
+    outer: ?*Args = null,
 
     /// The parameter in `slot`, resolved against the argument list. An
     /// absent parameter, or an explicit nil `v`, yields `default`.
@@ -435,8 +486,16 @@ const Runner = struct {
                 const v = try args.next();
                 if (v.equalsRaw(value.NIL)) break :blk default;
                 if (v.tag() == .char) break :blk v.toChar();
-                if (!v.isFixnum()) return Error.TypeError;
-                break :blk v.toFixnum();
+                if (v.isFixnum()) break :blk v.toFixnum();
+                // A bignum parameter is past any width that means
+                // anything, so it saturates the way a written one does.
+                if (isInteger(v)) {
+                    break :blk if (equality.toF64(v) < 0)
+                        std.math.minInt(i64)
+                    else
+                        std.math.maxInt(i64);
+                }
+                return Error.TypeError;
             },
         };
     }
@@ -489,8 +548,18 @@ fn runSimple(r: *Runner, directive: Directive, args: *Args) Error!Flow {
     switch (directive.char) {
         'A' => try printPadded(r, directive, args, princSettings(r.ev)),
         'S' => try printPadded(r, directive, args, prin1Settings(r.ev)),
-        'D' => try printDecimal(r, directive, args),
+        'D' => try printRadix(r, directive, args, 10, 0),
+        'B' => try printRadix(r, directive, args, 2, 0),
+        'O' => try printRadix(r, directive, args, 8, 0),
+        'X' => try printRadix(r, directive, args, 16, 0),
+        'R' => try printRoman(r, directive, args),
+        'C' => try printCharacter(r, directive, args),
+        'F' => try printFixed(r, directive, args),
+        'E' => try printExponential(r, directive, args),
+        'G' => try printGeneral(r, directive, args),
+        '$' => try printMonetary(r, directive, args),
         '%' => try r.out.repeat('\n', try r.count(directive, 0, args, 1)),
+        '|' => try r.out.repeat(0x0C, try r.count(directive, 0, args, 1)),
         '&' => try freshLine(r, directive, args),
         '~' => try r.out.repeat('~', try r.count(directive, 0, args, 1)),
         '*' => try skipArgs(r, directive, args),
@@ -559,15 +628,131 @@ fn directiveUpcases(directive: Directive) bool {
     return directive.colon and directive.at;
 }
 
-/// `~<...~>`: the segments run in order. An overflow segment (the one
-/// before `~:;`) is what a line break would use, so it is dropped here.
+/// `~mincol,colinc,minpad,padchar<...~>`: the segments, spread across a
+/// field at least `mincol` wide.
+///
+/// A padding point sits between each pair of segments, `:` adds one
+/// before the first and `@` one after the last. With none of those the
+/// text is right-justified, which is the one padding point a lone
+/// segment gets. A `~^` that fires drops the segment it is in and every
+/// one after it.
 fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
+    if (j.logical) return runLogicalBlock(r, j, args);
+    const directive = j.directive;
+    const mincol = try r.count(directive, 0, args, 0);
+    const colinc = @max(try r.count(directive, 1, args, 1), 1);
+    const minpad = try r.count(directive, 2, args, 0);
+    const padchar: u21 = @intCast(try r.param(directive, 3, args, ' '));
+
+    // The segment before a `~:;` is what a line break would print, and
+    // nothing here breaks lines.
     const segments = if (j.has_overflow and j.segments.len > 1) j.segments[1..] else j.segments;
+
+    var texts: std.ArrayList([]const u8) = .empty;
     for (segments) |segment| {
-        const flow = try runNodes(r, segment, args);
-        if (flow != .normal) return flow;
+        var captured = std.Io.Writer.Allocating.init(r.allocator);
+        var column: usize = 0;
+        var inner = Runner{
+            .ev = r.ev,
+            .out = .{ .writer = &captured.writer, .column = &column },
+            .allocator = r.allocator,
+            .outer = r.outer,
+        };
+        if (try runNodes(&inner, segment, args) != .normal) break;
+        try texts.append(r.allocator, captured.written());
+    }
+
+    var written: usize = 0;
+    for (texts.items) |text| written += utf8Count(text);
+
+    const gaps = try paddingPoints(r, directive, texts.items.len);
+    var points: usize = 0;
+    for (gaps) |gap| {
+        if (gap) points += 1;
+    }
+
+    var width = mincol;
+    const needed = written + minpad * points;
+    while (width < needed) width += colinc;
+    const spread = width - written;
+
+    var given: usize = 0;
+    var index: usize = 0;
+    while (index < gaps.len) : (index += 1) {
+        if (gaps[index]) {
+            given += 1;
+            try r.out.repeat(padchar, gapWidth(spread, points, given));
+        }
+        if (index < texts.items.len) try r.out.writeText(texts.items[index]);
     }
     return .normal;
+}
+
+/// `~<prefix~;body~;suffix~:>`: the body runs over the one argument the
+/// directive takes, which is a list of what to print. `:` on the opening
+/// directive makes the prefix and suffix parentheses.
+///
+/// Line breaking is the pretty printer's, and nothing here breaks lines,
+/// so what this settles is the argument list the body reads and the text
+/// that goes around it.
+fn runLogicalBlock(r: *Runner, j: Justification, args: *Args) Error!Flow {
+    var items: std.ArrayList(Value) = .empty;
+    if (j.directive.at) {
+        // `~@<` hands the block what is left of the argument list.
+        try items.appendSlice(r.allocator, args.items[args.index..]);
+        args.index = args.items.len;
+    } else {
+        const object = try args.next();
+        if (!object.isCons() and !object.equalsRaw(value.NIL)) {
+            try r.out.writeText(try render(r, object, prin1Settings(r.ev)));
+            return .normal;
+        }
+        try collectList(r, object, &items);
+    }
+    var cursor = Args{ .items = items.items };
+
+    const body_at = if (j.segments.len > 1) @as(usize, 1) else 0;
+    const has_suffix = j.segments.len > 2;
+    if (body_at == 1) {
+        _ = try runNodes(r, j.segments[0], &cursor);
+    } else if (j.directive.colon) {
+        try r.out.writeChar('(');
+    }
+
+    const flow = try runNodes(r, j.segments[body_at], &cursor);
+
+    if (has_suffix) {
+        _ = try runNodes(r, j.segments[2], &cursor);
+    } else if (body_at == 0 and j.directive.colon) {
+        try r.out.writeChar(')');
+    }
+    return if (flow == .escape_all) .escape_all else .normal;
+}
+
+/// Where the padding points fall: one slot per position, from before the
+/// first segment to after the last.
+fn paddingPoints(r: *Runner, directive: Directive, segments: usize) Error![]bool {
+    const gaps = try r.allocator.alloc(bool, segments + 1);
+    @memset(gaps, false);
+    var index: usize = 1;
+    while (index + 1 <= segments) : (index += 1) gaps[index] = true;
+    if (directive.colon) gaps[0] = true;
+    if (directive.at) gaps[segments] = true;
+    for (gaps) |gap| {
+        if (gap) return gaps;
+    }
+    // A lone segment with neither modifier is right-justified.
+    gaps[0] = true;
+    return gaps;
+}
+
+/// The `given`th of `points` padding points, sharing `spread` between
+/// them with what does not divide going to the leftmost.
+fn gapWidth(spread: usize, points: usize, given: usize) usize {
+    if (points == 0) return 0;
+    const each = spread / points;
+    const extra = spread % points;
+    return each + @intFromBool(given <= extra);
 }
 
 /// `~A` / `~S`: print the argument, then pad to `mincol` in `colinc` steps.
@@ -579,7 +764,11 @@ fn printPadded(r: *Runner, directive: Directive, args: *Args, settings: printer.
     const padchar: u21 = @intCast(try r.param(directive, 3, args, ' '));
     const arg = try args.next();
 
-    const text = try render(r, arg, settings);
+    // `~:A` and `~:S` print an empty list as `()` rather than as `nil`.
+    const text = if (directive.colon and arg.equalsRaw(value.NIL))
+        "()"
+    else
+        try render(r, arg, settings);
     var pad: i64 = minpad;
     const width: i64 = @intCast(utf8Count(text));
     while (width + pad < mincol) pad += colinc;
@@ -591,28 +780,70 @@ fn printPadded(r: *Runner, directive: Directive, args: *Args, settings: printer.
 }
 
 fn render(r: *Runner, v: Value, settings: printer.Settings) Error![]const u8 {
+    // A condition prints as its report where nothing asked for output
+    // that reads back, which is what `~A` and `princ` want of it.
+    if (!settings.escape) {
+        if (try conditionReport(r.ev, r.allocator, v)) |text| return text;
+    }
     var rendered = std.Io.Writer.Allocating.init(r.allocator);
     try printer.write(r.allocator, &rendered.writer, v, settings);
     return rendered.written();
 }
 
-/// `~D`: decimal, right-aligned in `mincol`, with `:` grouping digits.
-fn printDecimal(r: *Runner, directive: Directive, args: *Args) Error!void {
-    const mincol = try r.param(directive, 0, args, 0);
-    const padchar: u21 = @intCast(try r.param(directive, 1, args, ' '));
-    const comma: u8 = @intCast(try r.param(directive, 2, args, ','));
-    const interval: usize = @intCast(@max(try r.param(directive, 3, args, 3), 1));
+/// What a condition's report function writes, or null where its class
+/// has none. The report is handed `t` for its stream and what it writes
+/// there is captured, the way a `~/name/` call's output is.
+pub fn conditionReport(
+    ev: *Evaluator,
+    allocator: std.mem.Allocator,
+    v: Value,
+) Error!?[]const u8 {
+    if (!proto_class.isInstance(ev, v)) return null;
+    const report = proto_class.inheritedReport(proto_class.classOf(v));
+    if (report.equalsRaw(value.NIL)) return null;
+
+    var captured = std.Io.Writer.Allocating.init(allocator);
+    const saved_out = ev.out;
+    const saved_column = ev.output_column;
+    ev.out = &captured.writer;
+    ev.output_column = 0;
+    defer {
+        ev.out = saved_out;
+        ev.output_column = saved_column;
+    }
+    _ = try ev.callFunction(report, &.{ v, value.T });
+    return captured.written();
+}
+
+/// `~D`, `~B`, `~O`, `~X` and the radix form of `~R`: the integer in
+/// `base`, right-aligned in `mincol`, with `:` grouping digits. `~R`
+/// spends its first parameter on the radix, so its remaining four start
+/// at `offset`.
+fn printRadix(
+    r: *Runner,
+    directive: Directive,
+    args: *Args,
+    base: u8,
+    offset: usize,
+) Error!void {
+    const mincol = try r.param(directive, offset, args, 0);
+    const padchar: u21 = @intCast(try r.param(directive, offset + 1, args, ' '));
+    const comma: u21 = @intCast(try r.param(directive, offset + 2, args, ','));
+    const interval: usize = @intCast(@max(try r.param(directive, offset + 3, args, 3), 1));
     const arg = try args.next();
 
     var text: std.ArrayList(u8) = .empty;
-    if (!arg.isFixnum()) {
-        // CLHS 22.3.2: a non-integer prints as if by ~A, still padded.
-        try text.appendSlice(r.allocator, try render(r, arg, princSettings(r.ev)));
+    if (!isInteger(arg)) {
+        // CLHS 22.3.2: a non-integer prints as if by ~A in this base.
+        var settings = princSettings(r.ev);
+        settings.base = base;
+        settings.radix = false;
+        try text.appendSlice(r.allocator, try render(r, arg, settings));
     } else {
-        var buf: [32]u8 = undefined;
-        const digits = std.fmt.bufPrint(&buf, "{d}", .{@abs(arg.toFixnum())}) catch
-            return Error.ProgramError;
-        if (arg.toFixnum() < 0) {
+        const printed = try renderInteger(r, arg, base);
+        const negative = printed[0] == '-';
+        const digits = if (negative) printed[1..] else printed;
+        if (negative) {
             try text.append(r.allocator, '-');
         } else if (directive.at) {
             try text.append(r.allocator, '+');
@@ -629,17 +860,35 @@ fn printDecimal(r: *Runner, directive: Directive, args: *Args) Error!void {
     try r.out.writeText(text.items);
 }
 
+fn isInteger(v: Value) bool {
+    if (v.isFixnum()) return true;
+    return v.tag() == .heap and heap.heapType(v) == .bignum;
+}
+
+/// The integer's digits in `base`, sign included, with none of the
+/// printer's radix marker.
+fn renderInteger(r: *Runner, v: Value, base: u8) Error![]const u8 {
+    var settings = princSettings(r.ev);
+    settings.base = base;
+    settings.radix = false;
+    return render(r, v, settings);
+}
+
 /// `~:D` inserts `comma` every `interval` digits.
 fn appendGrouped(
     r: *Runner,
     digits: []const u8,
-    comma: u8,
+    comma: u21,
     interval: usize,
     text: *std.ArrayList(u8),
 ) Error!void {
+    var encoded: [4]u8 = undefined;
+    const width = std.unicode.utf8Encode(comma, &encoded) catch return Error.ProgramError;
     for (digits, 0..) |d, i| {
         const remaining = digits.len - i;
-        if (i != 0 and remaining % interval == 0) try text.append(r.allocator, comma);
+        if (i != 0 and remaining % interval == 0) {
+            try text.appendSlice(r.allocator, encoded[0..width]);
+        }
         try text.append(r.allocator, d);
     }
 }
@@ -721,15 +970,19 @@ fn collectList(r: *Runner, list_v: Value, out: *std.ArrayList(Value)) Error!void
 /// for equality, three for an ascending run.
 fn escape(r: *Runner, directive: Directive, args: *Args) Error!Flow {
     const level: Flow = if (directive.colon) .escape_all else .escape_clause;
-    const given = countParams(directive);
+    // A `v` holding nil stands for a parameter that was not given, so
+    // the parameters are resolved before they are counted.
+    const resolved = try resolveParams(r, directive, args);
+    const given = countParams(resolved);
     if (given == 0) {
-        return if (args.remaining() == 0) level else .normal;
+        const cursor = if (directive.colon) r.outer orelse args else args;
+        return if (cursor.remaining() == 0) level else .normal;
     }
-    const first = try r.param(directive, 0, args, 0);
+    const first = try r.param(resolved, 0, args, 0);
     if (given == 1) return if (first == 0) level else .normal;
-    const second = try r.param(directive, 1, args, 0);
+    const second = try r.param(resolved, 1, args, 0);
     if (given == 2) return if (first == second) level else .normal;
-    const third = try r.param(directive, 2, args, 0);
+    const third = try r.param(resolved, 2, args, 0);
     return if (first <= second and second <= third) level else .normal;
 }
 
@@ -822,6 +1075,9 @@ fn runSublistPass(r: *Runner, body: []const Node, cursor: *Args) Error!Flow {
     var sublist: std.ArrayList(Value) = .empty;
     try collectList(r, try cursor.next(), &sublist);
     var inner = Args{ .items = sublist.items };
+    const saved = r.outer;
+    r.outer = cursor;
+    defer r.outer = saved;
     const flow = try runNodes(r, body, &inner);
     return if (flow == .escape_all) .escape_all else .normal;
 }
@@ -851,7 +1107,9 @@ fn runCall(r: *Runner, call: Call, args: *Args) Error!void {
     try r.out.writeText(captured.written());
 }
 
-/// The name between the slashes, optionally `package:name`, upcased.
+/// The name between the slashes, upcased. CLHS 22.3.5.4: the first colon
+/// or double colon splits the package from the symbol, and any colon
+/// after that belongs to the symbol's name.
 fn resolveCallName(r: *Runner, name: []const u32) Error!Value {
     var upper: std.ArrayList(u8) = .empty;
     for (name) |c| {
@@ -860,7 +1118,573 @@ fn resolveCallName(r: *Runner, name: []const u32) Error!Value {
     }
     const text = upper.items;
 
-    const bare = if (std.mem.lastIndexOfScalar(u8, text, ':')) |colon| text[colon + 1 ..] else text;
-    const sym = r.ev.interner.lookup(bare) orelse return Error.UnboundFunction;
+    var bare = text;
+    var home: ?*package.Package = null;
+    if (std.mem.indexOfScalar(u8, text, ':')) |colon| {
+        var after = colon + 1;
+        if (after < text.len and text[after] == ':') after += 1;
+        home = r.ev.interner.registry.find(text[0..colon]) orelse return Error.NoSuchPackage;
+        bare = text[after..];
+    }
+
+    const sym = if (home) |pkg|
+        (pkg.findSymbol(bare) orelse return Error.UnboundFunction).sym
+    else
+        r.ev.interner.lookup(bare) orelse return Error.UnboundFunction;
     return r.ev.env.lookupFunction(sym) orelse r.ev.unbound(sym, Error.UnboundFunction);
+}
+
+/// `~R`: a radix parameter selects the digit form, and without one the
+/// number is spelled out. `:` gives the ordinal, `@` the Roman numeral,
+/// and `:@` the older Roman form that has no subtractive pairs.
+fn printRoman(r: *Runner, directive: Directive, args: *Args) Error!void {
+    // A `v` holding nil leaves the radix unsaid, which is what asks for
+    // the number in words rather than in digits.
+    const resolved = try resolveParams(r, directive, args);
+    if (resolved.params[0] != .absent) {
+        const base = try r.param(resolved, 0, args, 10);
+        if (base < 2 or base > 36) return Error.ProgramError;
+        return printRadix(r, resolved, args, @intCast(base), 1);
+    }
+    const arg = try args.next();
+    if (!arg.isFixnum()) {
+        // Only a fixnum is spelled out; anything else prints in decimal.
+        var settings = princSettings(r.ev);
+        settings.base = 10;
+        settings.radix = false;
+        return r.out.writeText(try render(r, arg, settings));
+    }
+    const n = arg.toFixnum();
+    var text: std.ArrayList(u8) = .empty;
+    if (resolved.at) {
+        if (n < 1 or n > 4999) return Error.ProgramError;
+        try appendRoman(r, @intCast(n), resolved.colon, &text);
+    } else if (resolved.colon) {
+        try appendOrdinal(r, n, &text);
+    } else {
+        try appendCardinal(r, n, &text);
+    }
+    try r.out.writeText(text.items);
+}
+
+const ROMAN_VALUES = [_]u32{ 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+const ROMAN_DIGITS = [_][]const u8{ "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
+const OLD_ROMAN_VALUES = [_]u32{ 1000, 500, 100, 50, 10, 5, 1 };
+const OLD_ROMAN_DIGITS = [_][]const u8{ "M", "D", "C", "L", "X", "V", "I" };
+
+fn appendRoman(r: *Runner, n: u32, old: bool, text: *std.ArrayList(u8)) Error!void {
+    const values: []const u32 = if (old) &OLD_ROMAN_VALUES else &ROMAN_VALUES;
+    const digits: []const []const u8 = if (old) &OLD_ROMAN_DIGITS else &ROMAN_DIGITS;
+    var left = n;
+    for (values, digits) |v, d| {
+        while (left >= v) : (left -= v) try text.appendSlice(r.allocator, d);
+    }
+}
+
+const ONES = [_][]const u8{
+    "zero",  "one",     "two",     "three",    "four",     "five",     "six",
+    "seven", "eight",   "nine",    "ten",      "eleven",   "twelve",   "thirteen",
+    "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+};
+const TENS = [_][]const u8{
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+};
+/// The ordinal of each name in `ONES`, at the same index.
+const ONES_ORDINAL = [_][]const u8{
+    "zeroth",     "first",       "second",      "third",       "fourth",
+    "fifth",      "sixth",       "seventh",     "eighth",      "ninth",
+    "tenth",      "eleventh",    "twelfth",     "thirteenth",  "fourteenth",
+    "fifteenth",  "sixteenth",   "seventeenth", "eighteenth",  "nineteenth",
+};
+const TENS_ORDINAL = [_][]const u8{
+    "", "", "twentieth", "thirtieth", "fortieth", "fiftieth",
+    "sixtieth", "seventieth", "eightieth", "ninetieth",
+};
+/// Names for each group of three digits, least significant first.
+const SCALE = [_][]const u8{
+    "",            "thousand",    "million",     "billion",     "trillion",
+    "quadrillion", "quintillion", "sextillion",  "septillion",  "octillion",
+    "nonillion",   "decillion",   "undecillion", "duodecillion",
+};
+
+/// Spell out `n` in English, as `~R` does with no radix parameter.
+fn appendCardinal(r: *Runner, n: i64, text: *std.ArrayList(u8)) Error!void {
+    if (n < 0) {
+        try text.appendSlice(r.allocator, "negative ");
+        return appendMagnitude(r, @abs(n), text);
+    }
+    return appendMagnitude(r, @abs(n), text);
+}
+
+fn appendMagnitude(r: *Runner, magnitude: u64, text: *std.ArrayList(u8)) Error!void {
+    if (magnitude == 0) return text.appendSlice(r.allocator, "zero");
+
+    var groups: [SCALE.len]u16 = undefined;
+    var used: usize = 0;
+    var left = magnitude;
+    while (left != 0) : (left /= 1000) {
+        if (used == SCALE.len) return Error.ProgramError;
+        groups[used] = @intCast(left % 1000);
+        used += 1;
+    }
+
+    var written = false;
+    var index = used;
+    while (index > 0) {
+        index -= 1;
+        if (groups[index] == 0) continue;
+        if (written) try text.append(r.allocator, ' ');
+        try appendGroup(r, groups[index], text);
+        if (index != 0) {
+            try text.append(r.allocator, ' ');
+            try text.appendSlice(r.allocator, SCALE[index]);
+        }
+        written = true;
+    }
+}
+
+/// One group of three digits, which is where the hyphen between tens and
+/// ones belongs.
+fn appendGroup(r: *Runner, group: u16, text: *std.ArrayList(u8)) Error!void {
+    const hundreds = group / 100;
+    const rest = group % 100;
+    if (hundreds != 0) {
+        try text.appendSlice(r.allocator, ONES[hundreds]);
+        try text.appendSlice(r.allocator, " hundred");
+        if (rest != 0) try text.append(r.allocator, ' ');
+    }
+    if (rest == 0) return;
+    if (rest < 20) return text.appendSlice(r.allocator, ONES[rest]);
+    try text.appendSlice(r.allocator, TENS[rest / 10]);
+    if (rest % 10 != 0) {
+        try text.append(r.allocator, '-');
+        try text.appendSlice(r.allocator, ONES[rest % 10]);
+    }
+}
+
+/// `~:R`: the cardinal with its last word turned into an ordinal.
+fn appendOrdinal(r: *Runner, n: i64, text: *std.ArrayList(u8)) Error!void {
+    if (n < 0) {
+        try text.appendSlice(r.allocator, "negative ");
+        return appendOrdinalMagnitude(r, @abs(n), text);
+    }
+    return appendOrdinalMagnitude(r, @abs(n), text);
+}
+
+fn appendOrdinalMagnitude(r: *Runner, magnitude: u64, text: *std.ArrayList(u8)) Error!void {
+    if (magnitude == 0) return text.appendSlice(r.allocator, "zeroth");
+    const tail = magnitude % 100;
+    // The ordinal falls on the last word, so everything before the final
+    // group of two digits is spelled out as a cardinal.
+    if (tail == 0) {
+        var cardinal: std.ArrayList(u8) = .empty;
+        try appendMagnitude(r, magnitude, &cardinal);
+        return appendLastWordOrdinal(r, cardinal.items, text);
+    }
+    if (magnitude > 99) {
+        try appendMagnitude(r, magnitude - tail, text);
+        try text.append(r.allocator, ' ');
+    }
+    if (tail < 20) return text.appendSlice(r.allocator, ONES_ORDINAL[tail]);
+    if (tail % 10 == 0) return text.appendSlice(r.allocator, TENS_ORDINAL[tail / 10]);
+    try text.appendSlice(r.allocator, TENS[tail / 10]);
+    try text.append(r.allocator, '-');
+    try text.appendSlice(r.allocator, ONES_ORDINAL[tail % 10]);
+}
+
+/// Turn the final word of a spelled-out cardinal into its ordinal, which
+/// is what a number ending in two zeros needs.
+fn appendLastWordOrdinal(r: *Runner, cardinal: []const u8, text: *std.ArrayList(u8)) Error!void {
+    const split = std.mem.lastIndexOfAny(u8, cardinal, " -") orelse 0;
+    const head = if (split == 0) "" else cardinal[0 .. split + 1];
+    const last = if (split == 0) cardinal else cardinal[split + 1 ..];
+    try text.appendSlice(r.allocator, head);
+    if (std.mem.eql(u8, last, "hundred")) {
+        return text.appendSlice(r.allocator, "hundredth");
+    }
+    for (SCALE[1..]) |name| {
+        if (std.mem.eql(u8, last, name)) {
+            try text.appendSlice(r.allocator, name);
+            return text.appendSlice(r.allocator, "th");
+        }
+    }
+    for (ONES, ONES_ORDINAL) |name, ordinal| {
+        if (std.mem.eql(u8, last, name)) return text.appendSlice(r.allocator, ordinal);
+    }
+    for (TENS, TENS_ORDINAL) |name, ordinal| {
+        if (name.len != 0 and std.mem.eql(u8, last, name)) {
+            return text.appendSlice(r.allocator, ordinal);
+        }
+    }
+    try text.appendSlice(r.allocator, last);
+    try text.appendSlice(r.allocator, "th");
+}
+
+/// `~C`: the character itself, `:` its name where it has one, `@` the
+/// `#\` form the reader takes back.
+fn printCharacter(r: *Runner, directive: Directive, args: *Args) Error!void {
+    const arg = try args.next();
+    if (arg.tag() != .char) return Error.TypeError;
+    const c = arg.toChar();
+    if (directive.at and !directive.colon) {
+        return r.out.writeText(try render(r, arg, prin1Settings(r.ev)));
+    }
+    if (directive.colon) {
+        var buf: [character.NAME_BUFFER]u8 = undefined;
+        if (character.nameForCodeInto(c, &buf)) |name| return r.out.writeText(name);
+        return r.out.writeChar(c);
+    }
+    try r.out.writeChar(c);
+}
+
+// --- floating point ---
+
+/// A real argument, with the width it was printed at: a single-float
+/// reads back from fewer digits than its double expansion carries, and
+/// `~F` has to stop where the value stops being meaningful.
+const Real = struct { x: f64, single: bool };
+
+fn realValue(v: Value) ?Real {
+    if (v.isFixnum()) return .{ .x = equality.toF64(v), .single = false };
+    if (v.tag() != .heap) return null;
+    return switch (heap.heapType(v)) {
+        .single_float => .{ .x = equality.toF64(v), .single = true },
+        .double_float, .bignum, .ratio => .{ .x = equality.toF64(v), .single = false },
+        else => null,
+    };
+}
+
+fn scaled(real: Real, k: i64) Real {
+    return .{ .x = real.x * std.math.pow(f64, 10, @floatFromInt(k)), .single = real.single };
+}
+
+/// The digits of `x` with `precision` places after the point, or the
+/// shortest run that reads back as `x` when `precision` is null. The sign
+/// is not included.
+fn decimalDigits(r: *Runner, real: Real, precision: ?usize) Error![]const u8 {
+    var buf: [4096]u8 = undefined;
+    const options: std.fmt.float.Options = .{ .mode = .decimal, .precision = precision };
+    // A count of places asks for the value's own digits, which the double
+    // an f32 widens to holds exactly. Without one the shortest run that
+    // reads back is wanted, and for an f32 that is shorter.
+    const rendered = if (real.single and precision == null)
+        std.fmt.float.render(&buf, @as(f32, @floatCast(@abs(real.x))), options) catch
+            return Error.ProgramError
+    else
+        std.fmt.float.render(&buf, @abs(real.x), options) catch return Error.ProgramError;
+    var text: std.ArrayList(u8) = .empty;
+    try text.appendSlice(r.allocator, rendered);
+    if (std.mem.indexOfScalar(u8, text.items, '.') == null) {
+        try text.append(r.allocator, '.');
+    }
+    return text.items;
+}
+
+/// Sign, digits, then padding to `width` — the shape `~F`, `~E` and `~$`
+/// all finish with. An `overflow` character replaces the lot when what
+/// was produced is wider than `width`.
+fn padNumber(
+    r: *Runner,
+    body: []const u8,
+    sign: []const u8,
+    width: ?i64,
+    padchar: u21,
+    overflow: ?u21,
+    sign_before_pad: bool,
+) Error!void {
+    const total: i64 = @intCast(utf8Count(body) + sign.len);
+    const w = width orelse {
+        try r.out.writeText(sign);
+        return r.out.writeText(body);
+    };
+    if (total > w) {
+        if (overflow) |c| return r.out.repeat(c, @intCast(w));
+        try r.out.writeText(sign);
+        return r.out.writeText(body);
+    }
+    if (sign_before_pad) try r.out.writeText(sign);
+    try r.out.repeat(padchar, @intCast(w - total));
+    if (!sign_before_pad) try r.out.writeText(sign);
+    try r.out.writeText(body);
+}
+
+fn signText(real: Real, at: bool) []const u8 {
+    // A negative zero prints its sign, which is what reads back as the
+    // same float.
+    if (std.math.signbit(real.x)) return "-";
+    return if (at) "+" else "";
+}
+
+/// `~w,d,k,overflowchar,padcharF`: fixed-format floating point.
+fn printFixed(r: *Runner, directive: Directive, args: *Args) Error!void {
+    const width = try optional(r, directive, 0, args);
+    const places = try optional(r, directive, 1, args);
+    const scale = try r.param(directive, 2, args, 0);
+    const overflow = try optionalChar(r, directive, 3, args);
+    const padchar: u21 = @intCast(try r.param(directive, 4, args, ' '));
+    const arg = try args.next();
+
+    const x = realValue(arg) orelse {
+        // CLHS 22.3.3: a non-real prints as if by ~wD.
+        return writeAsDecimal(r, arg, width);
+    };
+    const value_scaled = scaled(x, scale);
+    const sign = signText(value_scaled, directive.at);
+
+    const digits = if (places) |d|
+        try trimLeadingZero(try decimalDigits(r, value_scaled, @intCast(@max(d, 0))), width, sign.len)
+    else
+        try fitDigits(r, value_scaled, width, sign.len);
+    try padNumber(r, digits, sign, width, padchar, overflow, false);
+}
+
+/// The digits of a `~F` that was given no count of places: as many as the
+/// width leaves, and never none. Where even one place overruns the width,
+/// the zero before the point goes instead.
+fn fitDigits(r: *Runner, x: Real, width: ?i64, sign_len: usize) Error![]const u8 {
+    const shortest = try withFraction(r, try decimalDigits(r, x, null));
+    const w = width orelse return shortest;
+    const room = w - @as(i64, @intCast(sign_len));
+    const point: i64 = @intCast(std.mem.indexOfScalar(u8, shortest, '.').?);
+    const wanted = @max(room - point - 1, 0);
+    if (wanted >= @as(i64, @intCast(shortest.len)) - point - 1) return shortest;
+
+    const rounded = try withFraction(r, try decimalDigits(r, x, @intCast(wanted)));
+    return trimLeadingZero(rounded, w, sign_len);
+}
+
+/// The zero before the point goes when what was produced is wider than
+/// the width allows, which is what makes `~3,2F` of a half print `.50`.
+fn trimLeadingZero(digits: []const u8, width: ?i64, sign_len: usize) Error![]const u8 {
+    const w = width orelse return digits;
+    const total: i64 = @intCast(utf8Count(digits) + sign_len);
+    if (total <= w) return digits;
+    if (digits.len < 2 or digits[0] != '0' or digits[1] != '.') return digits;
+    // Dropping the zero has to leave a digit behind: `0.` would come to
+    // a bare point, which reads back as nothing.
+    if (digits.len == 2) return digits;
+    return digits[1..];
+}
+
+/// A fixed-format number always shows a digit after the point when it was
+/// not told how many to show.
+fn withFraction(r: *Runner, digits: []const u8) Error![]const u8 {
+    if (digits[digits.len - 1] != '.') return digits;
+    var text: std.ArrayList(u8) = .empty;
+    try text.appendSlice(r.allocator, digits);
+    try text.append(r.allocator, '0');
+    return text.items;
+}
+
+fn writeAsDecimal(r: *Runner, arg: Value, width: ?i64) Error!void {
+    var settings = princSettings(r.ev);
+    settings.base = 10;
+    settings.radix = false;
+    const text = try render(r, arg, settings);
+    const w = width orelse return r.out.writeText(text);
+    const printed: i64 = @intCast(utf8Count(text));
+    if (printed < w) try r.out.repeat(' ', @intCast(w - printed));
+    try r.out.writeText(text);
+}
+
+/// A parameter that is meaningfully absent, rather than defaulted.
+fn optional(r: *Runner, directive: Directive, slot: usize, args: *Args) Error!?i64 {
+    if (directive.params[slot] == .absent) return null;
+    const held = try r.param(directive, slot, args, std.math.minInt(i64));
+    return if (held == std.math.minInt(i64)) null else held;
+}
+
+fn optionalChar(r: *Runner, directive: Directive, slot: usize, args: *Args) Error!?u21 {
+    const held = try optional(r, directive, slot, args) orelse return null;
+    if (held < 0 or held > 0x10FFFF) return Error.ProgramError;
+    return @intCast(held);
+}
+
+/// `~w,d,e,k,overflowchar,padchar,exponentcharE`: exponential notation.
+fn printExponential(r: *Runner, directive: Directive, args: *Args) Error!void {
+    const width = try optional(r, directive, 0, args);
+    const places = try optional(r, directive, 1, args);
+    const exp_digits = try optional(r, directive, 2, args);
+    const scale = try r.param(directive, 3, args, 1);
+    const overflow = try optionalChar(r, directive, 4, args);
+    const padchar: u21 = @intCast(try r.param(directive, 5, args, ' '));
+    const marker = try optionalChar(r, directive, 6, args);
+    const arg = try args.next();
+
+    const x = realValue(arg) orelse return writeAsDecimal(r, arg, width);
+    const sign = signText(x, directive.at);
+    const room: ?i64 = if (width) |w| w - @as(i64, @intCast(sign.len)) else null;
+    const body = try exponentialText(r, x, places, exp_digits, scale, marker orelse 'e', room);
+    try padNumber(r, body, sign, width, padchar, overflow, false);
+}
+
+/// The mantissa and exponent of `x`, with `scale` digits ahead of the
+/// point. A scale of one is the default `d.dddEsdd` shape; zero puts the
+/// point first, and a larger scale shifts more digits before it.
+///
+/// `room` is what the width leaves for the whole thing. Without a count
+/// of places the mantissa fills what is left of it once the exponent has
+/// taken its share, and shows one zero after the point where that fits.
+fn exponentialText(
+    r: *Runner,
+    x: Real,
+    places: ?i64,
+    exp_digits: ?i64,
+    scale: i64,
+    marker: u21,
+    room: ?i64,
+) Error![]const u8 {
+    const magnitude = @abs(x.x);
+    var exponent: i64 = 0;
+    if (magnitude != 0) {
+        exponent = @intFromFloat(@floor(@log10(magnitude)));
+        // The logarithm can land either side of a power of ten, so the
+        // mantissa is checked against its range and stepped into it.
+        while (magnitude / std.math.pow(f64, 10, @floatFromInt(exponent)) >= 10) exponent += 1;
+        while (magnitude / std.math.pow(f64, 10, @floatFromInt(exponent)) < 1) exponent -= 1;
+    }
+    const shift = scale - 1;
+    var printed_exponent = exponent - shift;
+    var mantissa = Real{
+        .x = magnitude / std.math.pow(f64, 10, @floatFromInt(printed_exponent)),
+        .single = x.single,
+    };
+
+    var digits = try mantissaDigits(r, mantissa, places, scale);
+    // Rounding can carry the mantissa up to the next power of ten.
+    if (mantissaOverflowed(digits, scale)) {
+        printed_exponent += 1;
+        mantissa.x = magnitude / std.math.pow(f64, 10, @floatFromInt(printed_exponent));
+        digits = try mantissaDigits(r, mantissa, places, scale);
+    }
+
+    var exponent_text: std.ArrayList(u8) = .empty;
+    try appendChar(r, &exponent_text, marker);
+    try exponent_text.append(r.allocator, if (printed_exponent < 0) '-' else '+');
+    var buf: [32]u8 = undefined;
+    const printed = std.fmt.bufPrint(&buf, "{d}", .{@abs(printed_exponent)}) catch
+        return Error.ProgramError;
+    if (exp_digits) |wanted| {
+        var i: i64 = wanted - @as(i64, @intCast(printed.len));
+        while (i > 0) : (i -= 1) try exponent_text.append(r.allocator, '0');
+    }
+    try exponent_text.appendSlice(r.allocator, printed);
+
+    if (places == null) {
+        const left = if (room) |w| w - @as(i64, @intCast(utf8Count(exponent_text.items))) else null;
+        digits = try fitMantissa(r, mantissa, digits, left);
+    }
+
+    var text: std.ArrayList(u8) = .empty;
+    try text.appendSlice(r.allocator, digits);
+    try text.appendSlice(r.allocator, exponent_text.items);
+    return text.items;
+}
+
+fn mantissaDigits(r: *Runner, mantissa: Real, places: ?i64, scale: i64) Error![]const u8 {
+    const d = places orelse return decimalDigits(r, mantissa, null);
+    const before: i64 = @max(scale, 1);
+    return decimalDigits(r, mantissa, @intCast(@max(d - before + 1, 0)));
+}
+
+/// Round the mantissa to what the width leaves it, and show one zero
+/// after the point where there is space for it.
+fn fitMantissa(r: *Runner, mantissa: Real, shortest: []const u8, room: ?i64) Error![]const u8 {
+    const w = room orelse return withFraction(r, shortest);
+    const point: i64 = @intCast(std.mem.indexOfScalar(u8, shortest, '.').?);
+    const fraction: i64 = @as(i64, @intCast(shortest.len)) - point - 1;
+    const wanted = @max(w - point - 1, 0);
+    const digits = if (wanted < fraction)
+        try decimalDigits(r, mantissa, @intCast(wanted))
+    else
+        shortest;
+    if (digits[digits.len - 1] != '.') return digits;
+    if (@as(i64, @intCast(digits.len)) + 1 > w) return digits;
+    return withFraction(r, digits);
+}
+
+/// Whether rounding pushed the mantissa to or past the next power of ten.
+fn mantissaOverflowed(digits: []const u8, scale: i64) bool {
+    const point = std.mem.indexOfScalar(u8, digits, '.') orelse digits.len;
+    const wanted: usize = @intCast(@max(scale, 1));
+    return point > wanted;
+}
+
+fn appendChar(r: *Runner, text: *std.ArrayList(u8), c: u21) Error!void {
+    var buf: [4]u8 = undefined;
+    const width = std.unicode.utf8Encode(c, &buf) catch return Error.ProgramError;
+    try text.appendSlice(r.allocator, buf[0..width]);
+}
+
+/// Every `v` and `#` parameter replaced by what it stands for, so a
+/// directive that has to look at its parameters before running takes
+/// each one off the argument list exactly once. A `v` holding nil counts
+/// as a parameter that was not given.
+fn resolveParams(r: *Runner, directive: Directive, args: *Args) Error!Directive {
+    var resolved = directive;
+    for (&resolved.params, 0..) |*p, slot| {
+        switch (p.*) {
+            .absent, .number => {},
+            .next_arg => {
+                if (args.remaining() != 0 and args.items[args.index].equalsRaw(value.NIL)) {
+                    _ = try args.next();
+                    p.* = .absent;
+                } else {
+                    p.* = .{ .number = try r.param(directive, slot, args, 0) };
+                }
+            },
+            .arg_count => p.* = .{ .number = @intCast(args.remaining()) },
+        }
+    }
+    return resolved;
+}
+
+/// `~G`: fixed format for a number close to one, exponential otherwise.
+/// The choice follows CLHS 22.3.3.3, which reads the magnitude rather
+/// than the printed width.
+fn printGeneral(r: *Runner, directive: Directive, args: *Args) Error!void {
+    const resolved = try resolveParams(r, directive, args);
+    if (args.remaining() == 0) return Error.ProgramError;
+    const arg = args.items[args.index];
+    const x = realValue(arg) orelse {
+        _ = try args.next();
+        return writeAsDecimal(r, arg, try optional(r, resolved, 0, args));
+    };
+    const magnitude = @abs(x.x);
+    const exponent: i64 = if (magnitude == 0) 0 else @intFromFloat(@floor(@log10(magnitude)));
+    const digits = try optional(r, resolved, 1, args) orelse 7;
+    if (magnitude != 0 and (exponent < -1 or exponent >= digits)) {
+        return printExponential(r, resolved, args);
+    }
+    var fixed = resolved;
+    // ~G spends its third parameter on the exponent digits, which the
+    // fixed form has no use for, and its scale factor stays at zero.
+    fixed.params[2] = .absent;
+    fixed.params[3] = fixed.params[4];
+    fixed.params[4] = fixed.params[5];
+    try printFixed(r, fixed, args);
+    // CLHS 22.3.3.3: the fixed form is followed by as many spaces as the
+    // exponent it did not print would have taken.
+    try r.out.repeat(' ', 4);
+}
+
+/// `~d,n,w,padchar$`: a fixed number of places after the point, and at
+/// least `n` digits before it.
+fn printMonetary(r: *Runner, directive: Directive, args: *Args) Error!void {
+    const places: usize = @intCast(try r.count(directive, 0, args, 2));
+    const before: usize = @intCast(try r.count(directive, 1, args, 1));
+    const width = try optional(r, directive, 2, args);
+    const padchar: u21 = @intCast(try r.param(directive, 3, args, ' '));
+    const arg = try args.next();
+
+    const x = realValue(arg) orelse return writeAsDecimal(r, arg, width);
+    const digits = try decimalDigits(r, x, places);
+    const point = std.mem.indexOfScalar(u8, digits, '.').?;
+
+    var body: std.ArrayList(u8) = .empty;
+    var leading = before;
+    while (leading > point) : (leading -= 1) try body.append(r.allocator, '0');
+    try body.appendSlice(r.allocator, digits);
+
+    try padNumber(r, body.items, signText(x, directive.at), width, padchar, null, directive.colon);
 }

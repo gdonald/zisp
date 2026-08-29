@@ -52,6 +52,16 @@ pub fn collect(ev: *Evaluator) !void {
     return collectScoped(ev, scope);
 }
 
+/// Whether this collection may copy.
+///
+/// A collection from inside an allocation runs where Zig locals hold
+/// values, and so does one at the top of a nested `load`'s read-eval
+/// loop: the forms of the file that ran the `load` are still being
+/// evaluated further down the native stack.
+fn mayMove(ev: *const Evaluator) bool {
+    return !ev.heap.collecting and ev.eval_depth == 0;
+}
+
 pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
     // The mutator is stopped for the whole cycle, so what this measures
     // is the pause a program sees rather than the work the collector
@@ -64,11 +74,12 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
     // back into the local. Marking copes with that and moving does not,
     // so nothing is copied: both generations are marked and swept where
     // they stand.
-    if (!ev.heap.collecting) try evacuateNursery(ev);
+    const moving = mayMove(ev);
+    if (moving) try evacuateNursery(ev);
 
     // A moving collection has emptied the nursery by now, so a minor one
     // that got that far has nothing left to mark or sweep.
-    if (scope == .minor and !ev.heap.collecting) {
+    if (scope == .minor and moving) {
         try harvestFinalizers(ev);
         ev.gc_count += 1;
         ev.gc_requested = false;
@@ -202,9 +213,12 @@ fn evacuateNursery(ev: *Evaluator) !void {
     // The cards go first: a tenured object that was made to point at a
     // young one is not reachable from the roots, and the walk no longer
     // descends into the tenured space to find it.
+    evacuate_mod.Evacuator.root_source = "a dirty card";
     try e.scanCards();
     try updateRoots(&e, ev);
+    evacuate_mod.Evacuator.root_source = "a cached macro expansion";
     try updateExpansions(&e, ev);
+    evacuate_mod.Evacuator.root_source = "reachable structure";
     try e.drain();
     e.resolveWeakPointers();
     try e.rebuildTables();
@@ -221,6 +235,7 @@ fn evacuateNursery(ev: *Evaluator) !void {
 /// Every slot a collection may find a value in that nothing else points
 /// at: the symbol table, the environment, and the evaluator's own state.
 fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
+    evacuate_mod.Evacuator.root_source = "the symbol table";
     for (ev.interner.registry.list.items) |pkg| {
         for ([_]*const std.StringHashMapUnmanaged(Value){ &pkg.internal, &pkg.external }) |table| {
             var it = table.valueIterator();
@@ -236,12 +251,15 @@ fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     try e.pushFrame(ev.env.top_function);
     for (ev.env.saved_chains.items) |frame| try e.pushFrame(frame);
 
+    evacuate_mod.Evacuator.root_source = "the Lisp stack";
     var chunk: usize = 0;
     while (chunk < ev.heap.stack.chunkCount()) : (chunk += 1) {
         for (ev.heap.stack.liveMut(chunk)) |*v| try e.update(v);
     }
+    evacuate_mod.Evacuator.root_source = "the value channel";
     for (ev.values.items) |*v| try e.update(v);
     for (ev.transfer_values.items) |*v| try e.update(v);
+    evacuate_mod.Evacuator.root_source = "the evaluator";
     for (ev.pinned.items) |*v| try e.update(v);
     for (ev.finalizers.items) |*entry| {
         try e.update(&entry.object);
@@ -257,6 +275,8 @@ fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     }
     try e.update(&ev.current_form);
     try e.update(&ev.go_target);
+    try e.update(&ev.error_symbol);
+    try e.update(&ev.error_condition);
     var hosts = ev.logical_hosts.valueIterator();
     while (hosts.next()) |v| try e.update(v);
 }
@@ -478,7 +498,9 @@ fn pushEvaluatorState(marker: *mark_mod.Marker, ev: *Evaluator) !void {
     try marker.push(ev.current_form);
     try marker.push(ev.go_target);
     try marker.push(ev.error_symbol);
+    try marker.push(ev.error_condition);
 
     var hosts = ev.logical_hosts.valueIterator();
     while (hosts.next()) |translations| try marker.push(translations.*);
 }
+

@@ -824,7 +824,7 @@ pub const Allocator = struct {
     ///
     /// Cells are all one size and a card covers a whole number of them,
     /// so a dirty card is read without knowing anything about its
-    /// neighbours. A cell on a free list is passed over: its first word
+    /// neighbors. A cell on a free list is passed over: its first word
     /// holds a marker no pair can.
     /// Read every dirty card, cells first and then the objects that
     /// carry a header. The bytes this covers are what the next young

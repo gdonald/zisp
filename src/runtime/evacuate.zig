@@ -74,8 +74,16 @@ pub const Evacuator = struct {
     /// An object the collected heap does not own is followed all the
     /// same. A closure comes off the host allocator, so it sits on no
     /// card and nothing else would record what it captured.
+    pub var root_source: []const u8 = "unknown";
+
     pub fn update(self: *Evacuator, slot: *Value) Error!void {
         const v = slot.*;
+        if (gc.checked) {
+            const a = if (v.isCons()) v.toConsAddr() else if (v.tag() == .heap) v.toHeapAddr() else 0;
+            if (a != 0 and self.heap.objects.owns(a) and gc.isPoisoned(a)) {
+                std.debug.panic("{s} holds a reclaimed object at 0x{x}", .{ root_source, a });
+            }
+        }
         if (v.isSymbol()) return self.visitSymbol(v);
         const address = if (v.isCons())
             v.toConsAddr()

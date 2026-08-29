@@ -38,7 +38,25 @@ pub fn codeForName(name: []const u8) ?u21 {
     for (ALIASES) |entry| {
         if (std.ascii.eqlIgnoreCase(name, entry.name)) return entry.code;
     }
+    if (name.len > 2 and (name[0] == 'U' or name[0] == 'u') and name[1] == '+') {
+        const code = std.fmt.parseInt(u21, name[2..], 16) catch return null;
+        if (code >= CODE_LIMIT) return null;
+        return code;
+    }
     return null;
+}
+
+/// How wide a `U+` name can be, which is what a caller has to hand
+/// `nameForCodeInto`.
+pub const NAME_BUFFER = 10;
+
+/// The name of `code`, or null for a graphic character, which has none.
+/// A non-graphic character with no name of its own is spelled `U+` and
+/// its code, which `codeForName` reads back.
+pub fn nameForCodeInto(code: u21, buf: []u8) ?[]const u8 {
+    if (nameForCode(code)) |name| return name;
+    if (isGraphic(code)) return null;
+    return std.fmt.bufPrint(buf, "U+{X:0>4}", .{code}) catch null;
 }
 
 pub fn nameForCode(code: u21) ?[]const u8 {
@@ -297,7 +315,7 @@ pub fn fullDowncase(c: u21, final: bool) Expansion {
     return Expansion.one(downcase(c));
 }
 
-/// A character that joins to its neighbours in a word, which is what
+/// A character that joins to its neighbors in a word, which is what
 /// decides whether a sigma is final.
 pub fn isCased(c: u21) bool {
     return isAlpha(c) or isCombiningMark(c);
