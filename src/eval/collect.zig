@@ -503,4 +503,3 @@ fn pushEvaluatorState(marker: *mark_mod.Marker, ev: *Evaluator) !void {
     var hosts = ev.logical_hosts.valueIterator();
     while (hosts.next()) |translations| try marker.push(translations.*);
 }
-

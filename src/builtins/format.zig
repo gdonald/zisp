@@ -1182,8 +1182,8 @@ fn appendRoman(r: *Runner, n: u32, old: bool, text: *std.ArrayList(u8)) Error!vo
 }
 
 const ONES = [_][]const u8{
-    "zero",  "one",     "two",     "three",    "four",     "five",     "six",
-    "seven", "eight",   "nine",    "ten",      "eleven",   "twelve",   "thirteen",
+    "zero",     "one",     "two",     "three",     "four",     "five",     "six",
+    "seven",    "eight",   "nine",    "ten",       "eleven",   "twelve",   "thirteen",
     "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
 };
 const TENS = [_][]const u8{
@@ -1191,19 +1191,19 @@ const TENS = [_][]const u8{
 };
 /// The ordinal of each name in `ONES`, at the same index.
 const ONES_ORDINAL = [_][]const u8{
-    "zeroth",     "first",       "second",      "third",       "fourth",
-    "fifth",      "sixth",       "seventh",     "eighth",      "ninth",
-    "tenth",      "eleventh",    "twelfth",     "thirteenth",  "fourteenth",
-    "fifteenth",  "sixteenth",   "seventeenth", "eighteenth",  "nineteenth",
+    "zeroth",    "first",     "second",      "third",      "fourth",
+    "fifth",     "sixth",     "seventh",     "eighth",     "ninth",
+    "tenth",     "eleventh",  "twelfth",     "thirteenth", "fourteenth",
+    "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth",
 };
 const TENS_ORDINAL = [_][]const u8{
-    "", "", "twentieth", "thirtieth", "fortieth", "fiftieth",
+    "",         "",           "twentieth", "thirtieth", "fortieth", "fiftieth",
     "sixtieth", "seventieth", "eightieth", "ninetieth",
 };
 /// Names for each group of three digits, least significant first.
 const SCALE = [_][]const u8{
-    "",            "thousand",    "million",     "billion",     "trillion",
-    "quadrillion", "quintillion", "sextillion",  "septillion",  "octillion",
+    "",            "thousand",    "million",     "billion",      "trillion",
+    "quadrillion", "quintillion", "sextillion",  "septillion",   "octillion",
     "nonillion",   "decillion",   "undecillion", "duodecillion",
 };
 
