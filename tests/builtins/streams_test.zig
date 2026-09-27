@@ -514,12 +514,44 @@ test "format writes to a stream as well as to a string" {
     try testing.expectEqualStrings("to console", fx.aw.written());
 }
 
-test "the output-forcing operations accept a stream and do nothing" {
+test "the output-forcing operations accept a stream and return nil" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try fx.expectNil("(force-output)");
     try fx.expectNil("(finish-output *standard-output*)");
+    try fx.expectNil("(finish-output (make-string-output-stream))");
     try fx.expectNil("(clear-output)");
     try fx.expectErr(Error.WrongArgCount, "(force-output 1 2)");
     try fx.expectErr(Error.TypeError, "(force-output 7)");
+}
+
+test "finish-output and force-output drain what the console has buffered" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var buffer: [64]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&buffer);
+    fx.ev.out = &sink.writer;
+
+    _ = try fx.evalStr("(write-string \"abc\")");
+    try testing.expectEqual(0, sink.count);
+    _ = try fx.evalStr("(finish-output)");
+    try testing.expectEqual(3, sink.count);
+
+    _ = try fx.evalStr("(write-string \"de\" *error-output*)");
+    _ = try fx.evalStr("(force-output *error-output*)");
+    try testing.expectEqual(5, sink.count);
+}
+
+test "finish-output on the console reports a missing or failing sink" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var buffer: [8]u8 = undefined;
+    var failing: std.Io.Writer = .failing;
+    failing.buffer = &buffer;
+    failing.end = 1;
+    fx.ev.out = &failing;
+    try fx.expectErr(Error.WriteFailed, "(finish-output)");
+
+    fx.ev.out = null;
+    try fx.expectErr(Error.NoOutputStream, "(finish-output)");
 }

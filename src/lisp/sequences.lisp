@@ -23,49 +23,6 @@
       ((>= index finish) sequence)
     (setf (elt sequence index) item)))
 
-(defun %seq-match (item element test test-not key)
-  (let ((value (if key (funcall key element) element)))
-    (if test-not
-        (not (funcall test-not item value))
-        (funcall (or test #'eql) item value))))
-
-(defun mismatch (sequence1 sequence2 &key test test-not key from-end
-                                          (start1 0) end1 (start2 0) end2)
-  (let* ((finish1 (%seq-end sequence1 end1))
-         (finish2 (%seq-end sequence2 end2))
-         (length1 (- finish1 start1))
-         (length2 (- finish2 start2))
-         (shared (min length1 length2)))
-    (if from-end
-        (do ((offset 1 (1+ offset)))
-            ((> offset shared)
-             (if (= length1 length2) nil (- finish1 (min length1 length2))))
-          (unless (%seq-match (elt sequence1 (- finish1 offset))
-                              (elt sequence2 (- finish2 offset))
-                              test test-not key)
-            (return (1+ (- finish1 offset)))))
-        (do ((offset 0 (1+ offset)))
-            ((>= offset shared)
-             (if (= length1 length2) nil (+ start1 shared)))
-          (unless (%seq-match (elt sequence1 (+ start1 offset))
-                              (elt sequence2 (+ start2 offset))
-                              test test-not key)
-            (return (+ start1 offset)))))))
-
-(defun search (pattern sequence &key test test-not key from-end
-                                     (start1 0) end1 (start2 0) end2)
-  (let* ((finish1 (%seq-end pattern end1))
-         (finish2 (%seq-end sequence end2))
-         (width (- finish1 start1))
-         (last-start (- finish2 width))
-         (found nil))
-    (do ((origin start2 (1+ origin)))
-        ((> origin last-start) found)
-      (when (null (mismatch pattern sequence :test test :test-not test-not :key key
-                            :start1 start1 :end1 finish1
-                            :start2 origin :end2 (+ origin width)))
-        (if from-end (setq found origin) (return origin))))))
-
 (defun make-sequence (type size &key initial-element)
   (cond ((member type '(list cons)) (make-list size :initial-element initial-element))
         ((member type '(string simple-string base-string simple-base-string))
@@ -112,7 +69,7 @@
 
 (defsetf readtable-case %set-readtable-case)
 
-(export '(replace fill mismatch search make-sequence
+(export '(replace fill make-sequence
           substitute-if substitute-if-not nsubstitute-if nsubstitute-if-not
           constantly complement))
 

@@ -57,6 +57,10 @@ pub fn toF64(v: Value) f64 {
 }
 
 pub fn numEqual(a: Value, b: Value) bool {
+    // A real equals a complex whose imaginary part is zero.
+    if (heap.isComplex(a) or heap.isComplex(b)) {
+        return numEqual(realPart(a), realPart(b)) and numEqual(imagPart(a), imagPart(b));
+    }
     // Two integers compare exactly; going through f64 would lose the low
     // bits of anything past 2^53.
     if (bignum.isInteger(a) and bignum.isInteger(b)) {
@@ -65,6 +69,14 @@ pub fn numEqual(a: Value, b: Value) bool {
         return lhs.view(a).eql(rhs.view(b));
     }
     return toF64(a) == toF64(b);
+}
+
+fn realPart(v: Value) Value {
+    return if (heap.isComplex(v)) heap.asComplex(v).realpart else v;
+}
+
+fn imagPart(v: Value) Value {
+    return if (heap.isComplex(v)) heap.asComplex(v).imagpart else Value.fromFixnum(0);
 }
 
 /// `eql`, plus structural comparison of conses and strings.

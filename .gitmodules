@@ -1,3 +1,4 @@
 [submodule "vendor/ansi-test"]
 	path = vendor/ansi-test
 	url = https://gitlab.common-lisp.net/ansi-test/ansi-test.git
+	ignore = untracked

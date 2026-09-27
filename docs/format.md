@@ -52,16 +52,26 @@ is 1, or the `y`/`ies` pair with `@`. `:` re-reads the previous argument.
 `~_`, `~I` and `~<...~:>` are the pretty printer's conditional newline,
 indentation and logical block.
 
+A logical block reads the elements of its list argument in turn. It
+stops at `*print-length*` and writes `...`, and at a tail that is not a
+list and writes it after a dot. Under `*print-circle*` a tail that is
+shared structure is written after a dot as `#n#`, and the elements the
+block prints share its labels.
+
 ## Control
 
 `~[...~]` picks one clause by an index, by truth with `:`, or runs its
 one clause only for a true argument with `@`. `~{...~}` repeats its body
 over a list, drawing from the remaining arguments with `@` and treating
-each element as its own argument list with `:`. `~^` leaves the enclosing
-clause when the arguments run out, and `~:^` the whole iteration.
+each element as its own argument list with `:`. Closing it with `~:}`
+runs the body once even when there are no arguments. An empty body takes
+its control from the next argument, which may be a string or a function
+such as `formatter` returns. `~^` leaves the enclosing clause when the
+arguments run out, and `~:^` the whole iteration.
 
 `~*` skips an argument, `~:*` backs up, `~@*` jumps to an index. `~?`
-takes a control string and an argument list and runs them here.
+takes a control string or function and an argument list and runs them
+here.
 `~(...~)` converts the case of what its body wrote. `~/name/` calls a
 function with the stream, the argument and the modifiers.
 

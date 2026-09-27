@@ -178,14 +178,54 @@ pub fn build(b: *std.Build) void {
     const boyer_step = b.step("boyer", "Measure the collector against cl-bench's Boyer benchmark");
     boyer_step.dependOn(&boyer_run.step);
 
-    // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh.
-    // The harness needs the binary built first; depend on the install step
-    // and pass ZISP=... so the script doesn't have to guess the path.
+    // The ansi-test harnesses run a ReleaseSafe zisp whatever -Doptimize
+    // says. A Debug build records a stack trace on every allocation, which
+    // makes the suite take minutes where this takes seconds, and safety
+    // checks stay on.
+    const suite_runtime = b.createModule(.{
+        .root_source_file = b.path("src/runtime.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options_module },
+        },
+    });
+    const suite_exe = b.addExecutable(.{
+        .name = "zisp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+            .imports = &.{
+                .{ .name = "zisp", .module = suite_runtime },
+                .{ .name = "cli", .module = b.createModule(.{
+                    .root_source_file = b.path("src/cli.zig"),
+                    .target = target,
+                    .optimize = .ReleaseSafe,
+                }) },
+            },
+        }),
+    });
+    const suite_dir: std.Build.InstallDir = .{ .custom = "suite" };
+    const suite_install = b.addInstallArtifact(suite_exe, .{ .dest_dir = .{ .override = suite_dir } });
+    const suite_path = b.getInstallPath(suite_dir, "zisp");
+
+    // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh,
+    // passing ZISP=... so the script doesn't have to guess the path.
     const ansi_run = b.addSystemCommand(&.{ "bash", "tests/run-ansi.sh" });
-    ansi_run.setEnvironmentVariable("ZISP", b.getInstallPath(.bin, "zisp"));
-    ansi_run.step.dependOn(b.getInstallStep());
+    ansi_run.setEnvironmentVariable("ZISP", suite_path);
+    ansi_run.step.dependOn(&suite_install.step);
     const ansi_step = b.step("ansi-test", "Run the ANSI Common Lisp test suite");
     ansi_step.dependOn(&ansi_run.step);
+
+    // `zig build rt-tests -- format typep` runs the named rt slices
+    // through tests/run-rt-tests.sh.
+    const rt_run = b.addSystemCommand(&.{ "bash", "tests/run-rt-tests.sh" });
+    rt_run.setEnvironmentVariable("ZISP", suite_path);
+    rt_run.step.dependOn(&suite_install.step);
+    if (b.args) |args| rt_run.addArgs(args);
+    const rt_step = b.step("rt-tests", "Run rt-based ansi-test slices: zig build rt-tests -- <slice>...");
+    rt_step.dependOn(&rt_run.step);
 
     // -Dansi-tests=true: fold ansi-test into the default build.
     if (ansi_tests) {

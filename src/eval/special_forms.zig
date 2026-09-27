@@ -151,7 +151,7 @@ fn lambda(ev: *Evaluator, args: Value) Error!Value {
     const params = heap.car(args);
     const body = heap.cdr(args);
     try validateParams(ev, params);
-    env_mod.Frame.markCaptured(ev.env.top_value);
+    try ev.env.captureCurrent();
     return ev.set1(try function.allocClosure(
         ev.heap.allocator,
         null,
@@ -195,7 +195,8 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
         const params = heap.car(after_name);
         const fn_body = heap.cdr(after_name);
         try validateParams(ev, params);
-        env_mod.Frame.markCaptured(ev.env.top_value);
+        try ev.env.retainChain(ev.env.top_value);
+        try ev.env.retainChain(captured_fenv);
         const closure = try function.allocClosure(
             ev.heap.allocator,
             symbol_mod.symbol(name).name,
@@ -240,7 +241,7 @@ fn defun(ev: *Evaluator, args: Value) Error!Value {
     const body = heap.cdr(after_name);
     try lambda_list.validate(ev, params, false);
 
-    env_mod.Frame.markCaptured(ev.env.top_value);
+    try ev.env.captureCurrent();
     const closure = try function.allocClosure(
         ev.heap.allocator,
         symbol_mod.symbol(name).name,
@@ -267,6 +268,7 @@ fn defmacro(ev: *Evaluator, args: Value) Error!Value {
     try lambda_list.validate(ev, params, true);
 
     const def_pos = if (ev.positions) |table| table.lookup(def_form) else null;
+    try ev.env.captureCurrent();
     const expander = try function.allocMacro(
         ev.heap.allocator,
         symbol_mod.symbol(name).name,

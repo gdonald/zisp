@@ -21,16 +21,6 @@ pub const Frame = struct {
         if (self.map) |*m| m.deinit(allocator);
     }
 
-    /// Mark this frame and its parents as captured, stopping at the first
-    /// frame already marked, since everything above it is marked too.
-    pub fn markCaptured(frame: ?*Frame) void {
-        var current = frame;
-        while (current) |f| : (current = f.parent) {
-            if (f.captured) return;
-            f.captured = true;
-        }
-    }
-
     pub fn reset(self: *Frame) void {
         self.symbols.clearRetainingCapacity();
         self.values.clearRetainingCapacity();
@@ -112,7 +102,10 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     top_value: ?*Frame = null,
     top_function: ?*Frame = null,
-    all_frames: std.ArrayList(*Frame) = .empty,
+    /// Frames a closure captured. They outlive the scope that pushed them,
+    /// so the env owns them until it is torn down. Every other frame is
+    /// freed when its scope pops it.
+    captured_frames: std.ArrayList(*Frame) = .empty,
     /// Chains a call in flight set aside while it runs. They are not
     /// reachable from `top_value` or `top_function` for as long as the
     /// call lasts, so a root scan reads them from here.
@@ -123,11 +116,10 @@ pub const Env = struct {
     }
 
     pub fn deinit(self: *Env) void {
-        for (self.all_frames.items) |f| {
-            f.deinit(self.allocator);
-            self.allocator.destroy(f);
-        }
-        self.all_frames.deinit(self.allocator);
+        self.releaseChain(self.top_value);
+        self.releaseChain(self.top_function);
+        for (self.captured_frames.items) |f| self.destroyFrame(f);
+        self.captured_frames.deinit(self.allocator);
         self.saved_chains.deinit(self.allocator);
         self.top_value = null;
         self.top_function = null;
@@ -150,10 +142,43 @@ pub const Env = struct {
 
     fn allocFrame(self: *Env, parent: ?*Frame) !*Frame {
         const f = try self.allocator.create(Frame);
-        errdefer self.allocator.destroy(f);
         f.* = .{ .parent = parent };
-        try self.all_frames.append(self.allocator, f);
         return f;
+    }
+
+    fn destroyFrame(self: *Env, f: *Frame) void {
+        f.deinit(self.allocator);
+        self.allocator.destroy(f);
+    }
+
+    /// Free a frame whose scope has ended, unless a closure captured it.
+    pub fn releaseFrame(self: *Env, f: *Frame) void {
+        if (!f.captured) self.destroyFrame(f);
+    }
+
+    fn releaseChain(self: *Env, head: ?*Frame) void {
+        var current = head;
+        while (current) |f| {
+            current = f.parent;
+            self.releaseFrame(f);
+        }
+    }
+
+    /// Mark a chain as captured, stopping at the first frame already
+    /// marked, since everything above it is marked too.
+    pub fn retainChain(self: *Env, head: ?*Frame) !void {
+        var current = head;
+        while (current) |f| : (current = f.parent) {
+            if (f.captured) return;
+            try self.captured_frames.append(self.allocator, f);
+            f.captured = true;
+        }
+    }
+
+    /// Mark both current chains as captured, for a closure made here.
+    pub fn captureCurrent(self: *Env) !void {
+        try self.retainChain(self.top_value);
+        try self.retainChain(self.top_function);
     }
 
     pub fn pushValueFrame(self: *Env) !*Frame {
@@ -165,6 +190,7 @@ pub const Env = struct {
     pub fn popValueFrame(self: *Env) void {
         const f = self.top_value orelse return;
         self.top_value = f.parent;
+        self.releaseFrame(f);
     }
 
     pub fn pushFunctionFrame(self: *Env) !*Frame {
@@ -176,6 +202,7 @@ pub const Env = struct {
     pub fn popFunctionFrame(self: *Env) void {
         const f = self.top_function orelse return;
         self.top_function = f.parent;
+        self.releaseFrame(f);
     }
 
     pub fn setValueChain(self: *Env, head: ?*Frame) ?*Frame {

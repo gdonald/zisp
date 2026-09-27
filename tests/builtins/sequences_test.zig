@@ -374,3 +374,68 @@ test "sort and merge check their argument counts" {
     try fx.expectErr(Error.WrongArgCount, "(merge 'list (list 1) (list 2))");
     try fx.expectErr(Error.ProgramError, "(sort (list 1) #'< :test #'<)");
 }
+
+test "mismatch returns the first differing index in the first sequence" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectNil("(mismatch '(1 2) '(1 2))");
+    try fx.expectFix("(mismatch '(1 2) #(1 3))", 1);
+    try fx.expectFix("(mismatch \"abc\" \"ab\")", 2);
+    try fx.expectFix("(mismatch \"ab\" \"abc\")", 2);
+    try fx.expectNil("(mismatch '(1 2 3) '(9 2 3) :start1 1 :start2 1)");
+    try fx.expectFix("(mismatch '(0 1 2 3) '(1 2 4) :start1 1 :end2 2)", 3);
+}
+
+test "mismatch with :from-end returns one past the rightmost difference" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(mismatch \"abc\" \"bc\" :from-end t)", 1);
+    try fx.expectFix("(mismatch \"axc\" \"abc\" :from-end t)", 2);
+    try fx.expectNil("(mismatch \"abc\" \"abc\" :from-end t)");
+}
+
+test "mismatch applies :key to both sequences and honors :test and :test-not" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectNil("(mismatch '(1 2) '(-1 -2) :key #'abs)");
+    try fx.expectNil("(mismatch \"ab\" \"AB\" :test #'char-equal)");
+    try fx.expectFix("(mismatch '(1 2) '(2 2) :test-not #'eql)", 1);
+}
+
+test "mismatch and search check their arguments" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.WrongArgCount, "(mismatch '(1))");
+    try fx.expectErr(Error.WrongArgCount, "(search '(1))");
+    try fx.expectErr(Error.TypeError, "(mismatch '(1) 7)");
+    try fx.expectErr(Error.TypeError, "(search 7 '(1))");
+    try fx.expectErr(Error.TypeError, "(search '(1) '(1) :start2 5)");
+    try fx.expectErr(Error.TypeError, "(mismatch '(1) '(1) :end1 5)");
+    try fx.expectErr(Error.ProgramError, "(search '(1) '(1) :start 0)");
+}
+
+test "search returns where the first sequence occurs in the second" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(search \"bc\" \"abcd\")", 1);
+    try fx.expectNil("(search \"zz\" \"abcd\")");
+    try fx.expectNil("(search \"abcde\" \"abcd\")");
+    try fx.expectFix("(search \"\" \"abc\")", 0);
+    try fx.expectFix("(search '(2 3) #(1 2 3))", 1);
+    try fx.expectFix("(search \"xbcx\" \"abcbc\" :start1 1 :end1 3 :start2 2)", 3);
+}
+
+test "search with :from-end returns the rightmost occurrence" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(search \"a\" \"aaa\" :from-end t)", 2);
+    try fx.expectFix("(search \"ab\" \"abab\" :from-end t :end2 3)", 0);
+    try fx.expectNil("(search \"q\" \"abc\" :from-end t)");
+}
+
+test "search applies :key and :test" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFix("(search '(2) '(1 -2) :key #'abs)", 1);
+    try fx.expectFix("(search \"B\" \"abc\" :test #'char-equal)", 1);
+}

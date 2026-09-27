@@ -116,8 +116,8 @@ the condition is built:
 
 A condition an `error` builds rides through the unwind on the evaluator,
 so `%catch-error` and `ignore-errors` hand back the object itself rather
-than a name. A failure a native raised carries no object, so those two
-hand back the keyword and `%coerce-caught` builds a condition of the type
+than a name. A failure a native raised where no handler was established
+carries no object, so those two hand back the keyword and `%coerce-caught` builds a condition of the type
 `*native-condition-types*` maps that name to. Either way what a handler
 sees is a condition it can dispatch on and read slots from.
 
@@ -137,8 +137,15 @@ reaching that handler again.
 `handler-case` is `handler-bind` around a `tagbody`: its handler records
 the condition and jumps out, so the clause body runs after the unwind
 rather than inside the handler's extent. It also wraps the body in
-`%catch-error`, since a failure a native raised never went through the
-clusters and can only be caught on the way out.
+`%catch-error`, which is where a failure that unwinds past every handler
+is caught.
+
+A failure a native raised goes through the clusters as well. When it
+unwinds out of `eval`, the evaluator builds its condition with
+`%coerce-caught` and hands it to `%run-handlers`. If every handler
+declines, the condition is left in `error_condition`, so the frames
+further out pass it on without offering it again and `%catch-error`
+hands back that same object.
 
 ## What CLOS deletes
 

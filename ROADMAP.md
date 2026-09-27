@@ -293,7 +293,7 @@ Phase 4: Core Data Types
 
 Fill out the type system so real CL programs can load.
 
-- [ ] 4.1. Strings
+- [x] 4.1. Strings
   - [x] 4.1.1. `simple-string` (immutable-by-convention, contiguous)
   - [x] 4.1.2. `string` (mutable, may have fill pointer)
   - [x] 4.1.3. `make-string`, `string=`, `string-equal`, `string<`
@@ -302,7 +302,7 @@ Fill out the type system so real CL programs can load.
   - [x] 4.1.6. `string-trim`, `string-left-trim`, `string-right-trim`
   - [x] 4.1.7. `concatenate 'string ...`
   - [x] 4.1.8. `format` — at least `~A`, `~S`, `~D`, `~%`, `~~`, `~*`, `~&`, `~T`
-  - [ ] 4.1.9. `format` advanced directives: `~[`, `~]`, `~{`, `~}`, `~^`, `~?`, `~/foo:bar/`. Acceptance: `vendor/ansi-test/printer/format*.lsp` pass rate ≥ 90%. NOT deferrable: "later" was the historic bail surface
+  - [x] 4.1.9. `format` advanced directives: `~[`, `~]`, `~{`, `~}`, `~^`, `~?`, `~/foo:bar/`. Acceptance: `vendor/ansi-test/printer/format*.lsp` pass rate ≥ 90%. NOT deferrable: "later" was the historic bail surface
 - [x] 4.2. Sequences (generic over lists/vectors/strings)
   - [x] 4.2.1. `length`, `elt`, `(setf elt)`, `subseq`, `copy-seq`
   - [x] 4.2.2. `map`, `map-into`
@@ -509,7 +509,7 @@ Common Lisp's condition system is more powerful than exceptions in most language
   - [ ] 6.4.4d. Standard restarts `store-value`, `use-value` — establishment by `signal`/`error`; differ in whether the value is stored back at the source or just used
   - [ ] 6.4.5. `with-condition-restarts` associates a restart set with a specific condition object so `compute-restarts` can filter by condition. Acceptance: 5 cases in `tests/lisp/with-condition-restarts.lisp` — establish 3 restarts under `with-condition-restarts` for condition A, signal A and B; `compute-restarts` for A returns the associated subset; for B returns only the unassociated restarts; restarts established outside `with-condition-restarts` are visible to all conditions
 - [ ] 6.5. Debugger
-  - [ ] 6.5.1. `*debugger-hook*`
+  - [x] 6.5.1. `*debugger-hook*`
   - [ ] 6.5.2. Default debugger. Split into 6 milestones:
     - [ ] 6.5.2a. Debugger entry banner: prints condition report (via `format`; `print-object` once 7.5.1 lands), lists numbered restarts with their reports, prompts `Debug>`. `tests/lisp/debugger-banner.lisp` asserts exact output for 3 conditions
     - [ ] 6.5.2b. Integer input selects restart by index. 1 scripted session

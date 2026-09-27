@@ -9,16 +9,13 @@
 #         tests/run-ansi.sh --read-only            # all categories
 #         tests/run-ansi.sh --read-only reader     # one category
 #
-#   2. Full eval: load every .lsp under a category and count how many load
-#      and run to completion without error.
+#   2. Full eval: bring up the rt framework, load every .lsp under a
+#      category, run its tests, and count how many pass.
 #         tests/run-ansi.sh                        # all categories
 #         tests/run-ansi.sh cons numbers           # selected categories
-#      The rt-based (do-tests) play depends on the macro and package layers;
-#      until those land, this sweep measures the load rate, which is the
-#      meaningful pre-rt signal (analogous to the reader-only parse rate).
 #
 # Common options:
-#   VERBOSE=1 tests/run-ansi.sh ...               # show per-file lines
+#   VERBOSE=1 tests/run-ansi.sh ...               # show the rt output
 #   ZISP=/path/to/zisp tests/run-ansi.sh ...      # override binary path
 #
 # Output:
@@ -29,6 +26,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZISP="${ZISP:-$ROOT/zig-out/bin/zisp}"
 SUITE="$ROOT/vendor/ansi-test"
+PRELUDE="$ROOT/tests/lisp/ansi-rt.lisp"
 VERBOSE="${VERBOSE:-0}"
 
 READ_ONLY=0
@@ -124,39 +122,34 @@ else
   selected=("${CATEGORIES[@]}")
 fi
 
-# Eval-mode sweep: load each .lsp under the category in batch mode. If zisp
-# emits a do-tests `PASS=N FAIL=M` tally, accumulate those per-test counts;
-# otherwise a clean load counts as one pass and a failing load as one fail.
-# Once the rt framework loads (after the macro and package layers) the tally
-# appears and the counts sharpen without any harness change.
+# Eval-mode sweep: one zisp per category brings the rt framework up with
+# tests/lisp/ansi-rt.lisp, loads every .lsp under the category, runs the
+# tests they registered, and prints an `ANSI-RT` tally of passed and
+# failed tests. A file that will not load counts its tests as failed.
 run_category() {
   local cat="$1"
   local dir="$SUITE/$cat"
   [[ -d "$dir" ]] || { echo "skip $cat (no $dir)"; return; }
 
-  local pass=0 fail=0
+  local files=()
   while IFS= read -r f; do
-    local ran_ok=1
-    (cd "$SUITE" && "$ZISP" --batch --load "$f") >/tmp/zisp-eval.$$.out 2>&1 || ran_ok=0
-    [[ "$VERBOSE" == "1" ]] && cat /tmp/zisp-eval.$$.out
-
-    # A do-tests run prints a trailing `PASS=N FAIL=M` tally; trust those
-    # per-test counts when present. Before the rt framework loads, no tally
-    # appears and the whole-file load is the unit (one pass or one fail).
-    local tally p m
-    tally="$(grep -oE 'PASS=[0-9]+ FAIL=[0-9]+' /tmp/zisp-eval.$$.out | tail -n1 || true)"
-    if [[ -n "$tally" ]]; then
-      p="${tally#PASS=}"; p="${p%% *}"
-      m="${tally#*FAIL=}"
-      pass=$((pass + p))
-      fail=$((fail + m))
-    elif (( ran_ok )); then
-      pass=$((pass + 1))
-    else
-      fail=$((fail + 1))
-    fi
+    files+=("\"$cat/$(basename "$f")\"")
   done < <(find "$dir" -maxdepth 1 -name '*.lsp' | sort)
-  rm -f /tmp/zisp-eval.$$.out
+
+  local output
+  output="$(cd "$SUITE" && "$ZISP" --batch \
+    --load "$PRELUDE" \
+    --eval "(in-package :cl-test)" \
+    --eval "(run-ansi-files \"$cat\" (list ${files[*]}))" 2>&1)" || true
+  [[ "$VERBOSE" == "1" ]] && echo "$output"
+
+  local pass=0 fail=0 tally
+  tally="$(grep -E "^ANSI-RT $cat [0-9]+ [0-9]+ [0-9]+ [0-9]+$" <<<"$output" | tail -n1 || true)"
+  if [[ -n "$tally" ]]; then
+    read -r _ _ pass fail _ _ <<<"$tally"
+  else
+    fail=${#files[@]}
+  fi
 
   printf "%-26s PASS=%d FAIL=%d\n" "$cat" "$pass" "$fail"
   record_result "$cat" "$pass" "$fail"
@@ -214,7 +207,7 @@ else
   total=$((total_pass + total_fail))
   if (( total > 0 )); then
     pct=$(awk -v p="$total_pass" -v t="$total" 'BEGIN{printf "%.1f", 100*p/t}')
-    echo "Eval summary: $total_pass / $total ($pct%) loaded and ran"
+    echo "Eval summary: $total_pass / $total ($pct%) tests passed"
     print_group_summary
   else
     echo "Eval summary: no files matched"

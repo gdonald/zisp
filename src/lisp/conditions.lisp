@@ -320,10 +320,12 @@ first, and the initform where none did."
 
 (defun %native-condition-initargs (type caught)
   "The slots a condition standing for a native failure can be given. What
-the failure was about is known only for the cell errors, and a type error
-records neither its datum nor the type it wanted."
+the failure was about is known for the cell errors, and for a type error
+whose raise site recorded its datum and the type it wanted."
   (cond ((subtypep type 'cell-error) (list :name (%last-error-symbol)))
-        ((subtypep type 'type-error) (list :datum nil :expected-type nil))
+        ((subtypep type 'type-error)
+         (let ((mismatch (%last-type-mismatch)))
+           (list :datum (car mismatch) :expected-type (cadr mismatch))))
         (t (list :format-control "~A" :format-arguments (list caught)))))
 
 (defun %coerce-caught (caught)
@@ -372,7 +374,7 @@ signals cannot reach it again."
     (when (%break-on-signals-p condition)
       (%raise-condition condition 'ProgramError))
     (%run-handlers condition)
-    (%raise-condition condition (%condition-raise-kind condition))))
+    (invoke-debugger condition)))
 
 (defun %condition-raise-kind (condition)
   "The Zig failure an unhandled condition unwinds as, which is what the
@@ -397,7 +399,16 @@ driver reports when nothing catches it."
   (declare (ignore continue-control))
   (apply #'error datum arguments))
 
+(defvar *debugger-hook* nil)
+
 (defun invoke-debugger (condition)
+  "Hand CONDITION to `*debugger-hook*`, bound to nil while it runs so a
+failure inside the hook does not reach it again. Where there is no hook,
+or the hook returns, the condition unwinds to whatever catches it."
+  (let ((hook *debugger-hook*))
+    (when hook
+      (let ((*debugger-hook* nil))
+        (funcall hook condition hook))))
   (%raise-condition condition (%condition-raise-kind condition)))
 
 ;;; --- handling ---
@@ -476,7 +487,7 @@ is caught on the way out and offered to the clauses there."
      (error (%condition) (values nil %condition))))
 
 (export '(define-condition make-condition conditionp
-          signal error cerror warn invoke-debugger
+          signal error cerror warn invoke-debugger *debugger-hook*
           handler-bind handler-case ignore-errors
           *break-on-signals*
           find-condition-class condition-type-name

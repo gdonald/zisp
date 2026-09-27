@@ -11,7 +11,7 @@ const symbol_mod = zisp.symbol;
 const Evaluator = zisp.eval.Evaluator;
 
 const corpus_path = "tests/lisp/printer-variables.lisp";
-const expected_checks = 21;
+const expected_checks = 27;
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,

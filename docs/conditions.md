@@ -109,9 +109,25 @@ nothing was signaled.
 
 ## Failures from inside the implementation
 
-A failure the implementation raises, `(car 1)` among them, does not pass
-through the handlers established between it and whatever catches it: it
-unwinds first and is turned into a condition on the way out. So
-`handler-case` and `ignore-errors` see it as the type it stands for, a
-`type-error` for that call, while a `handler-bind` handler around it does
-not run. Conditions signaled from Lisp reach `handler-bind` normally.
+A failure the implementation raises, `(car 1)` among them, is turned
+into a condition of the type it stands for, a `type-error` for that
+call, and offered to the `handler-bind` handlers where it was raised,
+before anything unwinds. A handler that declines leaves it to
+`handler-case` or `ignore-errors` further out, which receive the same
+condition object.
+
+## The debugger hook
+
+`invoke-debugger` calls the function in `*debugger-hook*` with the
+condition and the hook itself, binding `*debugger-hook*` to nil while it
+runs. An `error` that no handler takes goes to `invoke-debugger`, so the
+hook sees every unhandled error. A hook usually leaves with a non-local
+exit. Where there is no hook, or the hook returns, the condition unwinds
+to whatever catches it, and the driver reports it if nothing does.
+
+```lisp
+(block done
+  (let ((*debugger-hook* (lambda (c hook) (declare (ignore hook))
+                           (return-from done c))))
+    (error "reported through the hook")))
+```

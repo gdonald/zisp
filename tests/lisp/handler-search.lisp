@@ -109,3 +109,70 @@
 ;; `signal` returns nil where nothing handles it, and the body carries
 ;; on from where it signaled.
 (equal (tracing (lambda () (signal 'search-notice) (note :after))) '(:after))
+
+;; A failure a native raised is offered to `handler-bind` where it was
+;; raised, as the condition type it stands for.
+(eq (block found
+      (handler-bind ((type-error (lambda (c) (declare (ignore c)) (return-from found :bound))))
+        (car 1)))
+    :bound)
+
+;; A handler that declines a native failure leaves it to the next catcher,
+;; which receives the same condition the handler saw, offered only once.
+(equal (let ((seen nil))
+         (list (handler-case (handler-bind ((error (lambda (c) (push c seen))))
+                               (car 1))
+                 (error (c) (eq c (car seen))))
+               (length seen)))
+       '(t 1))
+
+;; A native failure inside a handler is offered to the clusters outside
+;; that handler's own.
+(equal (tracing
+        (lambda ()
+          (handler-bind ((type-error (lambda (c) (declare (ignore c)) (note :outer))))
+            (handler-bind ((search-parent (lambda (c) (declare (ignore c)) (car 1))))
+              (error 'search-child)))))
+       '(:outer))
+
+;; With no handler established, a native failure unwinds to its catcher.
+(null (ignore-errors (car 1)))
+
+;; A native type error whose raise site recorded what it rejected hands
+;; that datum and the type it wanted to the condition.
+(equal (handler-case (format nil "~{~A~}" 'a)
+         (type-error (c) (list (type-error-datum c) (type-error-expected-type c))))
+       '(a list))
+
+;; One that recorded nothing leaves both unset, even right after one that
+;; did.
+(progn
+  (ignore-errors (format nil "~{~A~}" 'a))
+  (equal (handler-case (car 1)
+           (type-error (c) (list (type-error-datum c) (type-error-expected-type c))))
+         '(nil nil)))
+
+;; `invoke-debugger` hands the condition and the hook itself to
+;; `*debugger-hook*`, which is bound to nil while it runs.
+(let ((condition (make-condition 'simple-error)))
+  (eq (block done
+        (let ((*debugger-hook*
+                (lambda (c hook)
+                  (return-from done
+                    (and (eq c condition) (functionp hook) (null *debugger-hook*) :hooked)))))
+          (invoke-debugger condition)))
+      :hooked))
+
+;; An error nothing handles reaches `*debugger-hook*`.
+(eq (block done
+      (let ((*debugger-hook* (lambda (c hook) (declare (ignore hook))
+                               (return-from done (and (typep c 'simple-error) :unhandled)))))
+        (error "nothing handles this")))
+    :unhandled)
+
+;; A hook that returns leaves the condition to unwind.
+(eq (handler-case
+        (let ((*debugger-hook* (lambda (c hook) (declare (ignore c hook)) nil)))
+          (invoke-debugger (make-condition 'simple-error)))
+      (simple-error () :unwound))
+    :unwound)

@@ -49,6 +49,8 @@ pub fn registerSequences(ev: *Evaluator) !void {
     _ = try ev.defineNative("SORT", &sortFn);
     _ = try ev.defineNative("STABLE-SORT", &sortFn);
     _ = try ev.defineNative("MERGE", &mergeFn);
+    _ = try ev.defineNative("MISMATCH", &mismatchFn);
+    _ = try ev.defineNative("SEARCH", &searchFn);
 }
 
 // --- sequence views ---
@@ -182,7 +184,20 @@ fn reverseFn(p: *anyopaque, args: []const Value) Error!Value {
 
 // --- keyword options ---
 
-const OptionKey = enum { key, test_fn, test_not, start, end, from_end, count, initial_value };
+const OptionKey = enum {
+    key,
+    test_fn,
+    test_not,
+    start,
+    end,
+    from_end,
+    count,
+    initial_value,
+    start1,
+    end1,
+    start2,
+    end2,
+};
 const OptionSet = std.EnumSet(OptionKey);
 
 fn keywordName(option: OptionKey) []const u8 {
@@ -195,6 +210,10 @@ fn keywordName(option: OptionKey) []const u8 {
         .from_end => "FROM-END",
         .count => "COUNT",
         .initial_value => "INITIAL-VALUE",
+        .start1 => "START1",
+        .end1 => "END1",
+        .start2 => "START2",
+        .end2 => "END2",
     };
 }
 
@@ -209,6 +228,10 @@ const Options = struct {
     from_end: bool = false,
     count: ?i64 = null,
     initial_value: ?Value = null,
+    start1: usize = 0,
+    end1: ?usize = null,
+    start2: usize = 0,
+    end2: ?usize = null,
 
     fn parse(ev: *Evaluator, args: []const Value, allowed: OptionSet) Error!Options {
         if (args.len % 2 != 0) return Error.WrongArgCount;
@@ -238,14 +261,31 @@ const Options = struct {
             .from_end => self.from_end = !given.equalsRaw(value.NIL),
             .count => self.count = try countLimit(given),
             .initial_value => self.initial_value = given,
+            .start1 => self.start1 = (try boundValue(given, std.math.maxInt(i32))) orelse 0,
+            .end1 => self.end1 = try boundValue(given, std.math.maxInt(i32)),
+            .start2 => self.start2 = (try boundValue(given, std.math.maxInt(i32))) orelse 0,
+            .end2 => self.end2 = try boundValue(given, std.math.maxInt(i32)),
         }
     }
 
     /// Clamp `:start` / `:end` to a sequence of `len` elements.
-    fn region(self: Options, len: usize) Error!struct { start: usize, end: usize } {
-        const end = self.end orelse len;
-        if (self.start > len or end > len or self.start > end) return Error.TypeError;
-        return .{ .start = self.start, .end = end };
+    fn region(self: Options, len: usize) Error!Region {
+        return Region.of(self.start, self.end, len);
+    }
+};
+
+const Region = struct {
+    start: usize,
+    end: usize,
+
+    fn of(start: usize, given_end: ?usize, sequence_length: usize) Error!Region {
+        const end = given_end orelse sequence_length;
+        if (start > sequence_length or end > sequence_length or start > end) return Error.TypeError;
+        return .{ .start = start, .end = end };
+    }
+
+    fn width(self: Region) usize {
+        return self.end - self.start;
     }
 };
 
@@ -755,4 +795,103 @@ fn mergeFn(p: *anyopaque, args: []const Value) Error!Value {
     defer ev.allocator.free(out);
     try mergeRuns(ev, options, pred, left.items.items, right.items.items, out);
     return build(ev, kind, out);
+}
+
+// --- mismatch and search ---
+
+const PAIR_OPTIONS = OptionSet.initMany(&.{
+    .key, .test_fn, .test_not, .from_end, .start1, .end1, .start2, .end2,
+});
+
+/// Whether an element of the first sequence matches one of the second,
+/// with `:key` applied to both.
+fn pairMatches(ev: *Evaluator, options: Options, first: Value, second: Value) Error!bool {
+    return itemMatches(ev, options, try keyed(ev, options, first), second);
+}
+
+/// The two sequences of a `mismatch` or `search` call, materialized, with
+/// the regions their bounding indices select.
+const Pair = struct {
+    options: Options,
+    first: Elements,
+    second: Elements,
+    region1: Region,
+    region2: Region,
+
+    fn of(ev: *Evaluator, args: []const Value) Error!Pair {
+        if (args.len < 2) return Error.WrongArgCount;
+        const options = try Options.parse(ev, args[2..], PAIR_OPTIONS);
+        var first = try Elements.of(ev, args[0]);
+        errdefer first.deinit(ev);
+        var second = try Elements.of(ev, args[1]);
+        errdefer second.deinit(ev);
+        return .{
+            .options = options,
+            .region1 = try Region.of(options.start1, options.end1, first.items.items.len),
+            .region2 = try Region.of(options.start2, options.end2, second.items.items.len),
+            .first = first,
+            .second = second,
+        };
+    }
+
+    fn deinit(self: *Pair, ev: *Evaluator) void {
+        self.first.deinit(ev);
+        self.second.deinit(ev);
+    }
+
+    fn matchesAt(self: Pair, ev: *Evaluator, index1: usize, index2: usize) Error!bool {
+        return pairMatches(ev, self.options, self.first.items.items[index1], self.second.items.items[index2]);
+    }
+};
+
+fn mismatchFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    var pair = try Pair.of(ev, args);
+    defer pair.deinit(ev);
+    const region1 = pair.region1;
+    const region2 = pair.region2;
+    const shared = @min(region1.width(), region2.width());
+
+    var offset: usize = 0;
+    while (offset < shared) : (offset += 1) {
+        if (pair.options.from_end) {
+            if (!try pair.matchesAt(ev, region1.end - 1 - offset, region2.end - 1 - offset)) {
+                return Value.fromFixnum(@intCast(region1.end - offset));
+            }
+        } else if (!try pair.matchesAt(ev, region1.start + offset, region2.start + offset)) {
+            return Value.fromFixnum(@intCast(region1.start + offset));
+        }
+    }
+    if (region1.width() == region2.width()) return value.NIL;
+    const differs_at = if (pair.options.from_end) region1.end - shared else region1.start + shared;
+    return Value.fromFixnum(@intCast(differs_at));
+}
+
+fn searchFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    var pair = try Pair.of(ev, args);
+    defer pair.deinit(ev);
+    const width = pair.region1.width();
+    if (width > pair.region2.width()) return value.NIL;
+    const origins = pair.region2.width() - width + 1;
+
+    var step: usize = 0;
+    while (step < origins) : (step += 1) {
+        const origin = if (pair.options.from_end)
+            pair.region2.start + origins - 1 - step
+        else
+            pair.region2.start + step;
+        if (try matchesFrom(ev, pair, origin)) return Value.fromFixnum(@intCast(origin));
+    }
+    return value.NIL;
+}
+
+/// Whether the first sequence's region matches the second starting at
+/// `origin`.
+fn matchesFrom(ev: *Evaluator, pair: Pair, origin: usize) Error!bool {
+    var offset: usize = 0;
+    while (offset < pair.region1.width()) : (offset += 1) {
+        if (!try pair.matchesAt(ev, pair.region1.start + offset, origin + offset)) return false;
+    }
+    return true;
 }

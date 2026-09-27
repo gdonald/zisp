@@ -465,10 +465,37 @@ fn printRatio(ctx: *PrintCtx, v: Value) PrintError!void {
 /// An integer component of a larger form, whichever representation it has.
 fn writeIntegerValue(ctx: *PrintCtx, v: Value, base: u8) PrintError!void {
     if (v.isFixnum()) return writeIntegerInBase(ctx.writer, v.toFixnum(), base);
-    const text = heap.asBignum(v).toConst().toStringAlloc(ctx.allocator, base, .lower) catch
+    const n = heap.asBignum(v).toConst();
+    if (std.math.isPowerOfTwo(base)) return writePowerOfTwoDigits(ctx.writer, n, base);
+    const text = n.toStringAlloc(ctx.allocator, base, .upper) catch
         return error.OutOfMemory;
     defer ctx.allocator.free(text);
     try ctx.writer.writeAll(text);
+}
+
+/// A bignum in a base whose digits are a fixed number of bits. The digits
+/// are read straight out of the limbs, and one can straddle two limbs:
+/// std's conversion reads each limb on its own, which gets base 8 wrong.
+fn writePowerOfTwoDigits(writer: *std.Io.Writer, n: std.math.big.int.Const, base: u8) PrintError!void {
+    const Limb = std.math.big.Limb;
+    const limb_bits = @bitSizeOf(Limb);
+    const width: usize = std.math.log2_int(u8, base);
+    const bits = n.bitCountAbs();
+    const digit_count = @max((bits + width - 1) / width, 1);
+    if (!n.positive and !n.eqlZero()) try writer.writeByte('-');
+    var index = digit_count;
+    while (index > 0) {
+        index -= 1;
+        const bit = index * width;
+        const limb_at = bit / limb_bits;
+        const offset: std.math.Log2Int(Limb) = @intCast(bit % limb_bits);
+        var digit: Limb = if (limb_at < n.limbs.len) n.limbs[limb_at] >> offset else 0;
+        if (offset + width > limb_bits and limb_at + 1 < n.limbs.len) {
+            const spill: std.math.Log2Int(Limb) = @intCast(limb_bits - @as(usize, offset));
+            digit |= n.limbs[limb_at + 1] << spill;
+        }
+        try writer.writeByte(std.fmt.digitToChar(@intCast(digit & (base - 1)), .upper));
+    }
 }
 
 /// Whether an object this deep stands in as `#` rather than printing
@@ -567,6 +594,7 @@ fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         return;
     }
     try ctx.writer.print("#{d}A", .{a.rank});
+    if (a.rank == 0) return printValue(ctx, elements[0], depth + 1);
     var consumed: usize = 0;
     try printArrayAxis(ctx, a.dimensions(), heap.arrayElements(v), &consumed, depth);
 }

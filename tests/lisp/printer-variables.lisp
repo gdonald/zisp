@@ -51,3 +51,15 @@
                            (with-standard-io-syntax (prin1-to-string "hi")))))
 (check (string= "255" (let ((*print-base* 8))
                         (with-standard-io-syntax (prin1-to-string 255)))))
+
+;; A bignum prints in any base, with the digit case a fixnum uses, and a
+;; base whose digits straddle two limbs gets every digit right.
+(check (string= "3FFFFFFFFFFFFFFFFF" (let ((*print-base* 16)) (prin1-to-string (1- (expt 2 70))))))
+(check (string= "VVVVVVVVVVVVVV" (let ((*print-base* 32)) (prin1-to-string (1- (expt 2 70))))))
+(check (string= (concatenate 'string "1" (make-string 100 :initial-element #\0))
+                (let ((*print-base* 8)) (prin1-to-string (expt 8 100)))))
+(check (string= (concatenate 'string "#o-" (make-string 200 :initial-element #\7))
+                (let ((*print-base* 8) (*print-radix* t)) (prin1-to-string (- 1 (expt 8 200))))))
+(check (string= "-100000000000000000000000000000000"
+                (let ((*print-base* 16)) (prin1-to-string (- (expt 2 128))))))
+(check (string= "7B6A43A7EF901FD29F05F9E837D8" (let ((*print-base* 16)) (prin1-to-string (1- (expt 3 70))))))

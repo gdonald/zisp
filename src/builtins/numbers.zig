@@ -209,12 +209,15 @@ fn allFixnums(args: []const Value) bool {
 
 const BinaryOp = enum { add, sub, mul };
 
-fn applyFix(op: BinaryOp, a: i128, b: i128) i128 {
-    return switch (op) {
-        .add => a + b,
-        .sub => a - b,
-        .mul => a * b,
+/// One step on the `i128` accumulator, or null where the result no
+/// longer fits in one.
+fn applyFix(op: BinaryOp, a: i128, b: i128) ?i128 {
+    const result = switch (op) {
+        .add => @addWithOverflow(a, b),
+        .sub => @subWithOverflow(a, b),
+        .mul => @mulWithOverflow(a, b),
     };
+    return if (result[1] == 0) result[0] else null;
 }
 
 /// One step of the fold. Every bignum here outlives an allocation that
@@ -253,9 +256,9 @@ fn fold(ev: *Evaluator, op: BinaryOp, seed: i128, args: []const Value) Error!Val
         .single => return foldFloat(ev, op, f32, @floatFromInt(seed), args),
         .double => return foldFloat(ev, op, f64, @floatFromInt(seed), args),
     }
-    if (allFixnums(args)) {
+    if (allFixnums(args)) fixnums: {
         var acc: i128 = seed;
-        for (args) |a| acc = applyFix(op, acc, a.toFixnum());
+        for (args) |a| acc = applyFix(op, acc, a.toFixnum()) orelse break :fixnums;
         return bignum.fromI128(ev.heap, acc);
     }
     // The accumulator is the one value the fold carries across the

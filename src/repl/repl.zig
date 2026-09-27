@@ -109,6 +109,8 @@ pub const Repl = struct {
             self.rotateInput(f);
             const result = self.ev.eval(f) catch |e| {
                 if (e == error.Quit) return;
+                self.ev.error_condition = .{ .raw = 0 };
+                self.ev.error_datum = .{ .raw = 0 };
                 try self.reportError("Error", e);
                 try self.breakLoop(&rd);
                 continue;
@@ -162,6 +164,8 @@ pub const Repl = struct {
             self.rotateInput(f);
             const result = self.ev.eval(f) catch |e| {
                 if (e == error.Quit) return;
+                self.ev.error_condition = .{ .raw = 0 };
+                self.ev.error_datum = .{ .raw = 0 };
                 try self.reportError("Error", e);
                 continue;
             };

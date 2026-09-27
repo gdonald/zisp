@@ -1090,3 +1090,25 @@ test "a random state prints as an unreadable object" {
     defer testing.allocator.free(text);
     try testing.expectEqualStrings("#<random-state>", text);
 }
+
+test "equalp and = compare complex numbers part by part" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectT("(equalp #c(1.0 -1.0) #c(1 -1))");
+    try fx.expectNil("(equalp #c(1.0 2.0) #c(1.0 3.0))");
+    try fx.expectT("(equalp 1.5 #c(1.5 0.0))");
+    try fx.expectT("(equalp (vector #c(1.0 2.0)) (vector #c(1.0 2.0)))");
+    try fx.expectT("(= #c(2 3) #c(2.0 3.0))");
+}
+
+test "a product of many fixnums past the 128-bit range is exact" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectT(
+        \\(let ((args (loop for i from 1 to 60 collect i)) (prod 1))
+        \\  (dolist (i args) (setq prod (* prod i)))
+        \\  (eql (apply #'* args) prod))
+    );
+    try fx.expectT("(= (+ most-positive-fixnum most-positive-fixnum most-positive-fixnum) (* 3 most-positive-fixnum))");
+    try fx.expectT("(= (- (- most-positive-fixnum) most-positive-fixnum most-positive-fixnum) (* -3 most-positive-fixnum))");
+}

@@ -46,8 +46,8 @@ pub fn registerStreams(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAKE-STRING-INPUT-STREAM", &makeStringInputStreamFn);
     _ = try ev.defineNative("MAKE-STRING-OUTPUT-STREAM", &makeStringOutputStreamFn);
     _ = try ev.defineNative("GET-OUTPUT-STREAM-STRING", &getOutputStreamStringFn);
-    _ = try ev.defineNative("FORCE-OUTPUT", &noOpStreamFn);
-    _ = try ev.defineNative("FINISH-OUTPUT", &noOpStreamFn);
+    _ = try ev.defineNative("FORCE-OUTPUT", &flushStreamFn);
+    _ = try ev.defineNative("FINISH-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("CLEAR-OUTPUT", &noOpStreamFn);
 
     for ([_][]const u8{
@@ -378,6 +378,17 @@ fn writeBack(ev: *Evaluator, s: *Stream) Error!void {
     var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
     file_writer.interface.writeAll(s.output.items) catch return Error.FileError;
     file_writer.interface.flush() catch return Error.FileError;
+}
+
+fn flushStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len > 1) return Error.WrongArgCount;
+    const s = try streamOf(ev, if (args.len == 1) args[0] else null, .output);
+    if (s.kind == .console) {
+        const out = ev.out orelse return Error.NoOutputStream;
+        out.flush() catch return Error.WriteFailed;
+    }
+    return value.NIL;
 }
 
 fn noOpStreamFn(p: *anyopaque, args: []const Value) Error!Value {

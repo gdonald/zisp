@@ -570,6 +570,21 @@ test "member compares numbers with eql rather than identity" {
     try fx.expectT("(equal (member 2.5 '(1.5 2.5)) '(2.5))");
 }
 
+test "makunbound and fmakunbound remove a symbol's global value and function" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    _ = try fx.evalStr("(defvar *gone* 1)");
+    _ = try fx.evalStr("(defun gone () 1)");
+    try fx.expectT("(eq (makunbound '*gone*) '*gone*)");
+    try fx.expectNil("(boundp '*gone*)");
+    try fx.expectT("(eq (fmakunbound 'gone) 'gone)");
+    try fx.expectNil("(fboundp 'gone)");
+    try fx.expectErr(Error.WrongArgCount, "(makunbound)");
+    try fx.expectErr(Error.WrongArgCount, "(fmakunbound)");
+    try fx.expectErr(Error.TypeError, "(makunbound 1)");
+    try fx.expectErr(Error.TypeError, "(fmakunbound 1)");
+}
+
 test "fboundp is true for functions, macros and special forms" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);

@@ -517,3 +517,11 @@ test "adjust-array checks its arguments" {
     try fx.expectErr(Error.TypeError, "(adjust-array (make-array 1 :element-type 'bit :adjustable t) 2 :initial-contents '(0 5))");
     try fx.expectErr(Error.TypeError, "(adjust-array (make-array 2 :element-type 'character :adjustable t) 3 :initial-element 7)");
 }
+
+test "an array of each rank prints in the form the reader takes back" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectText("(prin1-to-string (make-array nil :initial-element 5))", "#0A5");
+    try fx.expectText("(prin1-to-string (make-array nil))", "#0ANIL");
+    try fx.expectText("(prin1-to-string (make-array '(2 2) :initial-contents '((1 2) (3 4))))", "#2A((1 2) (3 4))");
+}

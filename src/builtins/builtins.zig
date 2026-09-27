@@ -118,6 +118,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("ERROR", &errorFn);
     _ = try ev.defineNative("%RAISE-CONDITION", &raiseConditionFn);
     _ = try ev.defineNative("%LAST-ERROR-SYMBOL", &lastErrorSymbolFn);
+    _ = try ev.defineNative("%LAST-TYPE-MISMATCH", &lastTypeMismatchFn);
 
     _ = try ev.defineNative("RPLACA", &rplacaFn);
     _ = try ev.defineNative("RPLACD", &rplacdFn);
@@ -135,6 +136,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("ASSOC", &assocFn);
     _ = try ev.defineNative("FBOUNDP", &fboundpFn);
     _ = try ev.defineNative("BOUNDP", &boundpFn);
+    _ = try ev.defineNative("MAKUNBOUND", &makunboundFn);
+    _ = try ev.defineNative("FMAKUNBOUND", &fmakunboundFn);
 
     _ = try ev.defineNative("%MAKE-STRUCTURE", &makeStructureFn);
     _ = try ev.defineNative("%STRUCTURE-P", &structurePFn);
@@ -288,6 +291,22 @@ fn boundpFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
     if (!args[0].isSymbol()) return Error.TypeError;
     return if (ev.env.lookupValue(args[0]) != null) value.T else value.NIL;
+}
+
+fn makunboundFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return Error.TypeError;
+    symbol_mod.symbol(args[0]).value_cell = value.SPECIAL_UNBOUND;
+    return args[0];
+}
+
+fn fmakunboundFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return Error.TypeError;
+    symbol_mod.symbol(args[0]).function_cell = value.SPECIAL_UNBOUND;
+    return args[0];
 }
 
 fn symbolPlistFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -517,6 +536,26 @@ fn lastErrorSymbolFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 0) return Error.WrongArgCount;
     return if (ev.error_symbol.raw == 0) value.NIL else ev.error_symbol;
+}
+
+/// `(%last-type-mismatch)` is the datum and expected type the last
+/// recorded type mismatch named, as a two-element list, or nil where none
+/// was recorded. Reading it clears it, so a later failure that records
+/// nothing is not handed a stale datum.
+fn lastTypeMismatchFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    if (ev.error_datum.raw == 0) return value.NIL;
+    const datum = ev.error_datum;
+    const expected = ev.error_expected;
+    ev.error_datum = .{ .raw = 0 };
+    ev.error_expected = .{ .raw = 0 };
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(datum);
+    try held.push(expected);
+    try held.push(try ev.heap.allocCons(held.items()[1], value.NIL));
+    return ev.heap.allocCons(held.items()[0], held.items()[2]);
 }
 
 /// `(%raise-condition condition kind)` unwinds carrying `condition`.

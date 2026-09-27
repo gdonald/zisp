@@ -101,7 +101,7 @@ test "closure capture corpus" {
 
 test "format directives corpus" {
     const checked = try runCorpus("format", @embedFile("lisp/format-directives-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 22), checked);
+    try testing.expectEqual(@as(u32, 42), checked);
 }
 
 test "reader syntax corpus" {
@@ -121,5 +121,5 @@ test "condition class corpus" {
 
 test "handler search corpus" {
     const checked = try runCorpus("handler-search", @embedFile("lisp/handler-search.lisp"));
-    try testing.expectEqual(@as(u32, 12), checked);
+    try testing.expectEqual(@as(u32, 21), checked);
 }

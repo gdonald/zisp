@@ -107,6 +107,14 @@ pub const Evaluator = struct {
     // here from the `error` call to whatever catches it. Fixnum zero
     // when the failure came from a native rather than from Lisp.
     error_condition: Value = .{ .raw = 0 },
+    // The object a native `TypeError` rejected and the type it wanted,
+    // recorded by `typeMismatch` for the condition built from it. Fixnum
+    // zero when the raise site had nothing to record.
+    error_datum: Value = .{ .raw = 0 },
+    error_expected: Value = .{ .raw = 0 },
+    // Set while the condition standing for a native failure is being
+    // built, so a failure in building it is not offered in turn.
+    building_failure_condition: bool = false,
 
     // Shallow-binding stack for special variables. `let`, `let*`, and
     // lambda-list binding push the old value cell here and restore on exit,
@@ -229,6 +237,14 @@ pub const Evaluator = struct {
     pub fn unbound(self: *Evaluator, sym: Value, err: Error) Error {
         self.error_symbol = sym;
         return err;
+    }
+
+    /// Record what a native rejected and the type it wanted, so the
+    /// `type-error` built from the failure can say both.
+    pub fn typeMismatch(self: *Evaluator, datum: Value, expected: []const u8) Error {
+        self.error_expected = try self.interner.intern(expected);
+        self.error_datum = datum;
+        return Error.TypeError;
     }
 
     /// Depth of the dynamic stack, to be handed back to `unwindSpecials`.
@@ -401,6 +417,39 @@ pub const Evaluator = struct {
     }
 
     pub fn eval(self: *Evaluator, form: Value) Error!Value {
+        return self.evalForm(form) catch |err| return self.signalFailure(err);
+    }
+
+    /// Offer a failure a native raised to the handlers `handler-bind`
+    /// established, where it was raised and before anything unwinds. A
+    /// failure that has already been offered, an `error` call among them,
+    /// carries its condition in `error_condition` and is passed on as is.
+    fn signalFailure(self: *Evaluator, err: Error) Error {
+        switch (err) {
+            Error.BlockReturn, Error.Go, Error.Throw, Error.Quit, Error.OutOfMemory => return err,
+            else => {},
+        }
+        if (self.error_condition.raw != 0 or self.building_failure_condition) return err;
+        const clusters = self.interner.intern("*HANDLER-CLUSTERS*") catch return err;
+        if (symbol_mod.symbol(clusters).value_cell.equalsRaw(value.NIL)) return err;
+        const coerce = self.env.lookupFunction(self.interner.intern("%COERCE-CAUGHT") catch return err) orelse return err;
+        const run_handlers = self.env.lookupFunction(self.interner.intern("%RUN-HANDLERS") catch return err) orelse return err;
+
+        var held = self.heap.protect();
+        defer held.close();
+        const condition = blk: {
+            self.building_failure_condition = true;
+            defer self.building_failure_condition = false;
+            const name = self.interner.internKeyword(@errorName(err)) catch return err;
+            break :blk self.callFunction(coerce, &.{name}) catch return err;
+        };
+        held.push(condition) catch return err;
+        _ = self.callFunction(run_handlers, held.items()[0..1]) catch |handler_exit| return handler_exit;
+        self.error_condition = held.items()[0];
+        return err;
+    }
+
+    fn evalForm(self: *Evaluator, form: Value) Error!Value {
         if (!self.collector_installed) self.installCollector();
         // The form is held on the Lisp stack for as long as it is being
         // evaluated. A macro expansion or a quasiquote's output is fresh
@@ -589,6 +638,7 @@ pub const Evaluator = struct {
         var cur = c0;
         var cur_args: []const Value = args0;
         var frame: ?*env_mod.Frame = null;
+        defer if (frame) |f| self.env.releaseFrame(f);
 
         while (true) {
             self.env.top_function = cur.captured_fenv;

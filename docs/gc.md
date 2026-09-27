@@ -240,12 +240,13 @@ walk is written out in the test rather than shared with the collector, so
 a mistake in one does not hide in the other, and the fuzz counts its own
 crossings and fails if fewer than a tenth of the stores made one.
 
-CI runs the whole test suite this way, which is what keeps the rule
-enforced: a constructor holds the values handed to it, and anything else
-that keeps a value across an allocation holds it on the Lisp stack.
-Holding reclaimed blocks back means the run keeps every byte it ever
-allocated, so it needs several gigabytes and takes a few times longer
-than the plain suite.
+`zig build tests -Dgc-torture=64` runs the whole test suite this way,
+which is what enforces the rule: a constructor holds the values handed
+to it, and anything else that keeps a value across an allocation holds
+it on the Lisp stack. Holding reclaimed blocks back means the run keeps
+every byte it ever allocated, so it needs several gigabytes. It takes
+over 40 minutes in a Debug build, so CI does not run it and it is run
+locally instead.
 
 ## When it runs
 

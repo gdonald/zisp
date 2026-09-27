@@ -12,9 +12,12 @@ tests/run-ansi.sh cons numbers              # only listed categories
 VERBOSE=1 tests/run-ansi.sh                 # show every test
 ```
 
-`zig build ansi-test` builds zisp first, then invokes the harness with
-`ZISP` set to the install path. The script exits non-zero on any failure
-so it can gate CI without parsing output.
+`zig build ansi-test` builds a ReleaseSafe zisp into `zig-out/suite/`
+whatever `-Doptimize` says, then invokes the harness with `ZISP` set to
+it. A Debug build records a stack trace on every allocation, which turns
+a run of seconds into one of half an hour. The script exits non-zero on
+any failure. CI does not run it: it runs the Zig test suite only, and
+the ansi-test suite is run locally.
 
 `zig build -Dansi-tests=true` folds the ansi-test run into the default
 build — useful for "run everything before I push" but too slow for
@@ -24,6 +27,7 @@ The slices that need rt and the auxiliary files the suite compiles
 before loading have a harness of their own:
 
 ```sh
+zig build rt-tests -- format                # through the ReleaseSafe build
 tests/run-rt-tests.sh format                # pass rate, non-zero below the floor
 tests/run-rt-tests.sh typep subtypep        # several slices
 FLOOR=95 tests/run-rt-tests.sh typep        # raise the floor

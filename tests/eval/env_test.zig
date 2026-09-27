@@ -323,14 +323,56 @@ test "popFunctionFrame restores parent and frees" {
     try std.testing.expectEqual(@as(i64, 1), env.lookupFunction(f).?.toFixnum());
 }
 
-test "allocFrame cleans up the new frame if all_frames append fails" {
-    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+test "a frame that fails to allocate leaves the chain as it was" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     var env = Env.init(failing.allocator());
     defer env.deinit();
 
-    // First allocation (Frame) succeeds; the ArrayList append needs a second
-    // allocation that hits the fail boundary. The errdefer in allocFrame
-    // must release the orphaned Frame so testing.allocator doesn't flag a leak.
     try std.testing.expectError(error.OutOfMemory, env.pushValueFrame());
     try std.testing.expect(env.top_value == null);
+}
+
+test "popping a frame no closure captured frees it" {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var env = Env.init(counting.allocator());
+    defer env.deinit();
+
+    _ = try env.pushValueFrame();
+    _ = try env.pushFunctionFrame();
+    env.popValueFrame();
+    env.popFunctionFrame();
+    try std.testing.expectEqual(counting.allocations, counting.deallocations);
+}
+
+test "a captured frame outlives its pop and is freed with the env" {
+    var sc = try ScratchSym.init(std.testing.allocator);
+    defer sc.deinit();
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var env = Env.init(counting.allocator());
+
+    const x = try sc.sym("X");
+    const outer = try env.pushValueFrame();
+    try outer.bind(env.allocator, x, value.Value.fromFixnum(1));
+    _ = try env.pushValueFrame();
+    try env.captureCurrent();
+    const inner = env.top_value.?;
+    env.popValueFrame();
+    env.popValueFrame();
+
+    try std.testing.expect(outer.captured and inner.captured);
+    try std.testing.expectEqual(@as(i64, 1), outer.find(x).?.toFixnum());
+    try std.testing.expectEqual(@as(usize, 2), env.captured_frames.items.len);
+    env.deinit();
+    try std.testing.expectEqual(counting.allocations, counting.deallocations);
+}
+
+test "capturing a chain twice records each frame once" {
+    var env = Env.init(std.testing.allocator);
+    defer env.deinit();
+
+    _ = try env.pushValueFrame();
+    _ = try env.pushFunctionFrame();
+    try env.captureCurrent();
+    try env.captureCurrent();
+    try std.testing.expectEqual(@as(usize, 2), env.captured_frames.items.len);
 }

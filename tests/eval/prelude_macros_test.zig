@@ -288,3 +288,23 @@ test "handler-bind with no handlers and no body is nil" {
     defer fx.deinit(testing.allocator);
     try fx.expectNil("(handler-bind ())");
 }
+
+test "a native failure whose condition cannot be built unwinds as itself" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    _ = try fx.evalStr("(defun %coerce-caught (caught) (declare (ignore caught)) (/ 1 0))");
+    try testing.expectError(
+        error.TypeError,
+        fx.evalStr("(handler-bind ((error (lambda (c) c))) (car 1))"),
+    );
+}
+
+test "a native failure with no condition system defined unwinds as itself" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    _ = try fx.evalStr("(fmakunbound '%run-handlers)");
+    try testing.expectError(
+        error.TypeError,
+        fx.evalStr("(let ((*handler-clusters* (list nil))) (car 1))"),
+    );
+}

@@ -10,6 +10,7 @@ const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
+const circle_mod = @import("../runtime/circle.zig");
 const equality = @import("../runtime/equality.zig");
 const proto_class = @import("../runtime/proto_class.zig");
 const package = @import("../runtime/package.zig");
@@ -186,6 +187,8 @@ const Conditional = struct {
 const Iteration = struct {
     directive: Directive,
     body: []const Node,
+    /// Closed by `~:}`, which runs the body once even with no arguments.
+    at_least_once: bool,
 };
 
 const Call = struct {
@@ -284,10 +287,14 @@ fn parseNode(p: *Parser, directive: Directive) Error!Node {
     if (highest > maxParams(directive.char)) return Error.ProgramError;
     return switch (directive.char) {
         '[' => .{ .conditional = try parseConditional(p, directive) },
-        '{' => .{ .iteration = .{
-            .directive = directive,
-            .body = (try parseBlock(p, "}")).nodes,
-        } },
+        '{' => blk: {
+            const block = try parseBlock(p, "}");
+            break :blk .{ .iteration = .{
+                .directive = directive,
+                .body = block.nodes,
+                .at_least_once = block.stop.colon,
+            } };
+        },
         '/' => .{ .call = .{ .directive = directive, .name = try parseCallName(p) } },
         '(' => .{ .case_block = .{
             .directive = directive,
@@ -453,23 +460,40 @@ const Flow = enum { normal, escape_clause, escape_all };
 const Args = struct {
     items: []const Value,
     index: usize = 0,
+    /// Where a logical block's list stops short of its end. Reading past
+    /// the last item reaches it, which closes the block.
+    tail: ?*BlockTail = null,
 
     fn remaining(self: Args) usize {
-        return self.items.len - self.index;
+        return self.items.len - self.index + @intFromBool(self.tail != null);
     }
 
     fn next(self: *Args) Error!Value {
-        if (self.index >= self.items.len) return Error.ProgramError;
+        if (self.index >= self.items.len) {
+            if (self.tail) |tail| tail.reached = true;
+            return Error.ProgramError;
+        }
         const v = self.items[self.index];
         self.index += 1;
         return v;
     }
 };
 
+/// What ends a logical block's list before its last cons: a tail that
+/// is a back-reference or not a list, printed after a dot, or the
+/// `*print-length*` limit, printed as `...`.
+const BlockTail = struct {
+    rest: ?Value,
+    reached: bool = false,
+};
+
 const Runner = struct {
     ev: *Evaluator,
     out: Output,
     allocator: std.mem.Allocator,
+    /// The labels of the logical block being run under `*print-circle*`,
+    /// which what it prints shares.
+    circle: ?*circle_mod.State = null,
     /// The list a `~:{` is walking, which is what `~:^` tests rather
     /// than the sublist the body is reading.
     outer: ?*Args = null,
@@ -697,6 +721,9 @@ fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
 /// that goes around it.
 fn runLogicalBlock(r: *Runner, j: Justification, args: *Args) Error!Flow {
     var items: std.ArrayList(Value) = .empty;
+    var tail: ?BlockTail = null;
+    const saved_circle = r.circle;
+    defer r.circle = saved_circle;
     if (j.directive.at) {
         // `~@<` hands the block what is left of the argument list.
         try items.appendSlice(r.allocator, args.items[args.index..]);
@@ -707,9 +734,15 @@ fn runLogicalBlock(r: *Runner, j: Justification, args: *Args) Error!Flow {
             try r.out.writeText(try render(r, object, prin1Settings(r.ev)));
             return .normal;
         }
-        try collectList(r, object, &items);
+        if (r.circle == null and circleWanted(r.ev)) {
+            const state = try r.allocator.create(circle_mod.State);
+            state.* = try circle_mod.scan(r.allocator, object);
+            r.circle = state;
+        }
+        try writeCircleLabel(r, object);
+        tail = try collectBlockItems(r, object, &items);
     }
-    var cursor = Args{ .items = items.items };
+    var cursor = Args{ .items = items.items, .tail = if (tail) |*t| t else null };
 
     const body_at = if (j.segments.len > 1) @as(usize, 1) else 0;
     const has_suffix = j.segments.len > 2;
@@ -719,7 +752,17 @@ fn runLogicalBlock(r: *Runner, j: Justification, args: *Args) Error!Flow {
         try r.out.writeChar('(');
     }
 
-    const flow = try runNodes(r, j.segments[body_at], &cursor);
+    const flow = runNodes(r, j.segments[body_at], &cursor) catch |err| blk: {
+        const reached = if (tail) |*t| t.reached else false;
+        if (err != Error.ProgramError or !reached) return err;
+        if (tail.?.rest) |rest| {
+            try r.out.writeText(". ");
+            try r.out.writeText(try render(r, rest, prin1Settings(r.ev)));
+        } else {
+            try r.out.writeText("...");
+        }
+        break :blk .normal;
+    };
 
     if (has_suffix) {
         _ = try runNodes(r, j.segments[2], &cursor);
@@ -727,6 +770,37 @@ fn runLogicalBlock(r: *Runner, j: Justification, args: *Args) Error!Flow {
         try r.out.writeChar(')');
     }
     return if (flow == .escape_all) .escape_all else .normal;
+}
+
+/// Write `#n=` ahead of an object the block's labels say is shared.
+fn writeCircleLabel(r: *Runner, object: Value) Error!void {
+    const state = r.circle orelse return;
+    const label = state.get(object) orelse return;
+    const id = state.assign(label);
+    label.printed = true;
+    var buf: [16]u8 = undefined;
+    try r.out.writeText(std.fmt.bufPrint(&buf, "#{d}=", .{id}) catch unreachable);
+}
+
+/// The elements a logical block reads from `list`, stopping at
+/// `*print-length*`, at a tail that is not a list, and at a tail that is
+/// shared structure, which is printed as a back-reference.
+fn collectBlockItems(r: *Runner, list: Value, items: *std.ArrayList(Value)) Error!?BlockTail {
+    const limit = count(r.ev, "*PRINT-LENGTH*");
+    var rest = list;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) {
+        if (items.items.len > 0) {
+            if (r.circle) |state| {
+                if (state.get(rest) != null) return .{ .rest = rest };
+            }
+        }
+        if (limit) |most| {
+            if (items.items.len >= most) return .{ .rest = null };
+        }
+        try items.append(r.allocator, heap.car(rest));
+    }
+    if (rest.equalsRaw(value.NIL)) return null;
+    return .{ .rest = rest };
 }
 
 /// Where the padding points fall: one slot per position, from before the
@@ -779,7 +853,9 @@ fn printPadded(r: *Runner, directive: Directive, args: *Args, settings: printer.
     if (!directive.at) try r.out.repeat(padchar, pad_count);
 }
 
-fn render(r: *Runner, v: Value, settings: printer.Settings) Error![]const u8 {
+fn render(r: *Runner, v: Value, given: printer.Settings) Error![]const u8 {
+    var settings = given;
+    if (r.circle) |state| settings.circle = state;
     // A condition prints as its report where nothing asked for output
     // that reads back, which is what `~A` and `princ` want of it.
     if (!settings.escape) {
@@ -934,27 +1010,18 @@ fn columnTab(r: *Runner, directive: Directive, args: *Args) Error!void {
 /// `~?` takes a control string and an argument list; `~@?` draws the
 /// arguments from the enclosing list instead.
 fn recursiveFormat(r: *Runner, directive: Directive, args: *Args) Error!void {
-    const control = try args.next();
-    if (!heap.isString(control)) return Error.TypeError;
-    const ctrl = heap.asString(control).constSlice();
+    const body = try Body.of(r, try args.next());
 
     if (directive.at) {
         var nested = Args{ .items = args.items, .index = args.index };
-        _ = try runControl(r, ctrl, &nested);
+        _ = try body.run(r, &nested);
         args.index = nested.index;
         return;
     }
     var list: std.ArrayList(Value) = .empty;
     try collectList(r, try args.next(), &list);
     var nested = Args{ .items = list.items };
-    _ = try runControl(r, ctrl, &nested);
-}
-
-/// Parse and run a control string that only became known at execution time.
-fn runControl(r: *Runner, ctrl: []const u32, args: *Args) Error!Flow {
-    var parser = Parser{ .allocator = r.allocator, .ctrl = ctrl };
-    const block = try parseBlock(&parser, "");
-    return runNodes(r, block.nodes, args);
+    _ = try body.run(r, &nested);
 }
 
 fn collectList(r: *Runner, list_v: Value, out: *std.ArrayList(Value)) Error!void {
@@ -962,7 +1029,7 @@ fn collectList(r: *Runner, list_v: Value, out: *std.ArrayList(Value)) Error!void
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
         try out.append(r.allocator, heap.car(rest));
     }
-    if (!rest.equalsRaw(value.NIL)) return Error.TypeError;
+    if (!rest.equalsRaw(value.NIL)) return r.ev.typeMismatch(list_v, "LIST");
 }
 
 /// `~^` leaves the enclosing clause when the arguments run out. With
@@ -1034,51 +1101,97 @@ fn runConditional(r: *Runner, conditional: Conditional, args: *Args) Error!Flow 
 /// parameter caps the number of passes.
 fn runIteration(r: *Runner, iteration: Iteration, args: *Args) Error!Flow {
     const directive = iteration.directive;
-    const max = switch (directive.params[0]) {
-        .absent => null,
-        else => try r.count(directive, 0, args, 0),
-    };
+    const max = try r.count(directive, 0, args, std.math.maxInt(i64));
 
-    var body = iteration.body;
-    if (body.len == 0) {
-        const control = try args.next();
-        if (!heap.isString(control)) return Error.TypeError;
-        var parser = Parser{ .allocator = r.allocator, .ctrl = heap.asString(control).constSlice() };
-        body = (try parseBlock(&parser, "")).nodes;
-    }
+    const body: Body = if (iteration.body.len > 0)
+        .{ .nodes = iteration.body }
+    else
+        try Body.of(r, try args.next());
 
     var items: std.ArrayList(Value) = .empty;
+    const start = args.index;
     if (directive.at) {
-        try items.appendSlice(r.allocator, args.items[args.index..]);
-        args.index = args.items.len;
+        try items.appendSlice(r.allocator, args.items[start..]);
     } else {
         try collectList(r, try args.next(), &items);
     }
 
-    var cursor = Args{ .items = items.items };
+    var cursor = Args{ .items = items.items, .tail = if (directive.at) args.tail else null };
+    // `~@{` reads the enclosing arguments, so what it leaves unread is
+    // still there for the directives after it.
+    defer if (directive.at) {
+        args.index = start + cursor.index;
+    };
     var passes: usize = 0;
-    while (max == null or passes < max.?) : (passes += 1) {
-        if (cursor.remaining() == 0) break;
+    while (passes < max) : (passes += 1) {
+        const forced = iteration.at_least_once and passes == 0;
+        if (cursor.remaining() == 0 and !forced) break;
         const flow = if (directive.colon)
             try runSublistPass(r, body, &cursor)
         else
-            try runNodes(r, body, &cursor);
+            try body.run(r, &cursor);
         if (flow == .escape_all) return .normal;
         if (flow == .escape_clause) break;
     }
     return .normal;
 }
 
+/// What an iteration or `~?` runs: a parsed control string, or a
+/// function such as `formatter` makes, which takes the stream and the
+/// arguments and returns the ones it left.
+const Body = union(enum) {
+    nodes: []const Node,
+    function: Value,
+
+    fn of(r: *Runner, control: Value) Error!Body {
+        if (function.isFunction(control)) return .{ .function = control };
+        if (!heap.isString(control)) return Error.TypeError;
+        var parser = Parser{ .allocator = r.allocator, .ctrl = heap.asString(control).constSlice() };
+        return .{ .nodes = (try parseBlock(&parser, "")).nodes };
+    }
+
+    fn run(self: Body, r: *Runner, args: *Args) Error!Flow {
+        return switch (self) {
+            .nodes => |nodes| runNodes(r, nodes, args),
+            .function => |fn_v| blk: {
+                try callControlFunction(r, fn_v, args);
+                break :blk .normal;
+            },
+        };
+    }
+};
+
+fn callControlFunction(r: *Runner, fn_v: Value, args: *Args) Error!void {
+    var call_args: std.ArrayList(Value) = .empty;
+    try call_args.append(r.allocator, value.T);
+    try call_args.appendSlice(r.allocator, args.items[args.index..]);
+
+    var captured = std.Io.Writer.Allocating.init(r.allocator);
+    const saved_out = r.ev.out;
+    r.ev.out = &captured.writer;
+    const left = blk: {
+        defer r.ev.out = saved_out;
+        break :blk try r.ev.callFunction(fn_v, call_args.items);
+    };
+    try r.out.writeText(captured.written());
+
+    var unread: usize = 0;
+    var rest = left;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) unread += 1;
+    if (unread > args.remaining()) return Error.ProgramError;
+    args.index = args.items.len - unread;
+}
+
 /// One pass of a `~:{` iteration: the next element is itself the argument
 /// list for the body.
-fn runSublistPass(r: *Runner, body: []const Node, cursor: *Args) Error!Flow {
+fn runSublistPass(r: *Runner, body: Body, cursor: *Args) Error!Flow {
     var sublist: std.ArrayList(Value) = .empty;
     try collectList(r, try cursor.next(), &sublist);
     var inner = Args{ .items = sublist.items };
     const saved = r.outer;
     r.outer = cursor;
     defer r.outer = saved;
-    const flow = try runNodes(r, body, &inner);
+    const flow = try body.run(r, &inner);
     return if (flow == .escape_all) .escape_all else .normal;
 }
 
