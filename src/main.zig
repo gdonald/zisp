@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !u8 {
     while (iter.next()) |arg| : (n += 1) {
         if (n >= buf.len) {
             cli.write("zisp: too many arguments (max {d})\n", .{buf.len});
-            return @intFromEnum(cli.ExitCode.user_error);
+            return @backingInt(cli.ExitCode.user_error);
         }
         buf[n] = arg;
     }
@@ -22,15 +22,15 @@ pub fn main(init: std.process.Init) !u8 {
     return switch (action) {
         .print_version => blk: {
             cli.write("zisp {s}\n", .{cli.VERSION});
-            break :blk @intFromEnum(cli.ExitCode.success);
+            break :blk @backingInt(cli.ExitCode.success);
         },
         .print_help => blk: {
             cli.write("{s}", .{cli.HELP_TEXT});
-            break :blk @intFromEnum(cli.ExitCode.success);
+            break :blk @backingInt(cli.ExitCode.success);
         },
         .user_error => |msg| blk: {
             cli.write("zisp: {s}\nTry 'zisp --help' for usage.\n", .{msg});
-            break :blk @intFromEnum(cli.ExitCode.user_error);
+            break :blk @backingInt(cli.ExitCode.user_error);
         },
         .read_only => |path| readOnlyMode(init.gpa, init.io, path),
         .repl => replMode(init.gpa, init.io),
@@ -63,7 +63,7 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
             if (e == error.Quit) break;
             try out.flush();
             reportError(repl, e);
-            return @intFromEnum(cli.ExitCode.user_error);
+            return @backingInt(cli.ExitCode.user_error);
         };
     }
 
@@ -74,7 +74,7 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
                 if (e != error.Quit) {
                     try out.flush();
                     reportError(repl, e);
-                    return @intFromEnum(cli.ExitCode.user_error);
+                    return @backingInt(cli.ExitCode.user_error);
                 }
             };
         }
@@ -95,7 +95,7 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
     }
 
     try out.flush();
-    return @intFromEnum(cli.ExitCode.success);
+    return @backingInt(cli.ExitCode.success);
 }
 
 /// Print a failed batch op's error, naming the symbol when the evaluator
@@ -137,7 +137,7 @@ fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
 
     try runInteractive(gpa, io, repl, out);
     try out.flush();
-    return @intFromEnum(cli.ExitCode.success);
+    return @backingInt(cli.ExitCode.success);
 }
 
 fn runInteractive(gpa: std.mem.Allocator, io: std.Io, repl: *zisp.repl.Repl, out: *std.Io.Writer) !void {
@@ -159,7 +159,7 @@ fn runInteractive(gpa: std.mem.Allocator, io: std.Io, repl: *zisp.repl.Repl, out
 fn readOnlyMode(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !u8 {
     const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |e| {
         cli.write("FAIL {s}: {s}\n", .{ path, @errorName(e) });
-        return @intFromEnum(cli.ExitCode.user_error);
+        return @backingInt(cli.ExitCode.user_error);
     };
     defer file.close(io);
 
@@ -169,21 +169,21 @@ fn readOnlyMode(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !u8 {
     defer source_list.deinit(gpa);
     file_reader.interface.appendRemainingUnlimited(gpa, &source_list) catch |e| {
         cli.write("FAIL {s}: {s}\n", .{ path, @errorName(e) });
-        return @intFromEnum(cli.ExitCode.internal_error);
+        return @backingInt(cli.ExitCode.internal_error);
     };
 
     const outcome = try zisp.read_all.parseAll(gpa, source_list.items, path);
     switch (outcome) {
         .ok => |forms| {
             cli.write("OK {s} forms={d}\n", .{ path, forms });
-            return @intFromEnum(cli.ExitCode.success);
+            return @backingInt(cli.ExitCode.success);
         },
         .fail => |info| {
             cli.write(
                 "FAIL {s}:{d}:{d} {s} after {d} forms\n",
                 .{ path, info.pos.line, info.pos.column, @errorName(info.err), info.forms },
             );
-            return @intFromEnum(cli.ExitCode.test_failure);
+            return @backingInt(cli.ExitCode.test_failure);
         },
     }
 }

@@ -70,7 +70,7 @@ pub const HeapString = extern struct {
     displaced_to: Value = .{ .raw = 0 },
     has_fill_pointer: bool,
     adjustable: bool,
-    _pad: [6]u8 = .{0} ** 6,
+    _pad: [6]u8 = @splat(0),
 
     pub fn isDisplaced(self: *const HeapString) bool {
         return self.displaced_to.raw != 0;
@@ -264,7 +264,7 @@ pub const HeapBignum = extern struct {
     limbs: [*]const std.math.big.Limb,
     len: u64,
     positive: bool,
-    _pad: [7]u8 = .{0} ** 7,
+    _pad: [7]u8 = @splat(0),
 
     pub fn toConst(self: *const HeapBignum) std.math.big.int.Const {
         return .{ .limbs = self.limbs[0..self.len], .positive = self.positive };
@@ -297,7 +297,7 @@ pub const HeapPathname = extern struct {
     /// True when the host names a logical host, which changes both the
     /// namestring syntax and what `translate-logical-pathname` does.
     is_logical: bool,
-    _pad: [7]u8 = .{0} ** 7,
+    _pad: [7]u8 = @splat(0),
 };
 
 /// `defstruct` instance: the structure name symbol plus a flat slot array.

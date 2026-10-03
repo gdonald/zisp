@@ -64,7 +64,7 @@ const Fixture = struct {
 
     fn expectChar(self: *Fixture, src: []const u8, expected: u21) !void {
         const v = try self.evalStr(src);
-        try testing.expectEqual(@as(u8, @intFromEnum(value.Tag.char)), @intFromEnum(v.tag()));
+        try testing.expectEqual(@as(u8, @backingInt(value.Tag.char)), @backingInt(v.tag()));
         try testing.expectEqual(expected, v.toChar());
     }
 

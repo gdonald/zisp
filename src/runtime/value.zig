@@ -21,7 +21,7 @@ pub const Value = extern struct {
     raw: u64,
 
     pub fn tag(self: Value) Tag {
-        return @enumFromInt(@as(u3, @truncate(self.raw)));
+        return @fromBackingInt(@intCast(@as(u3, @truncate(self.raw))));
     }
 
     pub fn equalsRaw(self: Value, other: Value) bool {
@@ -50,7 +50,7 @@ pub const Value = extern struct {
 
     pub fn fromConsAddr(addr: u64) Value {
         std.debug.assert((addr & TAG_MASK) == 0);
-        return .{ .raw = addr | @intFromEnum(Tag.cons) };
+        return .{ .raw = addr | @backingInt(Tag.cons) };
     }
 
     pub fn toConsAddr(self: Value) u64 {
@@ -66,7 +66,7 @@ pub const Value = extern struct {
 
     pub fn fromSymbolAddr(addr: u64) Value {
         std.debug.assert((addr & TAG_MASK) == 0);
-        return .{ .raw = addr | @intFromEnum(Tag.symbol) };
+        return .{ .raw = addr | @backingInt(Tag.symbol) };
     }
 
     pub fn toSymbolAddr(self: Value) u64 {
@@ -82,7 +82,7 @@ pub const Value = extern struct {
 
     pub fn fromHeapAddr(addr: u64) Value {
         std.debug.assert((addr & TAG_MASK) == 0);
-        return .{ .raw = addr | @intFromEnum(Tag.heap) };
+        return .{ .raw = addr | @backingInt(Tag.heap) };
     }
 
     pub fn toHeapAddr(self: Value) u64 {
@@ -97,7 +97,7 @@ pub const Value = extern struct {
     // --- character ---
 
     pub fn fromChar(codepoint: u21) Value {
-        return .{ .raw = (@as(u64, codepoint) << TAG_BITS) | @intFromEnum(Tag.char) };
+        return .{ .raw = (@as(u64, codepoint) << TAG_BITS) | @backingInt(Tag.char) };
     }
 
     pub fn toChar(self: Value) u21 {
@@ -112,7 +112,7 @@ pub const Value = extern struct {
     // --- special immediates ---
 
     pub fn fromSpecial(index: u8) Value {
-        return .{ .raw = (@as(u64, index) << TAG_BITS) | @intFromEnum(Tag.special) };
+        return .{ .raw = (@as(u64, index) << TAG_BITS) | @backingInt(Tag.special) };
     }
 
     pub fn toSpecialIndex(self: Value) u8 {
@@ -133,12 +133,12 @@ pub const SPECIAL_SLOT_UNBOUND: Value = Value.fromSpecial(2);
 /// Left in a cons a collection has copied out of the nursery: the car
 /// says the cell moved and the cdr says where to. The tag is one no real
 /// value carries, so a live cons cannot hold this by accident.
-pub const FORWARDED: Value = .{ .raw = @intFromEnum(Tag._reserved6) };
+pub const FORWARDED: Value = .{ .raw = @backingInt(Tag._reserved6) };
 
 /// Left in a weak pointer whose referent a collection reclaimed. Like
 /// `FORWARDED` it carries a tag no real value does, so it can never be
 /// mistaken for something the program put there.
-pub const BROKEN: Value = .{ .raw = @intFromEnum(Tag._reserved7) };
+pub const BROKEN: Value = .{ .raw = @backingInt(Tag._reserved7) };
 
 // NIL and T are populated when the symbol table is initialized.
 // Their canonical Value forms are exposed so identity checks can use raw equality.

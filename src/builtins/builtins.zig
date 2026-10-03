@@ -567,8 +567,8 @@ fn raiseConditionFn(p: *anyopaque, args: []const Value) Error!Value {
     ev.error_condition = args[0];
     if (!args[1].isSymbol()) return Error.ProgramError;
     const name = symbol_mod.symbol(args[1]).name;
-    inline for (@typeInfo(Error).error_set.?) |member| {
-        if (std.mem.eql(u8, member.name, name)) return @field(Error, member.name);
+    inline for (@typeInfo(Error).error_set.error_names.?) |member_name| {
+        if (std.mem.eql(u8, member_name, name)) return @field(Error, member_name);
     }
     return Error.ProgramError;
 }

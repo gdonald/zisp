@@ -80,7 +80,7 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run zisp");
     run_step.dependOn(&run_cmd.step);
 
@@ -95,7 +95,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "build_options", .module = build_options_module },
         },
     });
-    const tests = b.addTest(.{ .root_module = test_module });
+    const tests = b.addTest(.{
+        .root_module = test_module,
+        .test_runner = .{ .path = b.path("tests/test_runner.zig"), .mode = .simple },
+    });
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("tests", "Run unit tests");
     test_step.dependOn(&run_tests.step);
@@ -133,7 +136,7 @@ pub fn build(b: *std.Build) void {
     });
     const fuzz_reader_tests = b.addTest(.{ .root_module = fuzz_reader_module });
     const run_fuzz_reader = b.addRunArtifact(fuzz_reader_tests);
-    if (b.args) |args| run_fuzz_reader.addArgs(args);
+    run_fuzz_reader.addPassthruArgs();
     const fuzz_reader_step = b.step("fuzz-reader", "Run the reader fuzzer");
     fuzz_reader_step.dependOn(&run_fuzz_reader.step);
 
@@ -172,8 +175,9 @@ pub fn build(b: *std.Build) void {
     // `zig build boyer` measures cl-bench's Boyer benchmark with the
     // nursery and without it, and fails if the generational collector
     // has fallen behind the mark and sweep baseline.
-    const boyer_run = b.addSystemCommand(&.{ "bash", "tests/run-boyer.sh" });
-    boyer_run.setEnvironmentVariable("ZISP", b.getInstallPath(.bin, "zisp"));
+    const boyer_run = b.addSystemCommand(&.{"env"});
+    boyer_run.addPrefixedFileArg("ZISP=", exe.getEmittedBin());
+    boyer_run.addArgs(&.{ "bash", "tests/run-boyer.sh" });
     boyer_run.step.dependOn(b.getInstallStep());
     const boyer_step = b.step("boyer", "Measure the collector against cl-bench's Boyer benchmark");
     boyer_step.dependOn(&boyer_run.step);
@@ -208,22 +212,23 @@ pub fn build(b: *std.Build) void {
     });
     const suite_dir: std.Build.InstallDir = .{ .custom = "suite" };
     const suite_install = b.addInstallArtifact(suite_exe, .{ .dest_dir = .{ .override = suite_dir } });
-    const suite_path = b.getInstallPath(suite_dir, "zisp");
 
     // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh,
     // passing ZISP=... so the script doesn't have to guess the path.
-    const ansi_run = b.addSystemCommand(&.{ "bash", "tests/run-ansi.sh" });
-    ansi_run.setEnvironmentVariable("ZISP", suite_path);
+    const ansi_run = b.addSystemCommand(&.{"env"});
+    ansi_run.addPrefixedFileArg("ZISP=", suite_exe.getEmittedBin());
+    ansi_run.addArgs(&.{ "bash", "tests/run-ansi.sh" });
     ansi_run.step.dependOn(&suite_install.step);
     const ansi_step = b.step("ansi-test", "Run the ANSI Common Lisp test suite");
     ansi_step.dependOn(&ansi_run.step);
 
     // `zig build rt-tests -- format typep` runs the named rt slices
     // through tests/run-rt-tests.sh.
-    const rt_run = b.addSystemCommand(&.{ "bash", "tests/run-rt-tests.sh" });
-    rt_run.setEnvironmentVariable("ZISP", suite_path);
+    const rt_run = b.addSystemCommand(&.{"env"});
+    rt_run.addPrefixedFileArg("ZISP=", suite_exe.getEmittedBin());
+    rt_run.addArgs(&.{ "bash", "tests/run-rt-tests.sh" });
     rt_run.step.dependOn(&suite_install.step);
-    if (b.args) |args| rt_run.addArgs(args);
+    rt_run.addPassthruArgs();
     const rt_step = b.step("rt-tests", "Run rt-based ansi-test slices: zig build rt-tests -- <slice>...");
     rt_step.dependOn(&rt_run.step);
 

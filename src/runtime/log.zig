@@ -29,7 +29,7 @@ pub const Category = enum {
     cli,
 };
 
-const N_CATEGORIES = @typeInfo(Category).@"enum".fields.len;
+const N_CATEGORIES = @typeInfo(Category).@"enum".field_names.len;
 
 /// Per-category enabled flags. Only consulted in ReleaseSafe; the other modes
 /// short-circuit at comptime.
@@ -59,21 +59,21 @@ pub fn initFromEnv(allocator: std.mem.Allocator) void {
             continue;
         }
         if (categoryFromName(trimmed)) |cat| {
-            enabled[@intFromEnum(cat)].store(true, .monotonic);
+            enabled[@backingInt(cat)].store(true, .monotonic);
         }
     }
 }
 
 /// Force a category on/off. Tests use this; production uses initFromEnv.
 pub fn setEnabled(cat: Category, on: bool) void {
-    enabled[@intFromEnum(cat)].store(on, .monotonic);
+    enabled[@backingInt(cat)].store(on, .monotonic);
 }
 
 pub fn isEnabled(cat: Category) bool {
     return switch (builtin.mode) {
         .Debug => true,
         .ReleaseFast, .ReleaseSmall => false,
-        .ReleaseSafe => enabled[@intFromEnum(cat)].load(.monotonic),
+        .ReleaseSafe => enabled[@backingInt(cat)].load(.monotonic),
     };
 }
 
@@ -87,10 +87,7 @@ pub fn log(comptime cat: Category, comptime fmt: []const u8, args: anytype) void
 }
 
 fn categoryFromName(name: []const u8) ?Category {
-    inline for (@typeInfo(Category).@"enum".fields) |f| {
-        if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
-    }
-    return null;
+    return std.meta.stringToEnum(Category, name);
 }
 
 /// This will be replaced with a real stream once `*standard-output*` and
