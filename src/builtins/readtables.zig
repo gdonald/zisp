@@ -53,7 +53,7 @@ pub fn active(ev: *Evaluator) ?*heap.HeapReadtable {
 pub fn install(ev: *Evaluator, rd: *reader_mod.Reader) void {
     const rt = active(ev) orelse return;
     rd.readtable = @ptrCast(@alignCast(rt.handlers));
-    rd.case = @enumFromInt(rt.case);
+    rd.case = @fromBackingInt(@intCast(rt.case));
 }
 
 fn expectReadtable(v: Value) Error!*heap.HeapReadtable {

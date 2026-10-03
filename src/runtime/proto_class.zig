@@ -59,7 +59,7 @@ pub fn classOf(v: Value) Value {
 }
 
 fn field(class: Value, which: Field) Value {
-    return heap.asStructure(class).slice()[@intFromEnum(which)];
+    return heap.asStructure(class).slice()[@backingInt(which)];
 }
 
 pub fn className(class: Value) Value {
@@ -120,7 +120,7 @@ fn makeClassFn(p: *anyopaque, args: []const Value) Error!Value {
     // A class stands at the head of its own precedence list, which it can
     // only be told once it exists.
     const whole = try ev.heap.allocCons(class, precedence);
-    heap.setSlot(ev.heap, class, @intFromEnum(Field.precedence), whole);
+    heap.setSlot(ev.heap, class, @backingInt(Field.precedence), whole);
     return class;
 }
 

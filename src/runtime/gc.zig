@@ -70,7 +70,7 @@ pub const SIZE_CLASSES = [_]usize{ 16, 32, 64, 128 };
 /// own set, so an allocation into the tenured space never lands in a
 /// block the nursery gave up, and the other way round.
 const FreeLists = struct {
-    objects: [SIZE_CLASSES.len + 1]?*FreeBlock = .{null} ** (SIZE_CLASSES.len + 1),
+    objects: [SIZE_CLASSES.len + 1]?*FreeBlock = @splat(null),
     conses: ?*FreeCons = null,
     /// Payload bytes threaded onto the object lists.
     bytes: usize = 0,
@@ -277,7 +277,7 @@ pub const Stats = struct {
     /// The longest single collection.
     gc_pause_max_ns: u64 = 0,
     /// Collections by how long they took.
-    pauses: [PAUSE_BUCKETS]u32 = .{0} ** PAUSE_BUCKETS,
+    pauses: [PAUSE_BUCKETS]u32 = @splat(0),
 };
 
 pub const Allocator = struct {

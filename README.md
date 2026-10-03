@@ -5,7 +5,7 @@ standard.
 
 ## Requirements
 
-- Zig 0.16.0 (pinned in `build.zig.zon`)
+- Zig 0.17.0 (pinned in `build.zig.zon`)
 - Bash (only for `tests/run-ansi.sh`)
 - Linux or macOS — Windows is a non-goal
 

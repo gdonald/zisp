@@ -45,10 +45,10 @@ test "unknown option returns user_error" {
 }
 
 test "exit codes are stable integers" {
-    try testing.expectEqual(@as(u8, 0), @intFromEnum(cli.ExitCode.success));
-    try testing.expectEqual(@as(u8, 1), @intFromEnum(cli.ExitCode.user_error));
-    try testing.expectEqual(@as(u8, 2), @intFromEnum(cli.ExitCode.internal_error));
-    try testing.expectEqual(@as(u8, 3), @intFromEnum(cli.ExitCode.test_failure));
+    try testing.expectEqual(@as(u8, 0), @backingInt(cli.ExitCode.success));
+    try testing.expectEqual(@as(u8, 1), @backingInt(cli.ExitCode.user_error));
+    try testing.expectEqual(@as(u8, 2), @backingInt(cli.ExitCode.internal_error));
+    try testing.expectEqual(@as(u8, 3), @backingInt(cli.ExitCode.test_failure));
 }
 
 test "--read-only requires a path" {

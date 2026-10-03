@@ -176,7 +176,7 @@ fn makePathnameFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len % 2 != 0) return Error.ProgramError;
 
     var parts = emptyPathname();
-    var given = std.EnumSet(ComponentName).initEmpty();
+    var given = std.EnumSet(ComponentName).empty;
     var defaults: ?Value = null;
 
     var i: usize = 0;

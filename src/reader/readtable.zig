@@ -70,7 +70,7 @@ fn macroIndex(kind: TokenKind) ?usize {
 }
 
 pub const Readtable = struct {
-    handlers: [MACRO_TOKEN_KINDS.len]?MacroHandler = .{null} ** MACRO_TOKEN_KINDS.len,
+    handlers: [MACRO_TOKEN_KINDS.len]?MacroHandler = @splat(null),
 
     /// Empty readtable — no macro tokens dispatched. Useful only for tests.
     pub fn init() Readtable {
