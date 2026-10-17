@@ -288,3 +288,28 @@ test "init frees the repl when a later allocation fails" {
     var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 1 });
     try testing.expectError(error.OutOfMemory, zisp.repl.Repl.init(failing.allocator(), &aw.writer, null));
 }
+
+test "abort at top level returns to the prompt without a break loop" {
+    const h = try newHarness();
+    defer h.deinit(testing.allocator);
+    try h.run("(progn (abort) 1) (+ 1 2)");
+    try testing.expectEqualStrings(";; Aborted.\n3\n", h.output());
+}
+
+test "the top level offers an abort restart" {
+    const h = try newHarness();
+    defer h.deinit(testing.allocator);
+    try h.run("(mapcar #'restart-name (compute-restarts))");
+    try testing.expectEqualStrings("(ABORT)\n", h.output());
+}
+
+test "abort inside the break loop stays in the break loop" {
+    const h = try newHarness();
+    defer h.deinit(testing.allocator);
+    try h.run("(car 1) (abort) :continue");
+    try testing.expectEqualStrings(
+        ";; Error: TypeError\n;; Entering break loop. :abort or :continue to resume.\n" ++
+            ";; Aborted.\n;; Resuming top level.\n",
+        h.output(),
+    );
+}

@@ -79,21 +79,43 @@
                             `((eql ,tmp ',keys) ,@(cdr clause)))))))
             clauses)))))
 
+(defun %case-keys (clauses)
+  "Every key the clauses of a `case` name, for the type a ccase error expects."
+  (mapcan (lambda (clause)
+            (let ((keys (car clause)))
+              (if (listp keys) (copy-list keys) (list keys))))
+          clauses))
+
 (defmacro ecase (keyform &rest clauses)
   (let ((tmp (gensym)))
     `(let ((,tmp ,keyform))
        (case ,tmp
          ,@clauses
-         (otherwise (error "~s fell through ECASE expression" ,tmp))))))
+         (otherwise (error 'type-error
+                           :datum ,tmp
+                           :expected-type '(member ,@(%case-keys clauses))))))))
 
-;; Without the condition system there is no store-value restart, so ccase
-;; signals like ecase.
-(defmacro ccase (keyform &rest clauses)
-  (let ((tmp (gensym)))
-    `(let ((,tmp ,keyform))
-       (case ,tmp
-         ,@clauses
-         (otherwise (error "~s fell through CCASE expression" ,tmp))))))
+(defmacro ccase (keyplace &rest clauses)
+  (let ((block (gensym "CCASE"))
+        (current (gensym "VALUE"))
+        (new (gensym "NEW"))
+        (stream (gensym "STREAM")))
+    `(block ,block
+       (loop
+         (let ((,current ,keyplace))
+           (case ,current
+             ,@(mapcar (lambda (clause)
+                         `(,(car clause) (return-from ,block (progn ,@(cdr clause)))))
+                       clauses))
+           (restart-case
+               (error 'type-error
+                      :datum ,current
+                      :expected-type '(member ,@(%case-keys clauses)))
+             (store-value (,new)
+               :report (lambda (,stream)
+                         (format ,stream "Supply a new value for ~S." ',keyplace))
+               :interactive %prompt-for-value
+               (setf ,keyplace ,new))))))))
 
 (defmacro typecase (keyform &rest clauses)
   (let ((tmp (gensym)))
@@ -113,15 +135,31 @@
     `(let ((,tmp ,keyform))
        (typecase ,tmp
          ,@clauses
-         (otherwise (error "~s fell through ETYPECASE expression" ,tmp))))))
+         (otherwise (error 'type-error
+                           :datum ,tmp
+                           :expected-type '(or ,@(mapcar #'car clauses))))))))
 
-;; Like ccase, ctypecase signals like its e-variant until restarts exist.
-(defmacro ctypecase (keyform &rest clauses)
-  (let ((tmp (gensym)))
-    `(let ((,tmp ,keyform))
-       (typecase ,tmp
-         ,@clauses
-         (otherwise (error "~s fell through CTYPECASE expression" ,tmp))))))
+(defmacro ctypecase (keyplace &rest clauses)
+  (let ((block (gensym "CTYPECASE"))
+        (current (gensym "VALUE"))
+        (new (gensym "NEW"))
+        (stream (gensym "STREAM")))
+    `(block ,block
+       (loop
+         (let ((,current ,keyplace))
+           (typecase ,current
+             ,@(mapcar (lambda (clause)
+                         `(,(car clause) (return-from ,block (progn ,@(cdr clause)))))
+                       clauses))
+           (restart-case
+               (error 'type-error
+                      :datum ,current
+                      :expected-type '(or ,@(mapcar #'car clauses)))
+             (store-value (,new)
+               :report (lambda (,stream)
+                         (format ,stream "Supply a new value for ~S." ',keyplace))
+               :interactive %prompt-for-value
+               (setf ,keyplace ,new))))))))
 
 ;; --- setf ---
 
@@ -400,6 +438,8 @@
        ,@(%struct-accessor-forms accessors 0)
        ',name)))
 
+(%put '%lexical-environment '%structure-slots '(value-frames function-frames))
+
 (defun identity (x) x)
 
 ;; `write` and `write-to-string` take the printer variables as keyword
@@ -465,10 +505,31 @@ when the block will not fit before the right margin."
                  (lambda (%args)
                    (destructuring-bind ,lambda-list %args ,@body))))
 
-(defmacro check-type (place type &optional string)
-  (declare (ignore string))
-  `(unless (typep ,place ',type)
-     (error "value is not of the required type")))
+(defun %prompt-for-value ()
+  (format *query-io* "~&Enter a form to be evaluated: ")
+  (finish-output *query-io*)
+  (list (eval (read *query-io*))))
+
+(defmacro check-type (place type &optional type-string)
+  (let ((current (gensym "VALUE"))
+        (new (gensym "NEW"))
+        (stream (gensym "STREAM")))
+    `(loop
+       (let ((,current ,place))
+         (when (typep ,current ',type) (return nil))
+         (restart-case
+             (error 'simple-type-error
+                    :datum ,current
+                    :expected-type ',type
+                    :format-control "The value of ~S is ~S, which is not ~A."
+                    :format-arguments (list ',place ,current
+                                            ,(or type-string
+                                                 `(format nil "of type ~S" ',type))))
+           (store-value (,new)
+             :report (lambda (,stream)
+                       (format ,stream "Supply a new value for ~S." ',place))
+             :interactive %prompt-for-value
+             (setf ,place ,new)))))))
 
 (defmacro do-symbols ((var &optional (package '*package*) result) &body body)
   `(progn
@@ -635,10 +696,21 @@ when the block will not fit before the right margin."
   `(lambda (stream &rest args) (apply #'%format-tail stream ,control-string args)))
 
 (defmacro assert (test-form &optional places datum &rest arguments)
-  (declare (ignore places))
-  (if datum
-      `(unless ,test-form (error ,datum ,@arguments))
-      `(unless ,test-form (error "The assertion ~s failed." ',test-form))))
+  (let ((stream (gensym "STREAM")))
+    `(loop
+       (when ,test-form (return nil))
+       (restart-case
+           ,(if datum
+                `(error ,datum ,@arguments)
+                `(error "The assertion ~S failed." ',test-form))
+         (continue ()
+           :report (lambda (,stream)
+                     (format ,stream ,(if places
+                                          "Retry the assertion after setting new values."
+                                          "Retry the assertion.")))
+           ,@(mapcar (lambda (place)
+                       `(setf ,place (car (%prompt-for-value))))
+                     places))))))
 
 ;; The printer and reader variables the standard names, each bound to
 ;; what the standard says it holds, so what a form prints does not depend

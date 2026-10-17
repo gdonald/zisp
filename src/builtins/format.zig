@@ -856,28 +856,46 @@ fn printPadded(r: *Runner, directive: Directive, args: *Args, settings: printer.
 fn render(r: *Runner, v: Value, given: printer.Settings) Error![]const u8 {
     var settings = given;
     if (r.circle) |state| settings.circle = state;
-    // A condition prints as its report where nothing asked for output
-    // that reads back, which is what `~A` and `princ` want of it.
+    // A condition or a restart prints as its report where nothing asked
+    // for output that reads back, which is what `~A` and `princ` want of it.
     if (!settings.escape) {
-        if (try conditionReport(r.ev, r.allocator, v)) |text| return text;
+        if (try reportText(r.ev, r.allocator, v)) |text| return text;
     }
     var rendered = std.Io.Writer.Allocating.init(r.allocator);
     try printer.write(r.allocator, &rendered.writer, v, settings);
     return rendered.written();
 }
 
-/// What a condition's report function writes, or null where its class
-/// has none. The report is handed `t` for its stream and what it writes
-/// there is captured, the way a `~/name/` call's output is.
-pub fn conditionReport(
+/// What the report of a condition or a restart writes, or null where `v`
+/// is neither or its condition class has no report. The report is handed
+/// `t` for its stream and what it writes there is captured, the way a
+/// `~/name/` call's output is.
+pub fn reportText(
     ev: *Evaluator,
     allocator: std.mem.Allocator,
     v: Value,
 ) Error!?[]const u8 {
+    if (try isRestart(ev, v)) {
+        const printer_fn = ev.env.lookupFunction(try ev.interner.intern("%PRINT-RESTART-REPORT")) orelse return null;
+        return try captureOutput(ev, allocator, printer_fn, &.{ v, value.T });
+    }
     if (!proto_class.isInstance(ev, v)) return null;
     const report = proto_class.inheritedReport(proto_class.classOf(v));
     if (report.equalsRaw(value.NIL)) return null;
+    return try captureOutput(ev, allocator, report, &.{ v, value.T });
+}
 
+fn isRestart(ev: *Evaluator, v: Value) Error!bool {
+    if (!heap.isStructure(v)) return false;
+    return heap.asStructure(v).name.equalsRaw(try ev.interner.intern("RESTART"));
+}
+
+fn captureOutput(
+    ev: *Evaluator,
+    allocator: std.mem.Allocator,
+    fn_v: Value,
+    args: []const Value,
+) Error![]const u8 {
     var captured = std.Io.Writer.Allocating.init(allocator);
     const saved_out = ev.out;
     const saved_column = ev.output_column;
@@ -887,7 +905,7 @@ pub fn conditionReport(
         ev.out = saved_out;
         ev.output_column = saved_column;
     }
-    _ = try ev.callFunction(report, &.{ v, value.T });
+    _ = try ev.callFunction(fn_v, args);
     return captured.written();
 }
 

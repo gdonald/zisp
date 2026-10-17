@@ -496,18 +496,18 @@ Common Lisp's condition system is more powerful than exceptions in most language
   - [x] 6.3.2. `handler-bind` (non-unwinding)
   - [x] 6.3.3. `ignore-errors`
   - [x] 6.3.4. Handler search walks dynamically-bound handler stack: most-recently-bound matching handler fires first; `handler-bind` handlers can decline (return normally) and search continues to outer handlers; `handler-case` handlers always unwind. Acceptance: 10 cases in `tests/lisp/handler-search.lisp` covering: nested `handler-bind` with mixed condition types, `handler-bind` declining and falling through to outer handler, mixed `handler-bind`/`handler-case` nesting, handler that signals a different condition (must search from where it was bound, not from the original signal site)
-- [ ] 6.4. Restarts (split per facility)
-  - [ ] 6.4.1a. `restart-bind` (non-unwinding) — establishes named restarts available via `find-restart`/`invoke-restart`. 3 cases
-  - [ ] 6.4.1b. `restart-case` (unwinding) — clauses with bodies; `invoke-restart` unwinds to the matching clause and runs its body. 4 cases
-  - [ ] 6.4.1c. `restart-case` clause options: `:report`, `:test`, `:interactive`. 3 cases
-  - [ ] 6.4.2a. `invoke-restart` by name and by restart-object. 2 cases
-  - [ ] 6.4.2b. `invoke-restart-interactively` calls the `:interactive` function for arguments. 2 cases
-  - [ ] 6.4.3. `find-restart`, `compute-restarts` — return all visible restarts; filtering by condition deferred to 6.4.5
-  - [ ] 6.4.4a. Standard restart `abort` — always available, signals `control-error` if invoked when no abort point exists
-  - [ ] 6.4.4b. Standard restart `continue` — `cerror` establishes; `(continue)` is the convenience function
-  - [ ] 6.4.4c. Standard restart `muffle-warning` — `warn` establishes; suppresses the warning print
-  - [ ] 6.4.4d. Standard restarts `store-value`, `use-value` — establishment by `signal`/`error`; differ in whether the value is stored back at the source or just used
-  - [ ] 6.4.5. `with-condition-restarts` associates a restart set with a specific condition object so `compute-restarts` can filter by condition. Acceptance: 5 cases in `tests/lisp/with-condition-restarts.lisp` — establish 3 restarts under `with-condition-restarts` for condition A, signal A and B; `compute-restarts` for A returns the associated subset; for B returns only the unassociated restarts; restarts established outside `with-condition-restarts` are visible to all conditions
+- [x] 6.4. Restarts (split per facility)
+  - [x] 6.4.1a. `restart-bind` (non-unwinding) — establishes named restarts available via `find-restart`/`invoke-restart`. 3 cases
+  - [x] 6.4.1b. `restart-case` (unwinding) — clauses with bodies; `invoke-restart` unwinds to the matching clause and runs its body. 4 cases
+  - [x] 6.4.1c. `restart-case` clause options: `:report`, `:test`, `:interactive`. 3 cases
+  - [x] 6.4.2a. `invoke-restart` by name and by restart-object. 2 cases
+  - [x] 6.4.2b. `invoke-restart-interactively` calls the `:interactive` function for arguments. 2 cases
+  - [x] 6.4.3. `find-restart`, `compute-restarts` — return all visible restarts; filtering by condition deferred to 6.4.5
+  - [x] 6.4.4a. Standard restart `abort` — always available, signals `control-error` if invoked when no abort point exists
+  - [x] 6.4.4b. Standard restart `continue` — `cerror` establishes; `(continue)` is the convenience function
+  - [x] 6.4.4c. Standard restart `muffle-warning` — `warn` establishes; suppresses the warning print
+  - [x] 6.4.4d. Standard restarts `store-value`, `use-value` — establishment by `signal`/`error`; differ in whether the value is stored back at the source or just used
+  - [x] 6.4.5. `with-condition-restarts` associates a restart set with a specific condition object so `compute-restarts` can filter by condition. Acceptance: 5 cases in `tests/lisp/with-condition-restarts.lisp` — establish 3 restarts under `with-condition-restarts` for condition A, signal A and B; `compute-restarts` for A returns the associated subset; for B returns only the unassociated restarts; restarts established outside `with-condition-restarts` are visible to all conditions
 - [ ] 6.5. Debugger
   - [x] 6.5.1. `*debugger-hook*`
   - [ ] 6.5.2. Default debugger. Split into 6 milestones:

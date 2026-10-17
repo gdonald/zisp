@@ -123,3 +123,28 @@ test "handler search corpus" {
     const checked = try runCorpus("handler-search", @embedFile("lisp/handler-search.lisp"));
     try testing.expectEqual(@as(u32, 21), checked);
 }
+
+test "macrolet corpus" {
+    const checked = try runCorpus("macrolet", @embedFile("lisp/macrolet-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 12), checked);
+}
+
+test "restart corpus" {
+    const checked = try runCorpus("restart", @embedFile("lisp/restart-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 34), checked);
+}
+
+test "with-condition-restarts corpus" {
+    const checked = try runCorpus("with-condition-restarts", @embedFile("lisp/with-condition-restarts.lisp"));
+    try testing.expectEqual(@as(u32, 6), checked);
+}
+
+test "symbol-macrolet corpus" {
+    const checked = try runCorpus("symbol-macrolet", @embedFile("lisp/symbol-macrolet-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 10), checked);
+}
+
+test "special declaration corpus" {
+    const checked = try runCorpus("special-declaration", @embedFile("lisp/special-declaration-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 8), checked);
+}

@@ -401,6 +401,13 @@ fn printStructure(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     if (!obj.name.isSymbol() or isConditionClass(obj.name)) {
         return printConditionish(ctx, v);
     }
+    if (std.mem.eql(u8, symbol.name(obj.name), "RESTART") and obj.constSlice().len > 0) {
+        try ctx.writer.writeAll("#<");
+        try writeCased(ctx, "RESTART");
+        try ctx.writer.writeByte(' ');
+        try printValue(ctx, obj.constSlice()[0], depth + 1);
+        return ctx.writer.writeByte('>');
+    }
     try ctx.writer.writeAll("#S(");
     try printValue(ctx, obj.name, depth + 1);
     var names = structureSlotNames(obj.name);

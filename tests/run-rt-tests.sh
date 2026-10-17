@@ -23,6 +23,9 @@ die() { echo "error: $*" >&2; exit 1; }
 
 [[ -d "$SUITE" ]] || die "ansi-test suite not found at $SUITE. Initialize the submodule."
 [[ -x "$ZISP"  ]] || die "zisp binary not found at $ZISP. Run 'zig build' first."
+# Each slice runs from inside the suite, so a relative path has to be
+# made absolute first.
+ZISP="$(cd "$(dirname "$ZISP")" && pwd)/$(basename "$ZISP")"
 (( $# > 0 )) || die "usage: $(basename "$0") <slice>..."
 
 status=0

@@ -24,6 +24,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("FUNCTION", &functionForm);
     try ev.registerSpecialForm("FLET", &flet);
     try ev.registerSpecialForm("LABELS", &labels);
+    try ev.registerSpecialForm("MACROLET", &macrolet);
+    try ev.registerSpecialForm("SYMBOL-MACROLET", &symbolMacrolet);
     try ev.registerSpecialForm("BLOCK", &block);
     try ev.registerSpecialForm("RETURN-FROM", &returnFrom);
     try ev.registerSpecialForm("RETURN", &returnForm);
@@ -59,6 +61,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
 
     ev.sym_if = try ev.interner.intern("IF");
     ev.sym_progn = try ev.interner.intern("PROGN");
+    ev.sym_declare = try ev.interner.intern("DECLARE");
+    ev.sym_special = try ev.interner.intern("SPECIAL");
 
     const hook_sym = try ev.interner.intern("*MACROEXPAND-HOOK*");
     if (symbol_mod.symbol(hook_sym).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
@@ -212,6 +216,71 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
     return prognBody(ev, body);
 }
 
+fn macrolet(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const definitions = heap.car(args);
+    const body = heap.cdr(args);
+
+    const frame = try ev.env.pushFunctionFrame();
+    defer ev.env.popFunctionFrame();
+    const captured_fenv = frame.parent;
+
+    var rest = definitions;
+    while (!rest.equalsRaw(value.NIL)) {
+        if (!rest.isCons()) return Error.BadArgList;
+        const def = heap.car(rest);
+        if (!def.isCons()) return Error.BadArgList;
+        const name = heap.car(def);
+        if (!name.isSymbol()) return Error.TypeError;
+        const after_name = heap.cdr(def);
+        if (!after_name.isCons()) return Error.BadArgList;
+        const params = heap.car(after_name);
+        try lambda_list.validate(ev, params, true);
+        try ev.env.retainChain(ev.env.top_value);
+        try ev.env.retainChain(captured_fenv);
+        const expander = try function.allocMacro(
+            ev.heap.allocator,
+            symbol_mod.symbol(name).name,
+            params,
+            heap.cdr(after_name),
+            ev.env.top_value,
+            captured_fenv,
+            null,
+        );
+        try frame.bind(ev.allocator, name, expander);
+        rest = heap.cdr(rest);
+    }
+
+    return prognBody(ev, body);
+}
+
+fn symbolMacrolet(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const definitions = heap.car(args);
+    const body = heap.cdr(args);
+
+    const frame = try ev.env.pushValueFrame();
+    defer ev.env.popValueFrame();
+    const marker_name = try ev.interner.intern(Evaluator.SYMBOL_MACRO_NAME);
+
+    var rest = definitions;
+    while (!rest.equalsRaw(value.NIL)) {
+        if (!rest.isCons()) return Error.BadArgList;
+        const def = heap.car(rest);
+        if (!def.isCons()) return Error.BadArgList;
+        const name = heap.car(def);
+        if (!name.isSymbol()) return Error.TypeError;
+        if (symbol_mod.symbol(name).special or symbol_mod.symbol(name).constant) return Error.ProgramError;
+        const after_name = heap.cdr(def);
+        if (!after_name.isCons() or !heap.cdr(after_name).equalsRaw(value.NIL)) return Error.BadArgList;
+        const marker = try ev.heap.allocStructure(marker_name, &.{heap.car(after_name)});
+        try frame.bind(ev.allocator, name, marker);
+        rest = heap.cdr(rest);
+    }
+
+    return prognBody(ev, body);
+}
+
 fn functionForm(ev: *Evaluator, args: Value) Error!Value {
     const arg = try expectOneArg(args);
     if (arg.isSymbol()) {
@@ -311,36 +380,49 @@ fn destructuringBind(ev: *Evaluator, args: Value) Error!Value {
 }
 
 fn macroexpand1Form(ev: *Evaluator, args: Value) Error!Value {
-    const form = try evalMacroexpandArgs(ev, args);
-    if (try ev.macroexpand1(form)) |expansion| {
+    const given = try evalMacroexpandArgs(ev, args);
+    const previous = try ev.enterEnvironment(given.environment);
+    defer ev.leaveEnvironment(previous);
+    if (try ev.macroexpand1(given.form)) |expansion| {
         return ev.setValues(&.{ expansion, value.T });
     }
-    return ev.setValues(&.{ form, value.NIL });
+    return ev.setValues(&.{ given.form, value.NIL });
 }
 
 fn macroexpandForm(ev: *Evaluator, args: Value) Error!Value {
-    var form = try evalMacroexpandArgs(ev, args);
+    const given = try evalMacroexpandArgs(ev, args);
+    const previous = try ev.enterEnvironment(given.environment);
+    defer ev.leaveEnvironment(previous);
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(given.form);
     var expanded = false;
-    while (try ev.macroexpand1(form)) |expansion| {
-        form = expansion;
+    while (try ev.macroexpand1(held.items()[0])) |expansion| {
+        held.items()[0] = expansion;
         expanded = true;
     }
-    return ev.setValues(&.{ form, if (expanded) value.T else value.NIL });
+    return ev.setValues(&.{ held.items()[0], if (expanded) value.T else value.NIL });
 }
 
-/// Both macroexpand forms take `form` plus an optional environment argument,
-/// which is evaluated and ignored.
-fn evalMacroexpandArgs(ev: *Evaluator, args: Value) Error!Value {
+const MacroexpandArgs = struct { form: Value, environment: Value };
+
+/// Both macroexpand forms take `form` plus an optional environment
+/// argument. Without one, the expansion sees the lexical environment the
+/// call itself is in.
+fn evalMacroexpandArgs(ev: *Evaluator, args: Value) Error!MacroexpandArgs {
     if (!args.isCons()) return Error.BadArgList;
-    const form = try ev.eval(heap.car(args));
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(try ev.eval(heap.car(args)));
     const after_form = heap.cdr(args);
     if (after_form.isCons()) {
         if (!heap.cdr(after_form).equalsRaw(value.NIL)) return Error.BadArgList;
-        _ = try ev.eval(heap.car(after_form));
+        const environment = try ev.eval(heap.car(after_form));
+        return .{ .form = held.items()[0], .environment = environment };
     } else if (!after_form.equalsRaw(value.NIL)) {
         return Error.BadArgList;
     }
-    return form;
+    return .{ .form = held.items()[0], .environment = try ev.captureEnvironment() };
 }
 
 fn ifForm(ev: *Evaluator, args: Value) Error!Value {
@@ -397,6 +479,14 @@ fn setq(ev: *Evaluator, args: Value) Error!Value {
         if (!sym.isSymbol()) return Error.TypeError;
         const after_sym = heap.cdr(rest);
         if (!after_sym.isCons()) return Error.BadArgList;
+        if (ev.env.lookupValue(sym)) |binding| {
+            if (ev.symbolMacroExpansion(binding)) |expansion| {
+                const setf_form = try ev.heap.list(&.{ try ev.interner.intern("SETF"), expansion, heap.car(after_sym) });
+                result = try ev.eval(setf_form);
+                rest = heap.cdr(after_sym);
+                continue;
+            }
+        }
         const val = try ev.eval(heap.car(after_sym));
         ev.env.assignValue(sym, val);
         result = val;
@@ -432,16 +522,10 @@ fn letForm(ev: *Evaluator, args: Value) Error!Value {
     const bound = pairs.items();
     var i: usize = 0;
     while (i < bound.len) : (i += 2) {
-        try bindVariable(ev, bound[i], bound[i + 1]);
+        try lambda_list.bindScoped(ev, ev.env.top_value.?, bound[i], bound[i + 1], body);
     }
+    try lambda_list.markFreeSpecials(ev, ev.env.top_value.?, body);
     return prognBody(ev, body);
-}
-
-/// Bind one variable in the innermost value frame, or dynamically when the
-/// symbol has been proclaimed special.
-pub fn bindVariable(ev: *Evaluator, sym: Value, val: Value) Error!void {
-    if (symbol_mod.symbol(sym).special) return ev.bindSpecial(sym, val);
-    try ev.env.top_value.?.bind(ev.allocator, sym, val);
 }
 
 fn letStar(ev: *Evaluator, args: Value) Error!Value {
@@ -459,9 +543,10 @@ fn letStar(ev: *Evaluator, args: Value) Error!Value {
         if (!bind_rest.isCons()) return Error.BadArgList;
         const pair = try parseBinding(heap.car(bind_rest));
         const init_val = if (pair.has_init) try ev.eval(pair.init) else value.NIL;
-        try bindVariable(ev, pair.sym, init_val);
+        try lambda_list.bindScoped(ev, ev.env.top_value.?, pair.sym, init_val, body);
         bind_rest = heap.cdr(bind_rest);
     }
+    try lambda_list.markFreeSpecials(ev, ev.env.top_value.?, body);
 
     return prognBody(ev, body);
 }

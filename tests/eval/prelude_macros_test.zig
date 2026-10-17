@@ -188,7 +188,7 @@ test "ecase returns the match and errors on fall-through" {
     defer fx.deinit(testing.allocator);
 
     try fx.expectSym("(ecase 2 (1 'one) (2 'two))", "TWO");
-    try testing.expectError(Error.ProgramError, fx.evalStr("(ecase 9 (1 'one) (2 'two))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(ecase 9 (1 'one) (2 'two))"));
 }
 
 test "ccase returns the match and errors on fall-through" {
@@ -196,7 +196,7 @@ test "ccase returns the match and errors on fall-through" {
     defer fx.deinit(testing.allocator);
 
     try fx.expectSym("(ccase 1 (1 'one) (2 'two))", "ONE");
-    try testing.expectError(Error.ProgramError, fx.evalStr("(ccase 9 (1 'one))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(ccase 9 (1 'one))"));
 }
 
 test "typecase dispatches on runtime type" {
@@ -215,9 +215,9 @@ test "etypecase and ctypecase error on fall-through" {
     defer fx.deinit(testing.allocator);
 
     try fx.expectSym("(etypecase 5 (integer 'int))", "INT");
-    try testing.expectError(Error.ProgramError, fx.evalStr("(etypecase 'a (integer 'int))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(etypecase 'a (integer 'int))"));
     try fx.expectSym("(ctypecase 'a (symbol 'sym))", "SYM");
-    try testing.expectError(Error.ProgramError, fx.evalStr("(ctypecase 5 (symbol 'sym))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(ctypecase 5 (symbol 'sym))"));
 }
 
 test "typep covers the runtime's atomic types" {

@@ -568,7 +568,7 @@ fn raiseConditionFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!args[1].isSymbol()) return Error.ProgramError;
     const name = symbol_mod.symbol(args[1]).name;
     inline for (@typeInfo(Error).error_set.error_names.?) |member_name| {
-        if (std.mem.eql(u8, member_name, name)) return @field(Error, member_name);
+        if (std.ascii.eqlIgnoreCase(member_name, name)) return @field(Error, member_name);
     }
     return Error.ProgramError;
 }
@@ -915,6 +915,8 @@ fn macroFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
     if (!args[0].isSymbol()) return Error.TypeError;
+    const previous = if (args.len == 2) try ev.enterEnvironment(args[1]) else null;
+    defer if (previous) |chains| ev.leaveEnvironment(chains);
     const f = ev.env.lookupFunction(args[0]) orelse return value.NIL;
     if (!function.isMacro(f)) return value.NIL;
     return f;

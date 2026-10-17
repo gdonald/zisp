@@ -288,6 +288,208 @@ first, and the initform where none did."
 (defun conditionp (object)
   (%condition-p object))
 
+;;; --- restarts ---
+
+;; Each `restart-bind` pushes one cluster of restarts, innermost first,
+;; the way `handler-bind` pushes handlers.
+(defvar *restart-clusters* nil)
+
+;; Each `with-condition-restarts` pushes one (condition . restarts) entry.
+;; A restart named in some entry is applicable only to the conditions its
+;; entries name.
+(defvar *condition-restarts* nil)
+
+(defstruct (restart (:conc-name %restart-)
+                    (:constructor %make-restart)
+                    (:copier nil)
+                    (:predicate nil))
+  name function report-function interactive-function test-function)
+
+(defun restart-name (restart)
+  (%restart-name restart))
+
+(defun %print-restart-report (restart stream)
+  (let ((report (%restart-report-function restart)))
+    (if report
+        (funcall report stream)
+        (princ (%restart-name restart) stream))))
+
+(defun %restart-associated-p (restart)
+  (dolist (entry *condition-restarts* nil)
+    (when (member restart (cdr entry)) (return t))))
+
+(defun %restart-associated-with-p (restart condition)
+  (dolist (entry *condition-restarts* nil)
+    (when (and (eq (car entry) condition) (member restart (cdr entry)))
+      (return t))))
+
+(defun %restart-applicable-p (restart condition)
+  (and (or (null condition)
+           (not (%restart-associated-p restart))
+           (%restart-associated-with-p restart condition))
+       (let ((test (%restart-test-function restart)))
+         (or (null test) (funcall test condition)))))
+
+(defun compute-restarts (&optional condition)
+  (let ((found nil))
+    (dolist (cluster *restart-clusters*)
+      (dolist (restart cluster)
+        (when (%restart-applicable-p restart condition)
+          (push restart found))))
+    (nreverse found)))
+
+(defun find-restart (identifier &optional condition)
+  (dolist (restart (compute-restarts condition) nil)
+    (when (if (restart-p identifier)
+              (eq restart identifier)
+              (eq (%restart-name restart) identifier))
+      (return restart))))
+
+(defun restart-p (object)
+  (and (%structure-p object) (eq (%structure-name object) 'restart)))
+
+(defun %designated-restart (identifier condition)
+  (or (find-restart identifier condition)
+      (error 'control-error)))
+
+(defun invoke-restart (restart &rest arguments)
+  (apply (%restart-function (%designated-restart restart nil)) arguments))
+
+(defun invoke-restart-interactively (restart)
+  (let* ((found (%designated-restart restart nil))
+         (interactive (%restart-interactive-function found)))
+    (apply (%restart-function found)
+           (if interactive (funcall interactive) nil))))
+
+(defun %restart-bind-maker (binding)
+  (destructuring-bind (name function &key interactive-function report-function
+                                          test-function)
+      binding
+    `(%make-restart :name ',name
+                    :function ,function
+                    :interactive-function ,interactive-function
+                    :report-function ,report-function
+                    :test-function ,test-function)))
+
+(defmacro restart-bind (bindings &body body)
+  `(let ((*restart-clusters*
+           (cons (list ,@(mapcar #'%restart-bind-maker bindings))
+                 *restart-clusters*)))
+     ,@body))
+
+(defmacro with-condition-restarts (condition-form restarts-form &body body)
+  `(let ((*condition-restarts*
+           (cons (cons ,condition-form ,restarts-form) *condition-restarts*)))
+     ,@body))
+
+(defun %parse-restart-clause (clause)
+  "A `restart-case` clause as (name lambda-list report interactive test
+body), the options taken off the front of what follows the lambda list."
+  (let ((rest (cddr clause))
+        (report nil)
+        (interactive nil)
+        (test nil))
+    (loop
+      (unless (and (consp rest) (consp (cdr rest))
+                   (member (car rest) '(:report :interactive :test)))
+        (return))
+      (case (car rest)
+        (:report (setq report (cadr rest)))
+        (:interactive (setq interactive (cadr rest)))
+        (:test (setq test (cadr rest))))
+      (setq rest (cddr rest)))
+    (list (car clause) (cadr clause) report interactive test rest)))
+
+(defun %restart-case-binding (parsed tag arguments)
+  (destructuring-bind (name lambda-list report interactive test body) parsed
+    (declare (ignore lambda-list body))
+    (let ((given (gensym "ARGUMENTS"))
+          (stream (gensym "STREAM")))
+      `(,name (lambda (&rest ,given) (setq ,arguments ,given) (go ,tag))
+              ,@(when report
+                  (list :report-function
+                        (if (stringp report)
+                            `(lambda (,stream) (write-string ,report ,stream))
+                            `(function ,report))))
+              ,@(when interactive (list :interactive-function `(function ,interactive)))
+              ,@(when test (list :test-function `(function ,test)))))))
+
+(defun %restart-case-form (form environment)
+  "CLHS 9.1.4.2.3: where the form is a call to `signal`, `error`, `cerror`
+or `warn`, the restarts are associated with the condition it signals."
+  (let ((expansion (macroexpand form environment))
+        (condition (gensym "CONDITION")))
+    (if (and (consp expansion)
+             (member (car expansion) '(signal error cerror warn)))
+        (let ((cerrorp (eq (car expansion) 'cerror)))
+          `(let ((,condition
+                   (%condition-designator
+                    ,(if cerrorp (caddr expansion) (cadr expansion))
+                    (list ,@(if cerrorp (cdddr expansion) (cddr expansion)))
+                    ',(case (car expansion)
+                        (signal 'simple-condition)
+                        (warn 'simple-warning)
+                        (t 'simple-error)))))
+             (with-condition-restarts ,condition (car *restart-clusters*)
+               ,(if cerrorp
+                    `(cerror ,(cadr expansion) ,condition)
+                    `(,(car expansion) ,condition)))))
+        form)))
+
+(defmacro restart-case (form &rest clauses &environment environment)
+  (let* ((done (gensym "DONE"))
+         (arguments (gensym "ARGUMENTS"))
+         (parsed (mapcar #'%parse-restart-clause clauses))
+         (tags (mapcar (lambda (clause) (declare (ignore clause)) (gensym "RESTART"))
+                       clauses)))
+    `(block ,done
+       (let ((,arguments nil))
+         (tagbody
+            (return-from ,done
+              (restart-bind
+                  ,(mapcar (lambda (clause tag) (%restart-case-binding clause tag arguments))
+                           parsed tags)
+                ,(%restart-case-form form environment)))
+            ,@(mapcan (lambda (clause tag)
+                        (list tag
+                              `(return-from ,done
+                                 (apply (lambda ,(cadr clause) ,@(sixth clause))
+                                        ,arguments))))
+                      parsed tags))))))
+
+(defmacro with-simple-restart ((name format-control &rest format-arguments) &body body)
+  (let ((stream (gensym "STREAM")))
+    `(restart-case (progn ,@body)
+       (,name ()
+         :report (lambda (,stream) (format ,stream ,format-control ,@format-arguments))
+         (values nil t)))))
+
+(defun abort (&optional condition)
+  (invoke-restart (%designated-restart 'abort condition)))
+
+(defun muffle-warning (&optional condition)
+  (invoke-restart (%designated-restart 'muffle-warning condition)))
+
+(defun continue (&optional condition)
+  (let ((restart (find-restart 'continue condition)))
+    (when restart (invoke-restart restart))))
+
+(defun store-value (value &optional condition)
+  (let ((restart (find-restart 'store-value condition)))
+    (when restart (invoke-restart restart value))))
+
+(defun use-value (value &optional condition)
+  (let ((restart (find-restart 'use-value condition)))
+    (when restart (invoke-restart restart value))))
+
+;; What the REPL evaluates each form through, so `abort` has a restart
+;; to reach. The first value says whether FORM completed.
+(defun %eval-with-abort (form)
+  (restart-case (values t (eval form))
+    (abort ()
+      :report "Return to the top level."
+      (values nil nil))))
+
 ;;; --- signaling ---
 
 ;; Each `handler-bind` pushes one cluster of (type . function) pairs.
@@ -379,25 +581,48 @@ signals cannot reach it again."
 (defun %condition-raise-kind (condition)
   "The Zig failure an unhandled condition unwinds as, which is what the
 driver reports when nothing catches it."
-  (if (typep condition 'type-error)
-      'TypeError
-      (if (typep condition 'division-by-zero)
-          'DivisionByZero
-          (if (typep condition 'control-error)
-              'ControlError
-              'ProgramError))))
+  (cond ((typep condition 'type-error) 'TypeError)
+        ((typep condition 'division-by-zero) 'DivisionByZero)
+        ((typep condition 'control-error) 'ControlError)
+        ((typep condition 'unbound-variable) 'UnboundVariable)
+        ((typep condition 'undefined-function) 'UnboundFunction)
+        (t 'ProgramError)))
+
+(defun %unbound-variable (name)
+  "What evaluating NAME comes to when it has no value: an `unbound-variable`
+error with restarts to use a value in its place or to store one."
+  (restart-case (error 'unbound-variable :name name)
+    (use-value (value)
+      :report (lambda (stream) (format stream "Use a value in place of ~S." name))
+      :interactive %prompt-for-value
+      value)
+    (store-value (value)
+      :report (lambda (stream) (format stream "Set the value of ~S." name))
+      :interactive %prompt-for-value
+      (setf (symbol-value name) value))))
 
 (defun warn (datum &rest arguments)
   (let ((condition (%condition-designator datum arguments 'simple-warning)))
     (unless (typep condition 'warning)
       (error 'type-error :datum condition :expected-type 'warning))
-    (%run-handlers condition)
-    (format *error-output* "~&WARNING: ~A~%" condition)
+    (restart-case
+        (with-condition-restarts condition (car *restart-clusters*)
+          (%run-handlers condition)
+          (format *error-output* "~&WARNING: ~A~%" condition))
+      (muffle-warning ()
+        :report "Skip warning."
+        nil))
     nil))
 
 (defun cerror (continue-control datum &rest arguments)
-  (declare (ignore continue-control))
-  (apply #'error datum arguments))
+  (let ((condition (%condition-designator datum arguments 'simple-error)))
+    (restart-case
+        (with-condition-restarts condition (car *restart-clusters*)
+          (error condition))
+      (continue ()
+        :report (lambda (stream) (apply #'format stream continue-control arguments))
+        nil))
+    nil))
 
 (defvar *debugger-hook* nil)
 
@@ -489,6 +714,10 @@ is caught on the way out and offered to the clauses there."
 (export '(define-condition make-condition conditionp
           signal error cerror warn invoke-debugger *debugger-hook*
           handler-bind handler-case ignore-errors
+          restart restart-name compute-restarts find-restart
+          invoke-restart invoke-restart-interactively
+          restart-bind restart-case with-condition-restarts with-simple-restart
+          abort muffle-warning continue store-value use-value
           *break-on-signals*
           find-condition-class condition-type-name
           condition serious-condition error warning

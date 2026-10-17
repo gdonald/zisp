@@ -29,6 +29,7 @@ pub const Error = NativeError || std.Io.Writer.Error;
 
 const BREAK_MSG = ";; Entering break loop. :abort or :continue to resume.\n";
 const RESUME_MSG = ";; Resuming top level.\n";
+const ABORT_MSG = ";; Aborted.\n";
 
 pub const Repl = struct {
     gpa: std.mem.Allocator,
@@ -107,12 +108,15 @@ pub const Repl = struct {
             };
             const f = form orelse break;
             self.rotateInput(f);
-            const result = self.ev.eval(f) catch |e| {
+            const result = self.evalWithAbort(f) catch |e| {
                 if (e == error.Quit) return;
                 self.ev.error_condition = .{ .raw = 0 };
                 self.ev.error_datum = .{ .raw = 0 };
                 try self.reportError("Error", e);
                 try self.breakLoop(&rd);
+                continue;
+            } orelse {
+                try self.out.writeAll(ABORT_MSG);
                 continue;
             };
             self.rotateOutput(result);
@@ -162,16 +166,29 @@ pub const Repl = struct {
                 return;
             }
             self.rotateInput(f);
-            const result = self.ev.eval(f) catch |e| {
+            const result = self.evalWithAbort(f) catch |e| {
                 if (e == error.Quit) return;
                 self.ev.error_condition = .{ .raw = 0 };
                 self.ev.error_datum = .{ .raw = 0 };
                 try self.reportError("Error", e);
                 continue;
+            } orelse {
+                try self.out.writeAll(ABORT_MSG);
+                continue;
             };
             self.rotateOutput(result);
             try self.printResult(result);
         }
+    }
+
+    /// Evaluate `form` under an `abort` restart. Null when the restart
+    /// was invoked.
+    fn evalWithAbort(self: *Repl, form: Value) Error!?Value {
+        const runner = self.ev.env.lookupFunction(try self.interner.intern("%EVAL-WITH-ABORT")) orelse
+            return try self.ev.eval(form);
+        const completed = try self.ev.callFunction(runner, &.{form});
+        if (completed.equalsRaw(value.NIL)) return null;
+        return self.ev.values.items[1];
     }
 
     fn rotateInput(self: *Repl, form: Value) void {

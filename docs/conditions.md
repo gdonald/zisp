@@ -65,8 +65,9 @@ format control and its arguments:
 ```
 
 `warn` signals a warning and prints it to `*error-output*` where nothing
-takes it. `cerror` signals an error the way `error` does; the `continue`
-restart it should establish waits on the restart machinery.
+takes it, with a `muffle-warning` restart that skips the printing.
+`cerror` signals an error with a `continue` restart whose report is its
+first argument; invoking it makes `cerror` return nil.
 
 `*break-on-signals*` holds a type. A condition of that type stops rather
 than being offered to the handlers.
@@ -115,6 +116,71 @@ call, and offered to the `handler-bind` handlers where it was raised,
 before anything unwinds. A handler that declines leaves it to
 `handler-case` or `ignore-errors` further out, which receive the same
 condition object.
+
+## Restarts
+
+A restart is a named way to carry on from a point in the program. A
+handler picks one, which lets the code that signaled say what recovery is
+possible and the code that handles say which one to take.
+
+`restart-case` establishes restarts around a form. Invoking one unwinds
+to its clause and returns the clause's value:
+
+```lisp
+(restart-case (parse-line text)
+  (skip-line ()
+    :report "Skip this line."
+    nil)
+  (use-text (replacement)
+    :report "Parse other text instead."
+    :interactive (lambda () (list (read-line *query-io*)))
+    (parse-line replacement)))
+```
+
+`:report` takes a string or a function of a stream, and is what `~A`
+prints for the restart. `:interactive` returns the argument list
+`invoke-restart-interactively` uses. `:test` takes a function of a
+condition, and a restart whose test returns nil is not visible.
+
+`restart-bind` establishes restarts without unwinding: the restart
+function runs where it is invoked and its value goes back to the
+invoker.
+
+`invoke-restart` takes a restart or a name and the arguments. Invoking a
+name with no visible restart is a `control-error`. `find-restart` returns
+the innermost visible restart with a name, and `compute-restarts` returns
+every visible one, innermost first. Given a condition, both leave out
+restarts associated with other conditions.
+
+`with-condition-restarts` associates restarts with a condition. Where
+the form of a `restart-case` is a call to `signal`, `error`, `cerror` or
+`warn`, its restarts are associated with the condition that call
+signals, so a handler for a second condition signaled inside the first
+handler does not see them.
+
+`with-simple-restart` establishes a restart that returns nil and t.
+
+### Standard restarts
+
+`abort`, `continue`, `muffle-warning`, `store-value` and `use-value`
+invoke the restart of the same name. `abort` and `muffle-warning` signal
+a `control-error` where there is none; the others return nil.
+
+| Restart | Established by |
+| --- | --- |
+| `abort` | The REPL, around each form it evaluates |
+| `continue` | `cerror`, `assert` |
+| `muffle-warning` | `warn` |
+| `store-value` | `check-type`, `ccase`, `ctypecase`, an unbound variable |
+| `use-value` | An unbound variable |
+
+`store-value` puts the new value in the place and tries again, while
+`use-value` uses the value once and leaves the place as it was:
+
+```lisp
+(handler-bind ((unbound-variable (lambda (c) (use-value 0 c))))
+  (+ undefined-total 1))                    ; => 1, still unbound
+```
 
 ## The debugger hook
 

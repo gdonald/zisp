@@ -25,6 +25,7 @@ fn evaluator(p: *anyopaque) *Evaluator {
 
 pub fn registerTypes(ev: *Evaluator) !void {
     _ = try ev.defineNative("TYPEP", &typepFn);
+    _ = try ev.defineNative("TYPE-OF", &typeOfFn);
     _ = try ev.defineNative("%PUT-DEFTYPE", &putDeftypeFn);
     _ = try ev.defineNative("COERCE", &coerceFn);
     function.asFunction(try ev.defineNative("SUBTYPEP", &subtypepFn)).preserves_values = true;
@@ -245,6 +246,17 @@ fn classOf(ev: *Evaluator, v: Value) Class {
         .structure => .structure_object,
         else => .t_type,
     };
+}
+
+/// `(type-of object)`: the name a structure or condition was defined
+/// under, and otherwise the most specific atomic class in the lattice.
+fn typeOfFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    const v = args[0];
+    if (proto_class.isInstance(ev, v)) return proto_class.className(proto_class.classOf(v));
+    if (heap.isStructure(v) and heap.asStructure(v).name.isSymbol()) return heap.asStructure(v).name;
+    return ev.interner.intern(nameOf(classOf(ev, v)));
 }
 
 /// A string with no fill pointer and no adjustability is a simple string.

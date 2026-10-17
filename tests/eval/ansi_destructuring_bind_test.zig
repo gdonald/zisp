@@ -4,8 +4,6 @@
 //!
 //! `signals-error` cases pass when evaluation signals any error; condition
 //! class discrimination needs the condition system and is not checked yet.
-//! `destructuring-bind.31` needs `macrolet` and is the one expected failure,
-//! keeping the file at 38/39 (97%).
 
 const std = @import("std");
 const zisp = @import("zisp");
@@ -18,9 +16,7 @@ const Evaluator = zisp.eval.Evaluator;
 
 const lsp_path = "vendor/ansi-test/data-and-control-flow/destructuring-bind.lsp";
 
-const expected_failures = [_][]const u8{
-    "DESTRUCTURING-BIND.31",
-};
+const expected_failures = [_][]const u8{};
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,

@@ -115,6 +115,9 @@ die() { echo "error: $*" >&2; exit 1; }
 
 [[ -d "$SUITE" ]] || die "ansi-test suite not found at $SUITE — initialize the submodule"
 [[ -x "$ZISP"  ]] || die "zisp binary not found at $ZISP — run 'zig build' first"
+# Each slice runs from inside the suite, so a relative path has to be
+# made absolute first.
+ZISP="$(cd "$(dirname "$ZISP")" && pwd)/$(basename "$ZISP")"
 
 if (( $# > 0 )); then
   selected=("$@")

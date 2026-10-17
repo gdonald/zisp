@@ -75,6 +75,15 @@ pub const Frame = struct {
         return null;
     }
 
+    pub fn slotFor(self: *Frame, sym: Value) ?*Value {
+        std.debug.assert(sym.isSymbol());
+        if (self.map) |*m| return m.getPtr(sym.raw);
+        for (self.symbols.items, 0..) |s, i| {
+            if (s.equalsRaw(sym)) return &self.values.items[i];
+        }
+        return null;
+    }
+
     pub fn assign(self: *Frame, sym: Value, val: Value) bool {
         std.debug.assert(sym.isSymbol());
         if (self.map) |*m| {
@@ -231,7 +240,10 @@ pub const Env = struct {
         std.debug.assert(sym.isSymbol());
         var cur = self.top_value;
         while (cur) |f| : (cur = f.parent) {
-            if (f.find(sym)) |v| return v;
+            if (f.find(sym)) |v| {
+                if (v.equalsRaw(value.SPECIAL_DYNAMIC)) break;
+                return v;
+            }
         }
         const s = symbol_mod.symbol(sym);
         if (s.value_cell.equalsRaw(value.SPECIAL_UNBOUND)) return null;
@@ -253,7 +265,11 @@ pub const Env = struct {
         std.debug.assert(sym.isSymbol());
         var cur = self.top_value;
         while (cur) |f| : (cur = f.parent) {
-            if (f.assign(sym, val)) return;
+            if (f.slotFor(sym)) |slot| {
+                if (slot.equalsRaw(value.SPECIAL_DYNAMIC)) break;
+                slot.* = val;
+                return;
+            }
         }
         symbol_mod.symbol(sym).value_cell = val;
     }

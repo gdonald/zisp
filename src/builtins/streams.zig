@@ -76,10 +76,14 @@ fn bindStandardStreams(ev: *Evaluator) !void {
         "*STANDARD-OUTPUT*", "*ERROR-OUTPUT*", "*TRACE-OUTPUT*",
         "*QUERY-IO*",        "*TERMINAL-IO*",  "*DEBUG-IO*",
     }) |n| {
-        symbol_mod.symbol(try ev.interner.intern(n)).value_cell = console;
+        const sym = symbol_mod.symbol(try ev.interner.intern(n));
+        sym.value_cell = console;
+        sym.special = true;
     }
     const input = try ev.heap.allocStream(emptyStream(.string, .input));
-    symbol_mod.symbol(try ev.interner.intern("*STANDARD-INPUT*")).value_cell = input;
+    const standard_input = symbol_mod.symbol(try ev.interner.intern("*STANDARD-INPUT*"));
+    standard_input.value_cell = input;
+    standard_input.special = true;
 }
 
 fn consoleStream() Stream {

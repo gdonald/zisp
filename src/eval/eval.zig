@@ -64,6 +64,8 @@ pub const Evaluator = struct {
     // frame instead of growing the native stack. Populated by registerStandard.
     sym_if: Value = undefined,
     sym_progn: Value = undefined,
+    sym_declare: Value = undefined,
+    sym_special: Value = undefined,
     block_stack: std.ArrayList(BlockEntry) = .empty,
     block_counter: u64 = 0,
     return_id: u64 = 0,
@@ -166,6 +168,8 @@ pub const Evaluator = struct {
             .go_target = value.NIL,
             .sym_if = value.NIL,
             .sym_progn = value.NIL,
+            .sym_declare = value.NIL,
+            .sym_special = value.NIL,
         };
     }
 
@@ -463,7 +467,11 @@ pub const Evaluator = struct {
         if (form.equalsRaw(value.T)) return self.set1(form);
         switch (form.tag()) {
             .fixnum, .char, .heap, .special => return self.set1(form),
-            .symbol => return self.set1(try self.evalSymbol(form)),
+            .symbol => {
+                const found = try self.evalSymbol(form);
+                if (self.symbolMacroExpansion(found)) |expansion| return self.eval(expansion);
+                return self.set1(found);
+            },
             .cons => return self.evalCons(form),
             ._reserved6, ._reserved7 => return Error.TypeError,
         }
@@ -471,7 +479,30 @@ pub const Evaluator = struct {
 
     fn evalSymbol(self: *Evaluator, sym: Value) Error!Value {
         if (symbol_mod.isKeyword(sym, self.interner)) return sym;
-        return self.env.lookupValue(sym) orelse self.unbound(sym, Error.UnboundVariable);
+        return self.env.lookupValue(sym) orelse self.recoverUnboundVariable(sym);
+    }
+
+    /// Signal the unbound-variable error through the condition system,
+    /// where a `use-value` or `store-value` restart can supply the value.
+    fn recoverUnboundVariable(self: *Evaluator, sym: Value) Error!Value {
+        self.error_symbol = sym;
+        const name = try self.interner.intern("%UNBOUND-VARIABLE");
+        const handler = symbol_mod.symbol(name).function_cell;
+        if (!isFunction(handler)) return Error.UnboundVariable;
+        return self.callFunction(handler, &.{sym});
+    }
+
+    /// The structure name `symbol-macrolet` binds a symbol to, holding
+    /// the form the symbol stands for.
+    pub const SYMBOL_MACRO_NAME = "%SYMBOL-MACRO";
+
+    /// The expansion `binding` holds when it is a symbol macro.
+    pub fn symbolMacroExpansion(self: *Evaluator, binding: Value) ?Value {
+        if (!heap_mod.isStructure(binding)) return null;
+        const obj = heap_mod.asStructure(binding);
+        const name = self.interner.intern(SYMBOL_MACRO_NAME) catch return null;
+        if (!obj.name.equalsRaw(name)) return null;
+        return obj.slice()[0];
     }
 
     fn evalCons(self: *Evaluator, form: Value) Error!Value {
@@ -555,6 +586,10 @@ pub const Evaluator = struct {
     /// when one is set (the `funcall` designator short-circuits to a direct
     /// call, matching its default value).
     pub fn macroexpand1(self: *Evaluator, form: Value) Error!?Value {
+        if (form.isSymbol()) {
+            const binding = self.env.lookupValue(form) orelse return null;
+            return self.symbolMacroExpansion(binding);
+        }
         if (!form.isCons()) return null;
         const head = heap_mod.car(form);
         if (!head.isSymbol()) return null;
@@ -562,12 +597,22 @@ pub const Evaluator = struct {
         const expander = self.env.lookupFunction(head) orelse return null;
         if (!function.isMacro(expander)) return null;
 
+        var held = self.heap.protect();
+        defer held.close();
+        try held.push(form);
+        try held.push(expander);
+        const environment = if (lambda_list.namesEnvironment(asFunction(expander).payload.closure.params))
+            try self.captureEnvironment()
+        else
+            value.NIL;
+        try held.push(environment);
+
         const hook_sym = try self.interner.intern("*MACROEXPAND-HOOK*");
         const funcall_sym = try self.interner.intern("FUNCALL");
         const hook = self.env.lookupValue(hook_sym) orelse funcall_sym;
         if (hook.equalsRaw(funcall_sym) or hook.equalsRaw(value.NIL)) {
-            const expansion = try self.callFunction(expander, &.{ form, value.NIL });
-            try self.stampMacroExpansion(expander, expansion);
+            const expansion = try self.callFunction(held.items()[1], &.{ held.items()[0], held.items()[2] });
+            try self.stampMacroExpansion(held.items()[1], expansion);
             return expansion;
         }
         const hook_fn = if (isFunction(hook))
@@ -576,9 +621,58 @@ pub const Evaluator = struct {
             self.env.lookupFunction(hook) orelse return Error.UnboundFunction
         else
             return Error.TypeError;
-        const expansion = try self.callFunction(hook_fn, &.{ expander, form, value.NIL });
-        try self.stampMacroExpansion(expander, expansion);
+        const expansion = try self.callFunction(hook_fn, &.{ held.items()[1], held.items()[0], held.items()[2] });
+        try self.stampMacroExpansion(held.items()[1], expansion);
         return expansion;
+    }
+
+    /// The lexical environment a macro's `&environment` parameter receives:
+    /// the frame chains in effect at the call. CLHS 3.4.4 limits its use to
+    /// the dynamic extent of the expansion, during which `applyClosure` has
+    /// those chains saved where a root scan finds them, so the object
+    /// records them as addresses.
+    pub fn captureEnvironment(self: *Evaluator) Error!Value {
+        if (self.env.top_value == null and self.env.top_function == null) return value.NIL;
+        const name = try self.interner.intern(ENVIRONMENT_NAME);
+        return self.heap.allocStructure(name, &.{
+            frameAddress(self.env.top_value),
+            frameAddress(self.env.top_function),
+        });
+    }
+
+    pub const Chains = struct { values: ?*env_mod.Frame, functions: ?*env_mod.Frame };
+
+    /// Install the chains `environment` recorded, returning the ones it
+    /// replaced. NIL is the null lexical environment.
+    pub fn enterEnvironment(self: *Evaluator, environment: Value) Error!Chains {
+        const previous: Chains = .{ .values = self.env.top_value, .functions = self.env.top_function };
+        if (environment.equalsRaw(value.NIL)) {
+            self.env.top_value = null;
+            self.env.top_function = null;
+            return previous;
+        }
+        if (!heap_mod.isStructure(environment)) return Error.TypeError;
+        const obj = heap_mod.asStructure(environment);
+        if (!obj.name.equalsRaw(try self.interner.intern(ENVIRONMENT_NAME))) return Error.TypeError;
+        self.env.top_value = frameAt(obj.slice()[0]);
+        self.env.top_function = frameAt(obj.slice()[1]);
+        return previous;
+    }
+
+    pub fn leaveEnvironment(self: *Evaluator, previous: Chains) void {
+        self.env.top_value = previous.values;
+        self.env.top_function = previous.functions;
+    }
+
+    const ENVIRONMENT_NAME = "%LEXICAL-ENVIRONMENT";
+
+    fn frameAddress(frame: ?*env_mod.Frame) Value {
+        return Value.fromFixnum(@intCast(if (frame) |f| @intFromPtr(f) else 0));
+    }
+
+    fn frameAt(v: Value) ?*env_mod.Frame {
+        const address: usize = @intCast(v.toFixnum());
+        return if (address == 0) null else @ptrFromInt(address);
     }
 
     /// Give every expansion cons that lacks a source position the defining
@@ -669,7 +763,7 @@ pub const Evaluator = struct {
                 if (cur_args.len != 2) return Error.WrongArgCount;
                 try lambda_list.bindMacro(self, cur.params, cur_args[0], cur_args[1], frame.?);
             } else {
-                try lambda_list.bindInto(self, cur.params, cur_args, frame.?);
+                try lambda_list.bindInto(self, cur.params, cur_args, frame.?, cur.body);
             }
 
             if (!cur.body.isCons()) return self.set1(value.NIL);

@@ -35,3 +35,31 @@ identical names are still different symbols.
 `gentemp` instead interns the symbol it creates, probing `PREFIXn` names
 until it finds one that is not already interned. It exists for completeness
 and is deprecated in ANSI CL. Prefer `gensym`.
+
+## Local macros and the environment
+
+`macrolet` defines macros visible only in its body, and `symbol-macrolet`
+defines symbols that evaluate as a form:
+
+```lisp
+(let ((cell (list 1 2)))
+  (symbol-macrolet ((head (car cell)))
+    (setq head 10)        ; sets (car cell)
+    cell))                ; => (10 2)
+```
+
+A macro with an `&environment` parameter receives the lexical
+environment of its call, which holds the local macros and symbol macros
+in scope there. Passing it to `macroexpand`, `macroexpand-1` or
+`macro-function` expands in that environment:
+
+```lisp
+(defmacro expanded (form &environment env)
+  `',(macroexpand form env))
+
+(macrolet ((twice (x) `(* 2 ,x)))
+  (expanded (twice 3)))   ; => (* 2 3)
+```
+
+The environment is only valid while the macro that received it is
+running.

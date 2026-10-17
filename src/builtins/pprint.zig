@@ -473,7 +473,7 @@ fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyl
     if (style == .plain) {
         var arena = std.heap.ArenaAllocator.init(ev.allocator);
         defer arena.deinit();
-        if (try format.conditionReport(ev, arena.allocator(), v)) |text| {
+        if (try format.reportText(ev, arena.allocator(), v)) |text| {
             return streams.emitBytes(ev, target, text);
         }
     }

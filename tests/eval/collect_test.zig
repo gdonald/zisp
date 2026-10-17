@@ -236,6 +236,9 @@ test "a value held on the Lisp stack comes through a collection" {
 test "a value the Lisp stack no longer holds is reclaimed" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
+    // A cached macro expansion outlives the call form it is keyed on by
+    // one collection, so the prelude's last ones go in the second.
+    try collect.collectScoped(&fx.ev, .major);
     try collect.collectScoped(&fx.ev, .major);
     const before = fx.liveBytes();
     {

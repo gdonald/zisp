@@ -242,25 +242,80 @@ fn bindVar(ev: *Evaluator, frame: *Frame, sym: Value, val: Value) Error!void {
     return frame.bind(ev.allocator, sym, val);
 }
 
-pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Frame) Error!void {
+/// Whether one of the `declare` forms leading `body` declares `sym`
+/// special, which makes a binding of it in that scope dynamic.
+pub fn declaresSpecial(ev: *const Evaluator, body: Value, sym: Value) bool {
+    var forms = body;
+    while (forms.isCons()) : (forms = heap.cdr(forms)) {
+        const form = heap.car(forms);
+        if (heap.isString(form)) continue;
+        if (!form.isCons() or !heap.car(form).equalsRaw(ev.sym_declare)) return false;
+        var specs = heap.cdr(form);
+        while (specs.isCons()) : (specs = heap.cdr(specs)) {
+            const spec = heap.car(specs);
+            if (!spec.isCons() or !heap.car(spec).equalsRaw(ev.sym_special)) continue;
+            var names = heap.cdr(spec);
+            while (names.isCons()) : (names = heap.cdr(names)) {
+                if (heap.car(names).equalsRaw(sym)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Bind `sym` dynamically when it is special everywhere or `body`
+/// declares it special, and in `frame` otherwise.
+pub fn bindScoped(ev: *Evaluator, frame: *Frame, sym: Value, val: Value, body: Value) Error!void {
+    if (declaresSpecial(ev, body, sym)) {
+        try ev.bindSpecial(sym, val);
+        return frame.bind(ev.allocator, sym, value.SPECIAL_DYNAMIC);
+    }
+    return bindVar(ev, frame, sym, val);
+}
+
+/// Mark in `frame` every symbol the `declare` forms leading `body`
+/// declare special that the binding form did not bind, so a reference in
+/// the body reads the value cell past any outer lexical binding.
+pub fn markFreeSpecials(ev: *Evaluator, frame: *Frame, body: Value) Error!void {
+    var forms = body;
+    while (forms.isCons()) : (forms = heap.cdr(forms)) {
+        const form = heap.car(forms);
+        if (heap.isString(form)) continue;
+        if (!form.isCons() or !heap.car(form).equalsRaw(ev.sym_declare)) return;
+        var specs = heap.cdr(form);
+        while (specs.isCons()) : (specs = heap.cdr(specs)) {
+            const spec = heap.car(specs);
+            if (!spec.isCons() or !heap.car(spec).equalsRaw(ev.sym_special)) continue;
+            var names = heap.cdr(spec);
+            while (names.isCons()) : (names = heap.cdr(names)) {
+                const name = heap.car(names);
+                if (name.isSymbol() and frame.find(name) == null) {
+                    try frame.bind(ev.allocator, name, value.SPECIAL_DYNAMIC);
+                }
+            }
+        }
+    }
+}
+
+pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Frame, body: Value) Error!void {
     var p = try parse(ev, params, false, true);
     defer p.deinit(ev.allocator);
 
     if (args.len < p.required.items.len) return Error.WrongArgCount;
     var pos: usize = 0;
     for (p.required.items) |sym| {
-        try bindVar(ev, frame, sym, args[pos]);
+        try bindScoped(ev, frame, sym, args[pos], body);
         pos += 1;
     }
 
     for (p.optional.items) |opt| {
         if (pos < args.len) {
-            try bindVar(ev, frame, opt.name, args[pos]);
+            try bindScoped(ev, frame, opt.name, args[pos], body);
             pos += 1;
-            if (!opt.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, opt.supplied, value.T);
+            if (!opt.supplied.equalsRaw(value.NIL)) try bindScoped(ev, frame, opt.supplied, value.T, body);
         } else {
-            try bindVar(ev, frame, opt.name, try ev.eval(opt.init));
-            if (!opt.supplied.equalsRaw(value.NIL)) try bindVar(ev, frame, opt.supplied, value.NIL);
+            try bindScoped(ev, frame, opt.name, try ev.eval(opt.init), body);
+            if (!opt.supplied.equalsRaw(value.NIL)) try bindScoped(ev, frame, opt.supplied, value.NIL, body);
         }
     }
 
@@ -268,7 +323,7 @@ pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Fram
 
     if (p.has_rest) {
         const list = try ev.heap.list(remaining);
-        try bindVar(ev, frame, p.rest, list);
+        try bindScoped(ev, frame, p.rest, list, body);
     }
 
     if (p.has_key) {
@@ -282,8 +337,9 @@ pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Fram
     }
 
     for (p.aux.items) |a| {
-        try bindVar(ev, frame, a.name, try ev.eval(a.init));
+        try bindScoped(ev, frame, a.name, try ev.eval(a.init), body);
     }
+    try markFreeSpecials(ev, frame, body);
 }
 
 /// Match parsed `&key` parameters against `pairs` (a flat keyword/value
@@ -329,6 +385,17 @@ fn bindKeys(ev: *Evaluator, p: *const Parsed, pairs: []const Value, frame: *Fram
             if (!known) return Error.ProgramError;
         }
     }
+}
+
+/// Whether a macro lambda list has an `&environment` parameter at its
+/// top level, the one place CLHS 3.4.4 allows it.
+pub fn namesEnvironment(params: Value) bool {
+    var rest = params;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) {
+        const item = heap.car(rest);
+        if (item.isSymbol() and std.mem.eql(u8, symbol_mod.symbol(item).name, "&ENVIRONMENT")) return true;
+    }
+    return false;
 }
 
 /// Bind a macro call `form` against a macro lambda list. `&whole` sees the

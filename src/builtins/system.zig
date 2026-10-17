@@ -201,7 +201,7 @@ fn toStringFn(comptime escape: bool) function.NativeFn {
             if (!escape) {
                 var arena = std.heap.ArenaAllocator.init(ev.allocator);
                 defer arena.deinit();
-                if (try format.conditionReport(ev, arena.allocator(), args[0])) |text| {
+                if (try format.reportText(ev, arena.allocator(), args[0])) |text| {
                     return ev.heap.allocString(text);
                 }
             }
