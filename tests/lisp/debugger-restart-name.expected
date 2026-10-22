@@ -1,0 +1,14 @@
+SCALE-READING
+;; Debugger entered on SIMPLE-ERROR:
+;;   Negative reading -4.
+;; Restarts:
+;;   0: [CONTINUE] Use the absolute value.
+;;   1: [ABORT] Return to the top level.
+Debug> 8
+;; Debugger entered on UNBOUND-VARIABLE:
+;;   The variable UNSET-OFFSET is unbound.
+;; Restarts:
+;;   0: [USE-VALUE] Use a value in place of UNSET-OFFSET.
+;;   1: [STORE-VALUE] Set the value of UNSET-OFFSET.
+;;   2: [ABORT] Return to the top level.
+Debug> Enter a form to be evaluated: 47

@@ -1,0 +1,18 @@
+;; Debugger entered on SIMPLE-ERROR:
+;;   Disk sda1 is full.
+;; Restarts:
+;;   0: [ABORT] Return to the top level.
+Debug> ;; Aborted.
+;; Debugger entered on SIMPLE-ERROR:
+;;   Copy of report.txt failed.
+;; Restarts:
+;;   0: [CONTINUE] Retry the copy.
+;;   1: [ABORT] Return to the top level.
+Debug> ;; Aborted.
+;; Debugger entered on UNBOUND-VARIABLE:
+;;   The variable MISSING-TOTAL is unbound.
+;; Restarts:
+;;   0: [USE-VALUE] Use a value in place of MISSING-TOTAL.
+;;   1: [STORE-VALUE] Set the value of MISSING-TOTAL.
+;;   2: [ABORT] Return to the top level.
+Debug> ;; Aborted.

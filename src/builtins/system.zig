@@ -43,6 +43,7 @@ pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(true));
     function.asFunction(try ev.defineNative("READ-FROM-STRING", &readFromStringFn))
         .preserves_values = true;
+    _ = try ev.defineNative("READ", &readFn);
     _ = try ev.defineNative("QUIT", &quitFn);
     _ = try ev.defineNative("EXIT", &quitFn);
 
@@ -232,6 +233,50 @@ fn readFromStringFn(p: *anyopaque, args: []const Value) Error!Value {
     });
 }
 
+/// The next form in what `stream` has left to read, or null at its end.
+/// The stream moves past the form. The stream is named by the designator
+/// `given` rather than held, since reading allocates and a collection
+/// can move it.
+pub fn readStreamForm(ev: *Evaluator, given: ?Value) anyerror!?Value {
+    const s = try streams.streamOf(ev, given, .input);
+    try streams.expectInput(s);
+    if (s.pending) |c| {
+        // A character handed back by `unread-char` came off the input,
+        // so it is read again from there.
+        s.position -= std.unicode.utf8CodepointSequenceLength(c) catch 1;
+        s.pending = null;
+    }
+    var tokenizer = reader_mod.Tokenizer.init(s.input[s.position..]);
+    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    readtables.install(ev, &rd);
+    const form = rd.read() catch |e| {
+        // What follows a form that will not read cannot be told apart from
+        // the rest of it, so the input is given up to its end.
+        const failed = try streams.streamOf(ev, given, .input);
+        failed.position = failed.input.len;
+        return e;
+    };
+    const after = try streams.streamOf(ev, given, .input);
+    after.position += tokenizer.idx;
+    // At a terminal, what a person types ends with the newline that sends
+    // it, so output picks up at the left margin.
+    if (after.kind == .console) ev.output_column = 0;
+    return form;
+}
+
+/// `(read &optional stream eof-error-p eof-value recursive-p)`.
+fn readFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    const eof = try streams.EofBehavior.parse(args, 1);
+    const given: ?Value = if (args.len > 0) args[0] else null;
+    const form = readStreamForm(ev, given) catch |e| return switch (e) {
+        error.FileError, error.TypeError, error.UnboundVariable, error.OutOfMemory => |known| known,
+        else => Error.ProgramError,
+    };
+    return form orelse eof.result();
+}
+
 // --- load ---
 
 fn loadFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -260,7 +305,7 @@ pub fn loadPath(ev: *Evaluator, path: []const u8) Error!void {
     const saved_package = ev.interner.currentPackage();
     defer ev.interner.setCurrentPackage(saved_package);
 
-    try evalSource(ev, source);
+    try evalSourceRecorded(ev, source, try ev.keepSourceName(truename));
 }
 
 fn readFileAlloc(ev: *Evaluator, io: std.Io, path: []const u8) Error![]u8 {
@@ -357,8 +402,27 @@ const PathVarBindings = struct {
 pub fn evalSource(ev: *Evaluator, source: []const u8) Error!void {
     var tokenizer = reader_mod.Tokenizer.init(source);
     var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    return evalForms(ev, &rd);
+}
+
+/// `evalSource` with where each form was read recorded under the name
+/// `file`, which a backtrace reports.
+pub fn evalSourceRecorded(ev: *Evaluator, source: []const u8, file: []const u8) Error!void {
+    var tokenizer = reader_mod.Tokenizer.init(source);
+    var rd = reader_mod.Reader.initFull(
+        &tokenizer,
+        ev.heap,
+        ev.interner,
+        reader_mod.reader.defaultReadtable(),
+        try ev.sourcePositions(),
+        file,
+    );
+    return evalForms(ev, &rd);
+}
+
+fn evalForms(ev: *Evaluator, rd: *reader_mod.Reader) Error!void {
     rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
-    readtables.install(ev, &rd);
+    readtables.install(ev, rd);
     while (true) {
         // Between top-level forms nothing but the evaluator's own state
         // holds a value, which is what makes a collection safe here.

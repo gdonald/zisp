@@ -278,6 +278,27 @@ test "macro in tail position is expanded and the expansion evaluated" {
     try std.testing.expect(r.equalsRaw(ok));
 }
 
+test "a call in tail position that a replaced expander passes over is applied" {
+    const fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit(std.testing.allocator);
+    fx.ev.macro_expander = &idMacro;
+
+    const lambda = fx.interner.lookup("LAMBDA").?;
+    const quote = fx.interner.lookup("QUOTE").?;
+    const defun = fx.interner.lookup("DEFUN").?;
+    const answer = try fx.sym("ANSWER");
+    const ok = try fx.sym("OK");
+
+    // (defun answer () 'ok), then ((lambda () (answer))) with the call to
+    // answer in tail position.
+    _ = try fx.ev.eval(try fx.list(&.{ defun, answer, value.NIL, try fx.list(&.{ quote, ok }) }));
+    const lam = try fx.list(&.{ lambda, value.NIL, try fx.list(&.{answer}) });
+    const closure = try fx.ev.eval(lam);
+
+    const r = try fx.ev.callFunction(closure, &.{});
+    try std.testing.expect(r.equalsRaw(ok));
+}
+
 test "if in tail position rejects a dotted tail after the then-form" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);

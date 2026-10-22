@@ -58,6 +58,10 @@ pub const HeapFunction = struct {
     // values channel to the returned value. Pass-through natives (funcall,
     // apply, eval, gethash) set this to keep the channel they produced.
     preserves_values: bool = false,
+    // A call to it in tail position still keeps the calling frame, so a
+    // backtrace and the debugger see where it was called from. Set on the
+    // functions that signal conditions.
+    keeps_caller: bool = false,
     payload: union {
         native: NativeFn,
         closure: Closure,

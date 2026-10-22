@@ -1,0 +1,6 @@
+;; Debugger entered on SIMPLE-ERROR:
+;;   Nothing to restart.
+;; No restarts.
+Debug> 3
+Debug> ;; No restart numbered 0.
+Debug> 

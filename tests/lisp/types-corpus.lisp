@@ -121,9 +121,10 @@
 (equal (multiple-value-list (subtypep '(integer 0 5) '(or (integer 0 3) integer))) '(t t))
 (equal (multiple-value-list (subtypep '(or (integer 0 5) (integer 6 9)) 'integer)) '(t t))
 
-;; A question the lattice cannot settle comes back as "do not know"
-;; rather than as a wrong answer.
-(equal (multiple-value-list (subtypep 'integer '(not integer))) '(nil nil))
+(equal (multiple-value-list (subtypep 'integer '(not integer))) '(nil t))
+
+;; A question that turns on an arbitrary predicate comes back as "do not
+;; know" rather than as a wrong answer.
 (equal (multiple-value-list (subtypep '(satisfies oddp) 'integer)) '(nil nil))
 
 ;; --- coerce ---

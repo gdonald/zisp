@@ -34,7 +34,34 @@ FLOOR=95 tests/run-rt-tests.sh typep        # raise the floor
 ```
 
 A slice is a driver at `tests/lisp/ansi-<name>.lisp` naming the files it
-wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it.
+wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it. It
+also loads the suite's `notes.lsp` and switches off the tests noted
+`:nil-vectors-are-strings`: an array of element type `nil` upgrades to
+`bit` in zisp, so no `(vector nil)` is a string.
+
+`subtypep` is also compared with SBCL's, call by call:
+
+```sh
+zig build subtypep-sbcl                     # through the ReleaseSafe build
+tests/run-subtypep-sbcl-diff.sh             # needs sbcl on the PATH
+VERBOSE=1 tests/run-subtypep-sbcl-diff.sh   # list every mismatch
+```
+
+SBCL runs the `subtypep` slice with each call it makes recorded
+(`tests/lisp/subtypep-sbcl-log.lisp`), and zisp answers the same calls
+(`tests/lisp/subtypep-sbcl-diff.lisp`). A call zisp answers `nil nil`
+where SBCL is certain fails the run. A call the two answer differently
+with certainty is counted and not failed: those come from the element
+types each upgrades arrays to, the part types each upgrades complexes
+to, and the width of a fixnum.
+
+A self-checking corpus under `tests/lisp/`, one whose every top-level
+form evaluates to T, can be run under SBCL too, which shows its expected
+values are SBCL's:
+
+```sh
+tests/run-corpus-sbcl.sh tests/lisp/unwind-protect-corpus.lisp
+```
 
 ## Layout
 

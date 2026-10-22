@@ -1,8 +1,7 @@
-//! The type system: `typep`, `subtypep`, `deftype`, `coerce`.
+//! The type system: `typep`, `type-of`, `deftype`, `coerce`.
 //!
 //! A type specifier is interpreted rather than compiled. `typep` walks the
-//! specifier against a value; `subtypep` reduces both sides to a small
-//! lattice of atomic classes plus numeric intervals and compares those.
+//! specifier against a value. `subtypep` is in `src/lisp/types.lisp`.
 
 const std = @import("std");
 const value = @import("../runtime/value.zig");
@@ -28,7 +27,6 @@ pub fn registerTypes(ev: *Evaluator) !void {
     _ = try ev.defineNative("TYPE-OF", &typeOfFn);
     _ = try ev.defineNative("%PUT-DEFTYPE", &putDeftypeFn);
     _ = try ev.defineNative("COERCE", &coerceFn);
-    function.asFunction(try ev.defineNative("SUBTYPEP", &subtypepFn)).preserves_values = true;
 
     for (std.enums.values(Class)) |class| {
         _ = try ev.interner.intern(nameOf(class));
@@ -204,17 +202,6 @@ fn contains(ancestor: Class, class: Class) bool {
     return false;
 }
 
-/// Two classes overlap when some class lies in both, which is how `null`
-/// keeps `symbol` and `list` from being disjoint.
-fn overlaps(a: Class, b: Class) bool {
-    if (contains(a, b) or contains(b, a)) return true;
-    for (std.enums.values(Class)) |candidate| {
-        if (candidate == .nil_type) continue;
-        if (contains(a, candidate) and contains(b, candidate)) return true;
-    }
-    return false;
-}
-
 /// The most specific class an object belongs to. `typep` against a class
 /// is then a containment question.
 fn classOf(ev: *Evaluator, v: Value) Class {
@@ -356,6 +343,7 @@ fn deftypeExpansion(ev: *Evaluator, spec: Value) Error!?Value {
 
 pub fn typep(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     if (spec.isSymbol()) return typepAtomic(ev, v, spec);
+    if (proto_class.isClass(ev, spec)) return typepClass(ev, v, spec);
     if (!spec.isCons()) return Error.ProgramError;
     return typepCompound(ev, v, spec);
 }
@@ -368,10 +356,46 @@ fn conditionClassNamed(ev: *Evaluator, name: Value) Error!?Value {
     return if (proto_class.isClass(ev, held)) held else null;
 }
 
+/// A class object stands for the type its name names, except that a
+/// condition class is matched by identity rather than by name.
+fn typepClass(ev: *Evaluator, v: Value, class: Value) Error!bool {
+    const name = proto_class.className(class);
+    if (try conditionClassNamed(ev, name) == null) return typep(ev, v, name);
+    if (!proto_class.isInstance(ev, v)) return false;
+    return proto_class.descendsFrom(proto_class.classOf(v), class);
+}
+
+/// The standard classes whose instances zisp makes none of, or makes only
+/// some of: the stream classes past `file-stream` and `string-stream`, and
+/// the CLOS metaobjects.
+const unmade_classes = [_][]const u8{
+    "SYNONYM-STREAM",    "BROADCAST-STREAM",          "CONCATENATED-STREAM",
+    "TWO-WAY-STREAM",    "ECHO-STREAM",               "GENERIC-FUNCTION",
+    "STANDARD-OBJECT",   "STANDARD-GENERIC-FUNCTION", "METHOD",
+    "STANDARD-METHOD",   "METHOD-COMBINATION",        "STRUCTURE-CLASS",
+    "STANDARD-CLASS",
+};
+
 fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     const name = symbol_mod.symbol(spec).name;
     if (std.mem.eql(u8, name, "BIT")) {
         return v.isFixnum() and (v.toFixnum() == 0 or v.toFixnum() == 1);
+    }
+    if (std.mem.eql(u8, name, "FILE-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .file;
+    }
+    if (std.mem.eql(u8, name, "STRING-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .string;
+    }
+    if (std.mem.eql(u8, name, "COMPILED-FUNCTION")) return contains(.function_type, classOf(ev, v));
+    if (std.mem.eql(u8, name, "CLASS")) return proto_class.isClass(ev, v);
+    if (std.mem.eql(u8, name, "BUILT-IN-CLASS")) {
+        if (!proto_class.isClass(ev, v)) return false;
+        const named = try conditionClassNamed(ev, proto_class.className(v));
+        return named == null or !named.?.equalsRaw(v);
+    }
+    for (unmade_classes) |unmade| {
+        if (std.mem.eql(u8, name, unmade)) return false;
     }
     if (try conditionClassNamed(ev, spec)) |class| {
         if (!proto_class.isInstance(ev, v)) return false;
@@ -583,241 +607,6 @@ fn putDeftypeFn(p: *anyopaque, args: []const Value) Error!Value {
     const key = try ev.interner.intern("%DEFTYPE-EXPANDER");
     try symbol_mod.plistPut(ev.heap, args[0], key, args[1]);
     return args[0];
-}
-
-// --- subtypep ---
-
-/// A type specifier reduced to something comparable: an atomic class,
-/// optionally narrowed to a numeric interval.
-const Reduced = struct {
-    class: Class,
-    low: Bound = .{},
-    high: Bound = .{},
-    /// Set when the specifier carried more than the class and interval,
-    /// so a containment answer would be a guess.
-    approximate: bool = false,
-};
-
-/// The pair `subtypep` returns: the answer, and whether it is certain.
-const Answer = struct { yes: bool, certain: bool };
-
-const UNCERTAIN = Answer{ .yes = false, .certain = false };
-
-fn reduce(ev: *Evaluator, spec: Value) Error!?Reduced {
-    if (spec.isSymbol()) {
-        const name = symbol_mod.symbol(spec).name;
-        if (std.mem.eql(u8, name, "BIT")) {
-            return Reduced{
-                .class = .integer,
-                .low = .{ .limit = Value.fromFixnum(0) },
-                .high = .{ .limit = Value.fromFixnum(1) },
-            };
-        }
-        if (classNamed(name)) |class| return Reduced{ .class = class };
-        if (try deftypeExpansion(ev, spec)) |expansion| return reduce(ev, expansion);
-        if (try isStructureName(ev, spec)) return Reduced{ .class = .structure_object, .approximate = true };
-        return null;
-    }
-    if (!spec.isCons()) return null;
-    const name = headName(spec) orelse return null;
-
-    if (numericClassNamed(name)) |class| {
-        return try normalizeIntegerBounds(ev, .{
-            .class = class,
-            .low = try Bound.parse(ev, nthArg(spec, 0)),
-            .high = try Bound.parse(ev, nthArg(spec, 1)),
-        });
-    }
-    if (std.mem.eql(u8, name, "MOD")) {
-        const limit = nthArg(spec, 0);
-        if (!limit.isFixnum()) return null;
-        return try normalizeIntegerBounds(ev, .{
-            .class = .integer,
-            .low = .{ .limit = Value.fromFixnum(0) },
-            .high = .{ .limit = limit, .exclusive = true },
-        });
-    }
-    if (std.mem.eql(u8, name, "UNSIGNED-BYTE") or std.mem.eql(u8, name, "SIGNED-BYTE")) {
-        return try reduceByte(ev, spec, name[0] == 'U');
-    }
-    if (classNamed(name)) |class| {
-        // An array or string specifier with arguments narrows the class in
-        // ways the interval model cannot express.
-        const bare = heap.cdr(spec).equalsRaw(value.NIL);
-        return Reduced{ .class = class, .approximate = !bare };
-    }
-    if (try deftypeExpansion(ev, spec)) |expansion| return reduce(ev, expansion);
-    return null;
-}
-
-/// An exclusive bound on an integer type names the same set as the
-/// inclusive bound one step in, and comparing two intervals is only
-/// straightforward once both are written the same way.
-fn normalizeIntegerBounds(ev: *Evaluator, r: Reduced) Error!Reduced {
-    if (!contains(.integer, r.class)) return r;
-    var out = r;
-    if (out.low.exclusive) {
-        if (out.low.limit) |limit| {
-            if (!bignum.isInteger(limit)) return out;
-            out.low = .{ .limit = try bignum.add(ev.heap, limit, Value.fromFixnum(1)) };
-        }
-    }
-    if (out.high.exclusive) {
-        if (out.high.limit) |limit| {
-            if (!bignum.isInteger(limit)) return out;
-            out.high = .{ .limit = try bignum.sub(ev.heap, limit, Value.fromFixnum(1)) };
-        }
-    }
-    return out;
-}
-
-fn reduceByte(ev: *Evaluator, spec: Value, unsigned: bool) Error!?Reduced {
-    const bits_spec = nthArg(spec, 0);
-    if (!bits_spec.isFixnum()) {
-        if (!unsigned) return Reduced{ .class = .integer };
-        return Reduced{ .class = .integer, .low = .{ .limit = Value.fromFixnum(0) } };
-    }
-    const bits: usize = @intCast(bits_spec.toFixnum());
-    if (unsigned) {
-        const limit = try bignum.shiftLeft(ev.heap, Value.fromFixnum(1), bits);
-        return Reduced{
-            .class = .integer,
-            .low = .{ .limit = Value.fromFixnum(0) },
-            .high = .{ .limit = try bignum.sub(ev.heap, limit, Value.fromFixnum(1)) },
-        };
-    }
-    if (bits == 0) {
-        return Reduced{
-            .class = .integer,
-            .low = .{ .limit = Value.fromFixnum(0) },
-            .high = .{ .limit = Value.fromFixnum(0) },
-        };
-    }
-    const limit = try bignum.shiftLeft(ev.heap, Value.fromFixnum(1), bits - 1);
-    return Reduced{
-        .class = .integer,
-        .low = .{ .limit = try bignum.negate(ev.heap, limit) },
-        .high = .{ .limit = try bignum.sub(ev.heap, limit, Value.fromFixnum(1)) },
-    };
-}
-
-/// Whether the interval of `inner` sits inside that of `outer`. An absent
-/// bound is unbounded, so it contains any bound on the same side.
-fn intervalWithin(ev: *Evaluator, inner: Reduced, outer: Reduced) Error!bool {
-    if (outer.low.limit) |outer_low| {
-        const inner_low = inner.low.limit orelse return false;
-        const order = try compareReals(ev, inner_low, outer_low);
-        if (order == .lt) return false;
-        if (order == .eq and outer.low.exclusive and !inner.low.exclusive) return false;
-    }
-    if (outer.high.limit) |outer_high| {
-        const inner_high = inner.high.limit orelse return false;
-        const order = try compareReals(ev, inner_high, outer_high);
-        if (order == .gt) return false;
-        if (order == .eq and outer.high.exclusive and !inner.high.exclusive) return false;
-    }
-    return true;
-}
-
-fn hasInterval(r: Reduced) bool {
-    return r.low.limit != null or r.high.limit != null;
-}
-
-pub fn subtypep(ev: *Evaluator, a_spec: Value, b_spec: Value) Error!Answer {
-    if (equality.equal(a_spec, b_spec)) return .{ .yes = true, .certain = true };
-
-    // The combinators reduce to questions about their parts.
-    if (try combinatorAnswer(ev, a_spec, b_spec)) |answer| return answer;
-
-    const a = try reduce(ev, a_spec) orelse return UNCERTAIN;
-    const b = try reduce(ev, b_spec) orelse return UNCERTAIN;
-    if (a.class == .nil_type) return .{ .yes = true, .certain = true };
-    if (b.class == .t_type) return .{ .yes = true, .certain = true };
-
-    if (!contains(b.class, a.class)) {
-        // A narrowed class cannot reach outside the class it narrows, so
-        // the containment question is settled either way.
-        if (a.approximate or b.approximate) return UNCERTAIN;
-        return .{ .yes = false, .certain = true };
-    }
-    if (a.approximate or b.approximate) return UNCERTAIN;
-    if (!hasInterval(b)) return .{ .yes = true, .certain = true };
-    if (!hasInterval(a) and hasInterval(b)) return .{ .yes = false, .certain = true };
-    return .{ .yes = try intervalWithin(ev, a, b), .certain = true };
-}
-
-/// `or`, `and` and `not` on either side, reduced to their parts. Returns
-/// null when neither side is a combinator.
-fn combinatorAnswer(ev: *Evaluator, a_spec: Value, b_spec: Value) Error!?Answer {
-    if (headName(a_spec)) |name| {
-        // Every branch of a union must fit for the union to fit.
-        if (std.mem.eql(u8, name, "OR")) {
-            var rest = heap.cdr(a_spec);
-            var certain = true;
-            while (rest.isCons()) : (rest = heap.cdr(rest)) {
-                const answer = try subtypep(ev, heap.car(rest), b_spec);
-                if (answer.certain and !answer.yes) return Answer{ .yes = false, .certain = true };
-                if (!answer.certain) certain = false;
-            }
-            return Answer{ .yes = certain, .certain = certain };
-        }
-        // One branch of an intersection fitting is enough.
-        if (std.mem.eql(u8, name, "AND")) {
-            var rest = heap.cdr(a_spec);
-            while (rest.isCons()) : (rest = heap.cdr(rest)) {
-                const answer = try subtypep(ev, heap.car(rest), b_spec);
-                if (answer.certain and answer.yes) return Answer{ .yes = true, .certain = true };
-            }
-            return UNCERTAIN;
-        }
-        if (std.mem.eql(u8, name, "NOT")) return UNCERTAIN;
-    }
-    if (headName(b_spec)) |name| {
-        // Fitting one branch of a union is enough to fit the union.
-        if (std.mem.eql(u8, name, "OR")) {
-            var rest = heap.cdr(b_spec);
-            while (rest.isCons()) : (rest = heap.cdr(rest)) {
-                const answer = try subtypep(ev, a_spec, heap.car(rest));
-                if (answer.certain and answer.yes) return Answer{ .yes = true, .certain = true };
-            }
-            return UNCERTAIN;
-        }
-        // Fitting an intersection means fitting every branch.
-        if (std.mem.eql(u8, name, "AND")) {
-            var rest = heap.cdr(b_spec);
-            var certain = true;
-            while (rest.isCons()) : (rest = heap.cdr(rest)) {
-                const answer = try subtypep(ev, a_spec, heap.car(rest));
-                if (answer.certain and !answer.yes) return Answer{ .yes = false, .certain = true };
-                if (!answer.certain) certain = false;
-            }
-            return Answer{ .yes = certain, .certain = certain };
-        }
-        if (std.mem.eql(u8, name, "NOT")) {
-            // `A ⊆ (not B)` holds when A and B share nothing, which the
-            // lattice can answer for two plain classes.
-            const a = try reduce(ev, a_spec) orelse return UNCERTAIN;
-            const b = try reduce(ev, nthArg(b_spec, 0)) orelse return UNCERTAIN;
-            if (a.approximate or b.approximate or hasInterval(a) or hasInterval(b)) return UNCERTAIN;
-            if (!overlaps(a.class, b.class)) return Answer{ .yes = true, .certain = true };
-            return UNCERTAIN;
-        }
-    }
-    return null;
-}
-
-fn subtypepFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
-    if (args[0].isSymbol() and args[1].isSymbol()) {
-        if (try conditionClassNamed(ev, args[0])) |sub| {
-            if (try conditionClassNamed(ev, args[1])) |super| {
-                return ev.setValues(&.{ boolv(proto_class.descendsFrom(sub, super)), value.T });
-            }
-        }
-    }
-    const answer = try subtypep(ev, args[0], args[1]);
-    return ev.setValues(&.{ boolv(answer.yes), boolv(answer.certain) });
 }
 
 // --- coerce ---

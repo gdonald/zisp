@@ -3,6 +3,8 @@
 
 (in-package :cl-test)
 
+(load "auxiliary/types-aux.lsp")
+
 (run-ansi-files
  "subtypep"
  '("types-and-classes/subtypep.lsp"

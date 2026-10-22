@@ -269,6 +269,11 @@ fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     for (ev.block_stack.items) |*entry| try e.update(&entry.name);
     for (ev.tagbody_stack.items) |*entry| try e.update(&entry.body);
     for (ev.catch_stack.items) |*entry| try e.update(&entry.tag);
+    for (ev.call_frames.items) |*frame| {
+        try e.update(&frame.function);
+        try e.update(&frame.form);
+    }
+    try e.update(&ev.call_form);
     for (ev.dynamic_stack.items) |*entry| {
         try e.update(&entry.sym);
         try e.update(&entry.saved);
@@ -299,10 +304,10 @@ fn repositionMoved(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     }
 
     for (young.items) |address| {
-        const pos = table.map.get(address).?;
+        const entry = table.map.get(address).?;
         _ = table.map.remove(address);
         const moved = e.movedCons(address) orelse continue;
-        try table.record(moved, pos);
+        try table.map.put(moved.toConsAddr(), entry);
     }
 }
 
@@ -493,6 +498,11 @@ fn pushEvaluatorState(marker: *mark_mod.Marker, ev: *Evaluator) !void {
     for (ev.block_stack.items) |entry| try marker.push(entry.name);
     for (ev.tagbody_stack.items) |entry| try marker.push(entry.body);
     for (ev.catch_stack.items) |entry| try marker.push(entry.tag);
+    for (ev.call_frames.items) |frame| {
+        try marker.push(frame.function);
+        try marker.push(frame.form);
+    }
+    try marker.push(ev.call_form);
     for (ev.dynamic_stack.items) |entry| {
         try marker.push(entry.sym);
         try marker.push(entry.saved);

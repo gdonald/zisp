@@ -1,0 +1,7 @@
+RESERVE-SEATS
+;; Debugger entered on SIMPLE-ERROR:
+;;   Only 3 of 5 seats are free.
+;; Restarts:
+;;   0: [CONTINUE] Book the seats that are left.
+;;   1: [ABORT] Return to the top level.
+Debug> 3

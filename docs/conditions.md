@@ -188,8 +188,10 @@ a `control-error` where there is none; the others return nil.
 condition and the hook itself, binding `*debugger-hook*` to nil while it
 runs. An `error` that no handler takes goes to `invoke-debugger`, so the
 hook sees every unhandled error. A hook usually leaves with a non-local
-exit. Where there is no hook, or the hook returns, the condition unwinds
-to whatever catches it, and the driver reports it if nothing does.
+exit. Where there is no hook, or the hook returns, the REPL enters the
+default debugger. In batch mode (`--eval`, `--load`, a script) there is
+no one to ask, so the condition unwinds to whatever catches it, and the
+driver reports it and exits non-zero if nothing does.
 
 ```lisp
 (block done
@@ -197,3 +199,63 @@ to whatever catches it, and the driver reports it if nothing does.
                            (return-from done c))))
     (error "reported through the hook")))
 ```
+
+## The default debugger
+
+The REPL enters the debugger where the condition was signaled, before
+anything unwinds. That holds for a failure a native raised, such as
+`(car 5)`, as well as for `error`. It prints the condition's report and
+the restarts, then reads from where the REPL's input has got to:
+
+```
+;; Debugger entered on SIMPLE-ERROR:
+;;   Only 3 of 5 seats are free.
+;; Restarts:
+;;   0: [CONTINUE] Book the seats that are left.
+;;   1: [ABORT] Return to the top level.
+Debug>
+```
+
+| Input | What it does |
+|---|---|
+| an integer | invokes the restart listed under it |
+| `:r NAME` | invokes the restart of that name |
+| `:b` | prints the backtrace |
+| any other form | evaluates it where the condition was signaled and prints its values |
+| end of input, or input that does not read | invokes the innermost `abort` restart |
+
+A restart with an `:interactive` function, such as `use-value` for an
+unbound variable, asks for its arguments. A form is evaluated with the
+lexical bindings of the place the condition was signaled from, so a
+`let` variable there can be read. An error in such a form enters a
+debugger one level in, prompting `Debug[2]>`, whose first restart returns
+to the outer one.
+
+`(break "Pausing at ~a." x)` enters the debugger without signaling, so no
+handler sees its condition. Its `continue` restart returns nil from the
+call.
+
+## Backtraces
+
+`ext:backtrace` returns the calls in progress, innermost first, each as
+`(name position arguments)`. The name is a string, nil for an anonymous
+function. The position is `(file line column)` for where the call was
+written, and it is recorded for code read by `load`. A call a macro built
+is placed where the macro's own call was written. Taken from a debugger
+hook or the debugger, the backtrace starts at the call that signaled.
+
+```lisp
+(defun descend (n)
+  (if (= n 1) (error "Reached the bottom.") (1+ (descend (1- n)))))
+
+(block captured
+  (let ((*debugger-hook* (lambda (c hook) (declare (ignore c hook))
+                           (return-from captured (ext:backtrace)))))
+    (descend 2)))
+;; => (("DESCEND" ("/path/descend.lisp" 2 49) (1))
+;;     ("DESCEND" ("/path/descend.lisp" 7 5) (2)))
+```
+
+A call in tail position replaces the frame that made it, so that frame is
+not in the backtrace. Calls to `error`, `cerror`, `signal`, `warn`,
+`break` and `invoke-debugger` keep the frame that made them.

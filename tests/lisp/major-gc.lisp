@@ -49,14 +49,14 @@
 ;; One form, so every collection inside it is one the collector chose
 ;; for itself rather than one that was asked for. Enough is retained to
 ;; carry the tenured space over the floor and then well past fourfold.
-(retain 76000)
+(retain 150000)
 
 (setq *majors-first* (room-value :major-collections))
 (check (> *majors-first* *majors-before*))
 
 ;; What was retained came through whole.
-(check (= (length *kept*) 76000))
-(check (equal (car *kept*) '(75999 . 75999)))
+(check (= (length *kept*) 150000))
+(check (equal (car *kept*) '(149999 . 149999)))
 
 (defvar *live-peak* 0)
 (setq *live-peak* (room-value :live-bytes))

@@ -33,6 +33,16 @@ const BlockEntry = struct { name: Value, id: u64 };
 const DynamicEntry = struct { sym: Value, saved: Value };
 const TagbodyEntry = struct { body: Value, id: u64 };
 const CatchEntry = struct { tag: Value, id: u64 };
+
+/// One closure call in progress, innermost last. `chain_mark` is where
+/// the call set the caller's lexical chains aside in the environment, so
+/// a form can later be evaluated where the call was made.
+pub const CallFrame = struct {
+    function: Value,
+    args: []const Value,
+    form: Value,
+    chain_mark: usize,
+};
 pub const GoTarget = struct { id: u64, pos: Value };
 
 pub const Evaluator = struct {
@@ -75,6 +85,13 @@ pub const Evaluator = struct {
     go_target: Value = undefined,
     catch_stack: std.ArrayList(CatchEntry) = .empty,
     catch_counter: u64 = 0,
+    // The closure calls in progress, which the debugger and `backtrace`
+    // read.
+    call_frames: std.ArrayList(CallFrame) = .empty,
+    // The form whose function is about to be applied, which the frame
+    // the application pushes records. Fixnum zero when a native called
+    // the function.
+    call_form: Value = .{ .raw = 0 },
     throw_id: u64 = 0,
     // Complete multiple-value list of the most recently evaluated form.
     // After any normal `eval` return, `values.items[0]` (or NIL when empty)
@@ -87,6 +104,10 @@ pub const Evaluator = struct {
     // macroexpansion stamps synthesized conses with the defining macro's
     // position; verbatim subforms keep theirs through structure sharing.
     positions: ?*source_pos.PositionTable = null,
+    // The table `sourcePositions` made, which the evaluator frees.
+    owned_positions: ?*source_pos.PositionTable = null,
+    // The file names the position entries borrow.
+    source_names: std.ArrayList([]u8) = .empty,
     // The full form whose special-form handler is currently running.
     // `defmacro` reads it to record the definition form's position.
     // Fixnum zero until the first dispatch; never a cons before then.
@@ -186,6 +207,13 @@ pub const Evaluator = struct {
         self.block_stack.deinit(self.allocator);
         self.tagbody_stack.deinit(self.allocator);
         self.catch_stack.deinit(self.allocator);
+        self.call_frames.deinit(self.allocator);
+        if (self.owned_positions) |table| {
+            table.deinit();
+            self.allocator.destroy(table);
+        }
+        for (self.source_names.items) |name| self.allocator.free(name);
+        self.source_names.deinit(self.allocator);
         self.values.deinit(self.allocator);
         self.transfer_values.deinit(self.allocator);
         self.dynamic_stack.deinit(self.allocator);
@@ -204,6 +232,26 @@ pub const Evaluator = struct {
     ///     try held.push(v);
     pub fn protect(self: *Evaluator) stack_mod.Region {
         return self.heap.protect();
+    }
+
+    /// The table the reader records where each cons was read, made on
+    /// first use when no other was bound.
+    pub fn sourcePositions(self: *Evaluator) !*source_pos.PositionTable {
+        if (self.positions) |table| return table;
+        const table = try self.allocator.create(source_pos.PositionTable);
+        table.* = source_pos.PositionTable.init(self.allocator);
+        self.owned_positions = table;
+        self.positions = table;
+        return table;
+    }
+
+    /// A copy of `name` that lives as long as the evaluator, for position
+    /// entries to borrow.
+    pub fn keepSourceName(self: *Evaluator, name: []const u8) ![]const u8 {
+        const owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned);
+        try self.source_names.append(self.allocator, owned);
+        return owned;
     }
 
     /// Keep `v` alive across a collection until `unpin`.
@@ -425,7 +473,8 @@ pub const Evaluator = struct {
     }
 
     /// Offer a failure a native raised to the handlers `handler-bind`
-    /// established, where it was raised and before anything unwinds. A
+    /// established, where it was raised and before anything unwinds, and
+    /// then to the debugger when the REPL is reading from a person. A
     /// failure that has already been offered, an `error` call among them,
     /// carries its condition in `error_condition` and is passed on as is.
     fn signalFailure(self: *Evaluator, err: Error) Error {
@@ -435,7 +484,12 @@ pub const Evaluator = struct {
         }
         if (self.error_condition.raw != 0 or self.building_failure_condition) return err;
         const clusters = self.interner.intern("*HANDLER-CLUSTERS*") catch return err;
-        if (symbol_mod.symbol(clusters).value_cell.equalsRaw(value.NIL)) return err;
+        const handled = !symbol_mod.symbol(clusters).value_cell.equalsRaw(value.NIL);
+        const interactive_sym = self.interner.intern("*%INTERACTIVE-DEBUGGER*") catch return err;
+        const interactive_cell = symbol_mod.symbol(interactive_sym).value_cell;
+        const interactive = !interactive_cell.equalsRaw(value.NIL) and
+            !interactive_cell.equalsRaw(value.SPECIAL_UNBOUND);
+        if (!handled and !interactive) return err;
         const coerce = self.env.lookupFunction(self.interner.intern("%COERCE-CAUGHT") catch return err) orelse return err;
         const run_handlers = self.env.lookupFunction(self.interner.intern("%RUN-HANDLERS") catch return err) orelse return err;
 
@@ -448,7 +502,13 @@ pub const Evaluator = struct {
             break :blk self.callFunction(coerce, &.{name}) catch return err;
         };
         held.push(condition) catch return err;
-        _ = self.callFunction(run_handlers, held.items()[0..1]) catch |handler_exit| return handler_exit;
+        if (handled) {
+            _ = self.callFunction(run_handlers, held.items()[0..1]) catch |handler_exit| return handler_exit;
+        }
+        if (interactive) {
+            const debugger = self.env.lookupFunction(self.interner.intern("INVOKE-DEBUGGER") catch return err) orelse return err;
+            _ = self.callFunction(debugger, held.items()[0..1]) catch |debugger_exit| return debugger_exit;
+        }
         self.error_condition = held.items()[0];
         return err;
     }
@@ -535,14 +595,16 @@ pub const Evaluator = struct {
                 try held.push(expanded);
                 return self.eval(expanded);
             }
-            return self.applyFunction(fn_v, tail);
+            return self.applyFunction(fn_v, form);
         }
 
         return Error.NotCallable;
     }
 
-    pub fn applyFunction(self: *Evaluator, fn_v: Value, arg_forms: Value) Error!Value {
+    /// Apply `fn_v` to the values of the arguments `form` gives it.
+    pub fn applyFunction(self: *Evaluator, fn_v: Value, form: Value) Error!Value {
         if (!isFunction(fn_v)) return Error.NotCallable;
+        const arg_forms = heap_mod.cdr(form);
 
         // The function and the arguments go on the Lisp stack, so a
         // collection during a later argument's evaluation can see them.
@@ -559,6 +621,7 @@ pub const Evaluator = struct {
             rest = heap_mod.cdr(rest);
         }
 
+        self.call_form = form;
         return self.callFunction(fn_v, args.items());
     }
 
@@ -612,7 +675,7 @@ pub const Evaluator = struct {
         const hook = self.env.lookupValue(hook_sym) orelse funcall_sym;
         if (hook.equalsRaw(funcall_sym) or hook.equalsRaw(value.NIL)) {
             const expansion = try self.callFunction(held.items()[1], &.{ held.items()[0], held.items()[2] });
-            try self.stampMacroExpansion(held.items()[1], expansion);
+            try self.stampMacroExpansion(held.items()[1], held.items()[0], expansion);
             return expansion;
         }
         const hook_fn = if (isFunction(hook))
@@ -622,7 +685,7 @@ pub const Evaluator = struct {
         else
             return Error.TypeError;
         const expansion = try self.callFunction(hook_fn, &.{ held.items()[1], held.items()[0], held.items()[2] });
-        try self.stampMacroExpansion(held.items()[1], expansion);
+        try self.stampMacroExpansion(held.items()[1], held.items()[0], expansion);
         return expansion;
     }
 
@@ -676,24 +739,26 @@ pub const Evaluator = struct {
     }
 
     /// Give every expansion cons that lacks a source position the defining
-    /// macro's position. Conses passed through verbatim from the call form
+    /// macro's position, and the position of the user code the call `form`
+    /// stands for. Conses passed through verbatim from the call form
     /// already have entries and keep them.
-    fn stampMacroExpansion(self: *Evaluator, expander: Value, expansion: Value) Error!void {
+    fn stampMacroExpansion(self: *Evaluator, expander: Value, form: Value, expansion: Value) Error!void {
         const table = self.positions orelse return;
         const def_pos = asFunction(expander).payload.closure.def_pos orelse return;
-        try stampExpansion(table, expansion, def_pos);
+        try stampExpansion(table, expansion, def_pos, table.userPosition(form));
     }
 
     fn stampExpansion(
         table: *source_pos.PositionTable,
         v: Value,
         pos: source_pos.SourcePosition,
+        call_site: ?source_pos.SourcePosition,
     ) std.mem.Allocator.Error!void {
         if (!v.isCons()) return;
         if (table.lookup(v) != null) return;
-        try table.record(v, pos);
-        try stampExpansion(table, heap_mod.car(v), pos);
-        try stampExpansion(table, heap_mod.cdr(v), pos);
+        try table.recordExpansion(v, pos, call_site);
+        try stampExpansion(table, heap_mod.car(v), pos, call_site);
+        try stampExpansion(table, heap_mod.cdr(v), pos, call_site);
     }
 
     pub fn callFunction(self: *Evaluator, fn_v: Value, args: []const Value) Error!Value {
@@ -707,18 +772,28 @@ pub const Evaluator = struct {
                 if (f.preserves_values) return result;
                 return self.set1(result);
             },
-            .closure => return self.applyClosure(&f.payload.closure, args),
+            .closure => return self.applyClosure(fn_v, args),
         }
     }
 
     const TailStep = union(enum) {
         value: Value,
-        call: *const function.Closure,
+        call: Value,
     };
 
-    fn applyClosure(self: *Evaluator, c0: *const function.Closure, args0: []const Value) Error!Value {
+    fn applyClosure(self: *Evaluator, fn0: Value, args0: []const Value) Error!Value {
         const chain_mark = try self.env.saveChains();
         defer self.env.restoreChains(chain_mark);
+
+        const frame_index = self.call_frames.items.len;
+        try self.call_frames.append(self.allocator, .{
+            .function = fn0,
+            .args = args0,
+            .form = self.call_form,
+            .chain_mark = chain_mark,
+        });
+        self.call_form = .{ .raw = 0 };
+        defer self.call_frames.shrinkRetainingCapacity(frame_index);
 
         // A tail jump refills one region on the Lisp stack. The args
         // feeding the current call are already bound into its frame by
@@ -729,7 +804,7 @@ pub const Evaluator = struct {
         const call_mark = self.dynamicMark();
         defer self.unwindSpecials(call_mark);
 
-        var cur = c0;
+        var cur = &asFunction(fn0).payload.closure;
         var cur_args: []const Value = args0;
         var frame: ?*env_mod.Frame = null;
         defer if (frame) |f| self.env.releaseFrame(f);
@@ -785,9 +860,16 @@ pub const Evaluator = struct {
 
             switch (try self.evalTail(last, &out_region)) {
                 .value => |v| return v,
-                .call => |next_c| {
-                    cur = next_c;
+                .call => |next_fn| {
+                    cur = &asFunction(next_fn).payload.closure;
                     cur_args = out_region.items();
+                    self.call_frames.items[frame_index] = .{
+                        .function = next_fn,
+                        .args = cur_args,
+                        .form = self.call_form,
+                        .chain_mark = chain_mark,
+                    };
+                    self.call_form = .{ .raw = 0 };
                 },
             }
         }
@@ -810,16 +892,28 @@ pub const Evaluator = struct {
             return .{ .value = try handler(self, tail) };
         }
 
-        if (try self.macro_expander(self, form)) |expanded| {
+        if (@intFromPtr(self.macro_expander) != @intFromPtr(&defaultMacroExpander)) {
+            if (try self.macro_expander(self, form)) |expanded| {
+                var held = self.heap.stack.open();
+                defer held.close();
+                try held.push(expanded);
+                return self.evalTail(expanded, out_buf);
+            }
+        }
+
+        const fn_v = self.env.lookupFunction(head) orelse
+            return self.unbound(head, Error.UnboundFunction);
+        if (function.isMacro(fn_v)) {
+            const expanded = try self.expandCached(form, fn_v);
             var held = self.heap.stack.open();
             defer held.close();
             try held.push(expanded);
             return self.evalTail(expanded, out_buf);
         }
-
-        const fn_v = self.env.lookupFunction(head) orelse
-            return self.unbound(head, Error.UnboundFunction);
-        if (isFunction(fn_v) and asFunction(fn_v).kind == .closure) {
+        if (isFunction(fn_v) and asFunction(fn_v).kind == .closure and !asFunction(fn_v).keeps_caller) {
+            // The calling frame's arguments may sit in the region the tail
+            // call's arguments are about to fill, so it lets go of them.
+            self.call_frames.items[self.call_frames.items.len - 1].args = &.{};
             out_buf.clear();
             var rest = tail;
             while (!rest.equalsRaw(value.NIL)) {
@@ -827,10 +921,11 @@ pub const Evaluator = struct {
                 try out_buf.push(try self.eval(heap_mod.car(rest)));
                 rest = heap_mod.cdr(rest);
             }
-            return .{ .call = &asFunction(fn_v).payload.closure };
+            self.call_form = form;
+            return .{ .call = fn_v };
         }
 
-        return .{ .value = try self.applyFunction(fn_v, tail) };
+        return .{ .value = try self.applyFunction(fn_v, form) };
     }
 
     fn tailIf(self: *Evaluator, args: Value, out_buf: *stack_mod.Region) Error!TailStep {

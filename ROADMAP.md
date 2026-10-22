@@ -387,18 +387,18 @@ Fill out the type system so real CL programs can load.
   - [x] 4.8.7. Symbol resolution: internal vs external, `pkg:sym` vs `pkg::sym`
   - [x] 4.8.8. `find-symbol`, `intern`, `find-package`
   - [x] 4.8.9. `do-symbols`, `do-external-symbols`, `do-all-symbols`
-- [ ] 4.9. Type system
+- [x] 4.9. Type system
   - [x] 4.9.1. `typep` and `subtypep`. Split:
     - [x] 4.9.1a. `typep` for atomic types: `null`, `cons`, `symbol`, `fixnum`, `bignum`, `integer`, `ratio`, `float`, `string`, `vector`, `array`, `hash-table`, `function`, `package`, `pathname`, `stream`, `character`, `t`, `nil`. One case per type
     - [x] 4.9.1b. `typep` for compound numeric types: `(integer 0 100)`, `(real * 1.0)`, `(unsigned-byte 8)`, `(signed-byte 16)`, `(mod N)`. 6 cases
     - [x] 4.9.1c. `typep` for compound combinators: `(or T T ...)`, `(and T T ...)`, `(not T)`, `(satisfies fn)`, `(member ...)`, `(eql x)`. 6 cases including nesting
     - [x] 4.9.1d. `typep` for `deftype`-defined types (composes recursively). 4 cases
-    - [ ] 4.9.1e. `typep` integration: `vendor/ansi-test/types-and-classes/typep*.lsp` ≥ 95%
+    - [x] 4.9.1e. `typep` integration: `vendor/ansi-test/types-and-classes/typep*.lsp` ≥ 95%
     - [x] 4.9.1f. `subtypep` two-value return per CLHS 4.3.2. Atomic-type lattice (e.g. `(subtypep 'integer 'number) => (t t)`). 10 cases
     - [x] 4.9.1g. `subtypep` for compound numeric types (e.g. `(subtypep '(integer 0 5) '(integer 0 10))`). 8 cases
     - [x] 4.9.1h. `subtypep` for compound combinators (`or`/`and`/`not` interactions). 10 cases
-    - [ ] 4.9.1i. `subtypep` undecidable-case behavior: returns `(nil nil)` only where SBCL also does. Diff against SBCL on every `subtypep*.lsp` test
-    - [ ] 4.9.1j. `subtypep` integration: `subtypep*.lsp` pass rate ≥ 80%. NOT bail-able to "always returns (nil nil)" — the SBCL diff catches it
+    - [x] 4.9.1i. `subtypep` undecidable-case behavior: returns `(nil nil)` only where SBCL also does. Diff against SBCL on every `subtypep*.lsp` test
+    - [x] 4.9.1j. `subtypep` integration: `subtypep*.lsp` pass rate ≥ 80%. NOT bail-able to "always returns (nil nil)" — the SBCL diff catches it
   - [x] 4.9.2. `deftype`
   - [x] 4.9.3. Type specifiers: atomic, compound (`(integer 0 100)`, `(or string null)`)
   - [x] 4.9.4. `check-type`, `coerce`
@@ -508,25 +508,25 @@ Common Lisp's condition system is more powerful than exceptions in most language
   - [x] 6.4.4c. Standard restart `muffle-warning` — `warn` establishes; suppresses the warning print
   - [x] 6.4.4d. Standard restarts `store-value`, `use-value` — establishment by `signal`/`error`; differ in whether the value is stored back at the source or just used
   - [x] 6.4.5. `with-condition-restarts` associates a restart set with a specific condition object so `compute-restarts` can filter by condition. Acceptance: 5 cases in `tests/lisp/with-condition-restarts.lisp` — establish 3 restarts under `with-condition-restarts` for condition A, signal A and B; `compute-restarts` for A returns the associated subset; for B returns only the unassociated restarts; restarts established outside `with-condition-restarts` are visible to all conditions
-- [ ] 6.5. Debugger
+- [x] 6.5. Debugger
   - [x] 6.5.1. `*debugger-hook*`
-  - [ ] 6.5.2. Default debugger. Split into 6 milestones:
-    - [ ] 6.5.2a. Debugger entry banner: prints condition report (via `format`; `print-object` once 7.5.1 lands), lists numbered restarts with their reports, prompts `Debug>`. `tests/lisp/debugger-banner.lisp` asserts exact output for 3 conditions
-    - [ ] 6.5.2b. Integer input selects restart by index. 1 scripted session
-    - [ ] 6.5.2c. Lisp-form input is evaluated in the broken environment (lexical bindings of error site available). 2 scripted sessions including form that references a let-bound variable from the error site
-    - [ ] 6.5.2d. Nested debugger entry: form evaluation that triggers another error opens an inner debugger; `abort` returns to outer. 1 scripted session
-    - [ ] 6.5.2e. `:r NAME` selects restart by name match; `invoke-restart-interactively` prompts for arguments. 2 scripted sessions
-    - [ ] 6.5.2f. Edge cases: condition with no restarts allows only form evaluation; `abort` at top-level returns to REPL or exits per CLI flags. 2 scripted sessions
-  - [ ] 6.5.3. Backtrace produces every active Lisp frame (function name + source position, plus argument values). For frames inside macroexpanded code, the source position reported is the user's call-site (the invariant established in 3.1.6). Native code frames are added in Phase 9; the backtrace protocol is wired now and Phase 9 fills in additional information without changing the contract. Acceptance: (a) `tests/lisp/backtrace-corpus.lisp` has 10 cases — each provokes an error N levels deep into a recursion (N from 1 to 10), captures `(*debugger-hook*)` invocation, asserts the backtrace lists exactly N frames with correct names and source positions. (b) `tests/lisp/backtrace-macroexpand.lisp` has 5 cases where the error originates inside a macro expansion (using macros from 3.1.6's corpus); the backtrace reports the user's call-site position, not the macro body's. NOT bail-able to "current frame only" or to "ignore macroexpansion" — both gates apply
-  - [ ] 6.5.4. `(break "msg" args)` enters the debugger with a continuable `simple-condition` of type `break`; the `continue` restart returns from the call. Acceptance: `(let ((x 0)) (break "test") x)` enters debugger, on `continue` returns `0`; `break` from inside a `handler-bind` for `condition` does NOT invoke the handler (break conditions explicitly bypass condition handlers per CLHS 25.1.7)
-- [ ] 6.6. Unwinding
-  - [ ] 6.6.1. `unwind-protect` runs cleanup on every non-local exit. Split into 5 milestones (each adds cases to `tests/lisp/unwind-protect-corpus.lisp`):
-    - [ ] 6.6.1a. Normal exit + signaled error — cleanup runs in both. 4 cases
-    - [ ] 6.6.1b. `throw` past 3+ frames; `return-from` past nested unwind-protects; `go` to outer `tagbody`. 6 cases
-    - [ ] 6.6.1c. `abort` restart through nested handlers. 3 cases
-    - [ ] 6.6.1d. Error during cleanup itself; `throw` during cleanup. 4 cases (subtle: subsequent cleanups must still fire)
-    - [ ] 6.6.1e. Each case asserts exact cleanup ordering and final return state, diffed against SBCL. 3 additional adversarial cases (cleanup forms with side effects observable across exit paths)
-  - [ ] 6.6.2. Cleanup order: cleanups fire in REVERSE order of unwind-protect frame entry; error during one cleanup does NOT prevent later cleanups from running. Verified by case set in 6.6.1d
+  - [x] 6.5.2. Default debugger. Split into 6 milestones:
+    - [x] 6.5.2a. Debugger entry banner: prints condition report (via `format`; `print-object` once 7.5.1 lands), lists numbered restarts with their reports, prompts `Debug>`. `tests/lisp/debugger-banner.lisp` asserts exact output for 3 conditions
+    - [x] 6.5.2b. Integer input selects restart by index. 1 scripted session
+    - [x] 6.5.2c. Lisp-form input is evaluated in the broken environment (lexical bindings of error site available). 2 scripted sessions including form that references a let-bound variable from the error site
+    - [x] 6.5.2d. Nested debugger entry: form evaluation that triggers another error opens an inner debugger; `abort` returns to outer. 1 scripted session
+    - [x] 6.5.2e. `:r NAME` selects restart by name match; `invoke-restart-interactively` prompts for arguments. 2 scripted sessions
+    - [x] 6.5.2f. Edge cases: condition with no restarts allows only form evaluation; `abort` at top-level returns to REPL or exits per CLI flags. 2 scripted sessions
+  - [x] 6.5.3. Backtrace produces every active Lisp frame (function name + source position, plus argument values). For frames inside macroexpanded code, the source position reported is the user's call-site (the invariant established in 3.1.6). Native code frames are added in Phase 9; the backtrace protocol is wired now and Phase 9 fills in additional information without changing the contract. Acceptance: (a) `tests/lisp/backtrace-corpus.lisp` has 10 cases — each provokes an error N levels deep into a recursion (N from 1 to 10), captures `(*debugger-hook*)` invocation, asserts the backtrace lists exactly N frames with correct names and source positions. (b) `tests/lisp/backtrace-macroexpand.lisp` has 5 cases where the error originates inside a macro expansion (using macros from 3.1.6's corpus); the backtrace reports the user's call-site position, not the macro body's. NOT bail-able to "current frame only" or to "ignore macroexpansion" — both gates apply
+  - [x] 6.5.4. `(break "msg" args)` enters the debugger with a continuable `simple-condition` of type `break`; the `continue` restart returns from the call. Acceptance: `(let ((x 0)) (break "test") x)` enters debugger, on `continue` returns `0`; `break` from inside a `handler-bind` for `condition` does NOT invoke the handler (break conditions explicitly bypass condition handlers per CLHS 25.1.7)
+- [x] 6.6. Unwinding
+  - [x] 6.6.1. `unwind-protect` runs cleanup on every non-local exit. Split into 5 milestones (each adds cases to `tests/lisp/unwind-protect-corpus.lisp`):
+    - [x] 6.6.1a. Normal exit + signaled error — cleanup runs in both. 4 cases
+    - [x] 6.6.1b. `throw` past 3+ frames; `return-from` past nested unwind-protects; `go` to outer `tagbody`. 6 cases
+    - [x] 6.6.1c. `abort` restart through nested handlers. 3 cases
+    - [x] 6.6.1d. Error during cleanup itself; `throw` during cleanup. 4 cases (subtle: subsequent cleanups must still fire)
+    - [x] 6.6.1e. Each case asserts exact cleanup ordering and final return state, diffed against SBCL. 3 additional adversarial cases (cleanup forms with side effects observable across exit paths)
+  - [x] 6.6.2. Cleanup order: cleanups fire in REVERSE order of unwind-protect frame entry; error during one cleanup does NOT prevent later cleanups from running. Verified by case set in 6.6.1d
 
 Exit criteria: restartable errors work end-to-end from the REPL; can recover from `unbound-variable` by entering a value.
 

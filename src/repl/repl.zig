@@ -7,6 +7,9 @@
 //! at a time. The interactive stdin/stdout wiring lives in `main.zig`; this
 //! module is exercised directly by the test suite with string input and a
 //! captured writer.
+//!
+//! `run` reads its forms through the console stream, so the debugger an
+//! error enters reads on from the same input with `read`.
 
 const std = @import("std");
 const value = @import("../runtime/value.zig");
@@ -18,6 +21,8 @@ const collect_mod = @import("../eval/collect.zig");
 const eval_pkg = @import("../eval.zig");
 const builtins = @import("../builtins/builtins.zig");
 const readtables = @import("../builtins/readtables.zig");
+const system = builtins.system;
+const streams = @import("../builtins/streams.zig");
 
 const Value = value.Value;
 const Evaluator = eval_pkg.Evaluator;
@@ -27,8 +32,6 @@ const NativeError = eval_pkg.eval.Error;
 /// failures from the output writer.
 pub const Error = NativeError || std.Io.Writer.Error;
 
-const BREAK_MSG = ";; Entering break loop. :abort or :continue to resume.\n";
-const RESUME_MSG = ";; Resuming top level.\n";
 const ABORT_MSG = ";; Aborted.\n";
 
 pub const Repl = struct {
@@ -96,13 +99,24 @@ pub const Repl = struct {
 
     /// Read, evaluate, and print every complete form in `source`.
     pub fn run(self: *Repl, source: []const u8) Error!void {
-        var tokenizer = reader_mod.Tokenizer.init(source);
-        var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
-        rd.read_eval = .{ .context = @ptrCast(&self.ev), .call = &eval_pkg.Evaluator.readEval };
-        readtables.install(&self.ev, &rd);
+        const console = try self.consoleInput();
+        console.input = source;
+        console.position = 0;
+        console.pending = null;
+        const interactive = try self.interner.intern("*%INTERACTIVE-DEBUGGER*");
+        const was_interactive = getVal(interactive);
+        setVal(interactive, value.T);
+        defer {
+            setVal(interactive, was_interactive);
+            if (self.consoleInput()) |left| {
+                left.input = &.{};
+                left.position = 0;
+            } else |_| {}
+        }
+
         while (true) {
             try collect_mod.maybeCollect(&self.ev);
-            const form = rd.read() catch |e| {
+            const form = system.readStreamForm(&self.ev, value.T) catch |e| {
                 try self.reportError("Reader", e);
                 return;
             };
@@ -110,18 +124,40 @@ pub const Repl = struct {
             self.rotateInput(f);
             const result = self.evalWithAbort(f) catch |e| {
                 if (e == error.Quit) return;
-                self.ev.error_condition = .{ .raw = 0 };
-                self.ev.error_datum = .{ .raw = 0 };
-                try self.reportError("Error", e);
-                try self.breakLoop(&rd);
+                const debugged = self.debugFailure(e) catch |nested| {
+                    if (nested == error.Quit) return;
+                    try self.reportError("Error", nested);
+                    continue;
+                };
+                if (!debugged) try self.writeLine(ABORT_MSG);
                 continue;
             } orelse {
-                try self.out.writeAll(ABORT_MSG);
+                try self.writeLine(ABORT_MSG);
                 continue;
             };
             self.rotateOutput(result);
             try self.printResult(result);
         }
+    }
+
+    /// The console stream, whose input `run` reads forms from.
+    fn consoleInput(self: *Repl) Error!*heap_mod.HeapStream {
+        return streams.streamOf(&self.ev, value.T, .input);
+    }
+
+    /// Enter the debugger for a failure that unwound to the top level
+    /// before one could be entered. False when it was left through
+    /// `abort`.
+    fn debugFailure(self: *Repl, e: Error) Error!bool {
+        const caught = if (self.ev.error_condition.raw != 0)
+            self.ev.error_condition
+        else
+            try self.interner.internKeyword(@errorName(e));
+        self.ev.error_condition = .{ .raw = 0 };
+        const debugger = self.ev.env.lookupFunction(try self.interner.intern("%DEBUG-TOP-LEVEL-FAILURE")).?;
+        const outcome = try self.ev.callFunction(debugger, &.{caught});
+        self.ev.error_datum = .{ .raw = 0 };
+        return !outcome.equalsRaw(value.NIL);
     }
 
     /// Read every form in `source`, evaluate each, and (when `print` is set)
@@ -147,38 +183,6 @@ pub const Repl = struct {
     /// Read and evaluate every form in the file at `path`, discarding values.
     pub fn loadFile(self: *Repl, path: []const u8) Error!void {
         try builtins.system.loadPath(&self.ev, path);
-    }
-
-    /// Minimal break loop entered after an evaluation error. Reads forms and
-    /// evaluates them in a nested context; `:abort` or `:continue` resumes the
-    /// top level. End of input also resumes. The full condition-driven version
-    /// arrives with the condition system.
-    fn breakLoop(self: *Repl, rd: *reader_mod.Reader) Error!void {
-        try self.out.writeAll(BREAK_MSG);
-        while (true) {
-            const form = rd.read() catch |e| {
-                try self.reportError("Reader", e);
-                return;
-            };
-            const f = form orelse return;
-            if (isResumeCommand(f)) {
-                try self.out.writeAll(RESUME_MSG);
-                return;
-            }
-            self.rotateInput(f);
-            const result = self.evalWithAbort(f) catch |e| {
-                if (e == error.Quit) return;
-                self.ev.error_condition = .{ .raw = 0 };
-                self.ev.error_datum = .{ .raw = 0 };
-                try self.reportError("Error", e);
-                continue;
-            } orelse {
-                try self.out.writeAll(ABORT_MSG);
-                continue;
-            };
-            self.rotateOutput(result);
-            try self.printResult(result);
-        }
     }
 
     /// Evaluate `form` under an `abort` restart. Null when the restart
@@ -209,11 +213,19 @@ pub const Repl = struct {
             .escape = true,
             .current_package = self.interner.currentPackage(),
         });
-        try self.out.writeByte('\n');
+        try self.writeLine("\n");
     }
 
     fn reportError(self: *Repl, label: []const u8, e: anyerror) Error!void {
-        try self.out.print(";; {s}: {s}\n", .{ label, @errorName(e) });
+        try self.out.print(";; {s}: {s}", .{ label, @errorName(e) });
+        try self.writeLine("\n");
+    }
+
+    /// Write `text`, which ends a line, so `fresh-line` knows the next
+    /// output starts at the left margin.
+    fn writeLine(self: *Repl, text: []const u8) Error!void {
+        try self.out.writeAll(text);
+        self.ev.output_column = 0;
     }
 };
 
@@ -223,12 +235,4 @@ fn setVal(sym: Value, v: Value) void {
 
 fn getVal(sym: Value) Value {
     return symbol_mod.symbol(sym).value_cell;
-}
-
-fn isResumeCommand(form: Value) bool {
-    if (!form.isSymbol()) return false;
-    const home = symbol_mod.homePackage(form) orelse return false;
-    if (!std.mem.eql(u8, home.name, symbol_mod.KEYWORD_PACKAGE_NAME)) return false;
-    const name = symbol_mod.symbol(form).name;
-    return std.mem.eql(u8, name, "ABORT") or std.mem.eql(u8, name, "CONTINUE");
 }

@@ -197,8 +197,8 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
         const after_name = heap.cdr(def);
         if (!after_name.isCons()) return Error.BadArgList;
         const params = heap.car(after_name);
-        const fn_body = heap.cdr(after_name);
         try validateParams(ev, params);
+        const fn_body = try blockBody(ev, name, heap.cdr(after_name));
         try ev.env.retainChain(ev.env.top_value);
         try ev.env.retainChain(captured_fenv);
         const closure = try function.allocClosure(
@@ -242,7 +242,7 @@ fn macrolet(ev: *Evaluator, args: Value) Error!Value {
             ev.heap.allocator,
             symbol_mod.symbol(name).name,
             params,
-            heap.cdr(after_name),
+            try blockBody(ev, name, heap.cdr(after_name)),
             ev.env.top_value,
             captured_fenv,
             null,
@@ -300,6 +300,41 @@ fn validateParams(ev: *Evaluator, params: Value) Error!void {
     try lambda_list.validate(ev, params, false);
 }
 
+/// Whether `symbol` appears anywhere in `tree`.
+fn mentions(tree: Value, symbol: Value) bool {
+    var rest = tree;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) {
+        if (mentions(heap.car(rest), symbol)) return true;
+    }
+    return rest.equalsRaw(symbol);
+}
+
+/// `body` inside the block named `name` that a function or macro body
+/// carries, with its docstring and declarations left ahead of the block.
+/// A body that never mentions `return-from` is returned as it is: a block
+/// would take its last form out of tail position, and with it the call
+/// trampoline that keeps deep tail recursion off the host stack.
+fn blockBody(ev: *Evaluator, name: Value, body: Value) Error!Value {
+    if (!mentions(body, try ev.interner.intern("RETURN-FROM"))) return body;
+
+    var held = ev.heap.protect();
+    defer held.close();
+    var prefix_len: usize = 0;
+    var rest = body;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) {
+        const form = heap.car(rest);
+        const docstring = heap.isString(form) and heap.cdr(rest).isCons();
+        const declaration = form.isCons() and heap.car(form).equalsRaw(ev.sym_declare);
+        if (!docstring and !declaration) break;
+        try held.push(form);
+        prefix_len += 1;
+    }
+    try held.push(try ev.heap.allocCons(name, rest));
+    try held.push(try ev.heap.allocCons(try ev.interner.intern("BLOCK"), held.items()[prefix_len]));
+    try held.push(try ev.heap.allocCons(held.items()[prefix_len + 1], value.NIL));
+    return ev.heap.listWithTail(held.items()[0..prefix_len], held.items()[prefix_len + 2]);
+}
+
 fn defun(ev: *Evaluator, args: Value) Error!Value {
     if (!args.isCons()) return Error.BadArgList;
     const name = heap.car(args);
@@ -307,8 +342,8 @@ fn defun(ev: *Evaluator, args: Value) Error!Value {
     const after_name = heap.cdr(args);
     if (!after_name.isCons()) return Error.BadArgList;
     const params = heap.car(after_name);
-    const body = heap.cdr(after_name);
     try lambda_list.validate(ev, params, false);
+    const body = try blockBody(ev, name, heap.cdr(after_name));
 
     try ev.env.captureCurrent();
     const closure = try function.allocClosure(
@@ -333,8 +368,8 @@ fn defmacro(ev: *Evaluator, args: Value) Error!Value {
     const after_name = heap.cdr(args);
     if (!after_name.isCons()) return Error.BadArgList;
     const params = heap.car(after_name);
-    const body = heap.cdr(after_name);
     try lambda_list.validate(ev, params, true);
+    const body = try blockBody(ev, name, heap.cdr(after_name));
 
     const def_pos = if (ev.positions) |table| table.lookup(def_form) else null;
     try ev.env.captureCurrent();

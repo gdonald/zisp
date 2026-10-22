@@ -55,6 +55,12 @@ ansi-test's own `compile-and-load` does through `merge-pathnames`."
 
 (load "auxiliary/ansi-aux-macros.lsp")
 
+;; The notes a test can be tagged with. An array zisp is asked to make of
+;; element type `nil` upgrades to `bit`, so no `(vector nil)` is a string,
+;; and the tests that assume one is are switched off.
+(load "notes.lsp")
+(rt::disable-note :nil-vectors-are-strings)
+
 ;; `ansi-aux.lsp` reads `*condition-types*` out of `universe.lsp`, which
 ;; builds its object universe with CLOS. The list itself needs none of
 ;; that, so it is repeated here rather than pulling that file in.

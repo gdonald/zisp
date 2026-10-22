@@ -232,6 +232,15 @@ pub fn build(b: *std.Build) void {
     const rt_step = b.step("rt-tests", "Run rt-based ansi-test slices: zig build rt-tests -- <slice>...");
     rt_step.dependOn(&rt_run.step);
 
+    // `zig build subtypep-sbcl` compares zisp's subtypep with SBCL's
+    // through tests/run-subtypep-sbcl-diff.sh. It needs sbcl on the PATH.
+    const subtypep_sbcl_run = b.addSystemCommand(&.{"env"});
+    subtypep_sbcl_run.addPrefixedFileArg("ZISP=", suite_exe.getEmittedBin());
+    subtypep_sbcl_run.addArgs(&.{ "bash", "tests/run-subtypep-sbcl-diff.sh" });
+    subtypep_sbcl_run.step.dependOn(&suite_install.step);
+    const subtypep_sbcl_step = b.step("subtypep-sbcl", "Compare subtypep with SBCL on the ansi-test subtypep calls");
+    subtypep_sbcl_step.dependOn(&subtypep_sbcl_run.step);
+
     // -Dansi-tests=true: fold ansi-test into the default build.
     if (ansi_tests) {
         b.getInstallStep().dependOn(&ansi_run.step);

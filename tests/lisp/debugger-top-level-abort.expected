@@ -1,0 +1,7 @@
+CHECKED-DIVIDE
+;; Debugger entered on SIMPLE-ERROR:
+;;   Division of 9 by zero.
+;; Restarts:
+;;   0: [ABORT] Return to the top level.
+Debug> ;; Aborted.
+3

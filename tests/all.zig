@@ -48,6 +48,7 @@ comptime {
     _ = @import("eval/destructuring_corpus_test.zig");
     _ = @import("eval/ansi_destructuring_bind_test.zig");
     _ = @import("eval/macroexpand_positions_test.zig");
+    _ = @import("eval/backtrace_test.zig");
     _ = @import("eval/quasiquote_test.zig");
     _ = @import("eval/backquote_corpus_test.zig");
     _ = @import("eval/prelude_macros_test.zig");
@@ -84,6 +85,7 @@ comptime {
     _ = @import("builtins/ansi_do_tests_test.zig");
     _ = @import("builtins/compile_file_test.zig");
     _ = @import("repl/repl_test.zig");
+    _ = @import("repl/debugger_test.zig");
     _ = @import("lisp_corpus_test.zig");
     _ = @import("cli_test.zig");
 }

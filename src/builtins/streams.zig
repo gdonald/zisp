@@ -404,7 +404,7 @@ fn noOpStreamFn(p: *anyopaque, args: []const Value) Error!Value {
 
 // --- reading and writing characters ---
 
-fn expectInput(s: *Stream) Error!void {
+pub fn expectInput(s: *Stream) Error!void {
     if (!s.is_open) return Error.FileError;
     if (s.direction != .input and s.direction != .io) return Error.TypeError;
 }
@@ -447,11 +447,11 @@ fn nextChar(s: *Stream) ?u21 {
 
 /// The three trailing arguments the reading operations share:
 /// `eof-error-p`, `eof-value`, and a recursive-call flag that is ignored.
-const EofBehavior = struct {
+pub const EofBehavior = struct {
     signal: bool,
     on_eof: Value,
 
-    fn parse(args: []const Value, first: usize) Error!EofBehavior {
+    pub fn parse(args: []const Value, first: usize) Error!EofBehavior {
         if (args.len > first + 3) return Error.WrongArgCount;
         return .{
             .signal = if (args.len > first) !args[first].equalsRaw(value.NIL) else true,
@@ -459,7 +459,7 @@ const EofBehavior = struct {
         };
     }
 
-    fn result(self: EofBehavior) Error!Value {
+    pub fn result(self: EofBehavior) Error!Value {
         if (self.signal) return Error.FileError;
         return self.on_eof;
     }

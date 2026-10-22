@@ -1,0 +1,12 @@
+;; Debugger entered on SIMPLE-CONDITION:
+;;   test
+;; Restarts:
+;;   0: [CONTINUE] Return from BREAK.
+;;   1: [ABORT] Return to the top level.
+Debug> 0
+;; Debugger entered on SIMPLE-CONDITION:
+;;   Pausing at CHECKPOINT.
+;; Restarts:
+;;   0: [CONTINUE] Return from BREAK.
+;;   1: [ABORT] Return to the top level.
+Debug> :AFTER-BREAK

@@ -103,65 +103,50 @@ test "star-star-star holds the third-to-last result" {
     try testing.expectEqualStrings("(1)\n(2)\n(3)\n(4)\n(2)\n", h.output());
 }
 
-test "evaluation error enters break loop and aborts" {
+const TYPE_ERROR_BANNER =
+    ";; Debugger entered on TYPE-ERROR:\n" ++
+    ";;   An argument is not of the type the function needs.\n" ++
+    ";; Restarts:\n" ++
+    ";;   0: [ABORT] Return to the top level.\n";
+
+test "an evaluation error enters the debugger and restart 0 aborts" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
-    try h.run("(car 5) :abort (+ 1 2)");
-    try testing.expectEqualStrings(
-        ";; Error: TypeError\n" ++
-            ";; Entering break loop. :abort or :continue to resume.\n" ++
-            ";; Resuming top level.\n" ++
-            "3\n",
-        h.output(),
-    );
+    try h.run("(car 5) 0 (+ 1 2)");
+    try testing.expectEqualStrings(TYPE_ERROR_BANNER ++ "Debug> ;; Aborted.\n3\n", h.output());
 }
 
-test "break loop resumes on continue" {
-    const h = try newHarness();
-    defer h.deinit(testing.allocator);
-    try h.run("(car 5) :continue");
-    try testing.expectEqualStrings(
-        ";; Error: TypeError\n" ++
-            ";; Entering break loop. :abort or :continue to resume.\n" ++
-            ";; Resuming top level.\n",
-        h.output(),
-    );
-}
-
-test "break loop evaluates forms then resumes at end of input" {
+test "the debugger evaluates forms and aborts at the end of the input" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
     try h.run("(car 5) (+ 10 20)");
+    try testing.expectEqualStrings(TYPE_ERROR_BANNER ++ "Debug> 30\nDebug> ;; Aborted.\n", h.output());
+}
+
+test "a failure in a debugger form enters a debugger one level in" {
+    const h = try newHarness();
+    defer h.deinit(testing.allocator);
+    try h.run("(car 5) (cdr 6) 0 0");
     try testing.expectEqualStrings(
-        ";; Error: TypeError\n" ++
-            ";; Entering break loop. :abort or :continue to resume.\n" ++
-            "30\n",
+        TYPE_ERROR_BANNER ++ "Debug> " ++
+            ";; Debugger entered on TYPE-ERROR:\n" ++
+            ";;   An argument is not of the type the function needs.\n" ++
+            ";; Restarts:\n" ++
+            ";;   0: [ABORT] Return to debug level 1.\n" ++
+            ";;   1: [ABORT] Return to the top level.\n" ++
+            "Debug[2]> Debug> ;; Aborted.\n",
         h.output(),
     );
 }
 
-test "break loop reports nested errors and keeps reading" {
+test "the debugger names a restart number or name it does not have" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
-    try h.run("(car 5) (cdr 6) :abort");
+    try h.run("(car 5) 7 :r nothing :r abort (+ 3 3)");
     try testing.expectEqualStrings(
-        ";; Error: TypeError\n" ++
-            ";; Entering break loop. :abort or :continue to resume.\n" ++
-            ";; Error: TypeError\n" ++
-            ";; Resuming top level.\n",
-        h.output(),
-    );
-}
-
-test "break loop ignores non-resume symbols and evaluates them" {
-    const h = try newHarness();
-    defer h.deinit(testing.allocator);
-    try h.run("(car 5) :foo :abort");
-    try testing.expectEqualStrings(
-        ";; Error: TypeError\n" ++
-            ";; Entering break loop. :abort or :continue to resume.\n" ++
-            ":FOO\n" ++
-            ";; Resuming top level.\n",
+        TYPE_ERROR_BANNER ++ "Debug> ;; No restart numbered 7.\n" ++
+            "Debug> ;; No restart named NOTHING.\n" ++
+            "Debug> ;; Aborted.\n6\n",
         h.output(),
     );
 }
@@ -173,16 +158,17 @@ test "reader error at top level is reported" {
     try testing.expect(std.mem.startsWith(u8, h.output(), ";; Reader:"));
 }
 
-test "reader error inside break loop is reported" {
+test "input that does not read leaves the debugger" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
     try h.run("(car 5) (+ 1");
-    const out = h.output();
-    try testing.expect(std.mem.indexOf(u8, out, ";; Entering break loop") != null);
-    try testing.expect(std.mem.indexOf(u8, out, ";; Reader:") != null);
+    try testing.expectEqualStrings(
+        TYPE_ERROR_BANNER ++ "Debug> \n;; The input does not read.\n;; Aborted.\n",
+        h.output(),
+    );
 }
 
-test "quit at top level stops the loop without entering a break loop" {
+test "quit at top level stops the loop without entering the debugger" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
     try h.run("(+ 1 2) (quit 5) (+ 9 9)");
@@ -190,13 +176,12 @@ test "quit at top level stops the loop without entering a break loop" {
     try testing.expectEqual(@as(?u8, 5), h.repl.ev.quit_code);
 }
 
-test "quit inside a break loop stops the loop" {
+test "quit inside the debugger stops the loop" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
     try h.run("(car 5) (quit 2) (+ 1 1)");
     try testing.expectEqual(@as(?u8, 2), h.repl.ev.quit_code);
-    try testing.expect(std.mem.indexOf(u8, h.output(), "Entering break loop") != null);
-    try testing.expect(std.mem.indexOf(u8, h.output(), "1\n") == null);
+    try testing.expectEqualStrings(TYPE_ERROR_BANNER ++ "Debug> ", h.output());
 }
 
 test "evalForms with print echoes each value" {
@@ -215,7 +200,7 @@ test "evalForms without print is silent but still evaluates" {
     try testing.expectEqualStrings("42\n", h.output());
 }
 
-test "evalForms propagates an evaluation error instead of a break loop" {
+test "evalForms propagates an evaluation error instead of entering the debugger" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
     try testing.expectError(error.TypeError, h.repl.evalForms("(car 5)", true));
@@ -233,16 +218,6 @@ test "quit with no status at top level sets exit code zero" {
     try h.run("(quit)");
     try testing.expectEqual(@as(?u8, 0), h.repl.ev.quit_code);
     try testing.expectEqualStrings("", h.output());
-}
-
-test "quit in a break loop with no trailing form ends without a resume message" {
-    const h = try newHarness();
-    defer h.deinit(testing.allocator);
-    try h.run("(car 5) (quit 4)");
-    try testing.expectEqual(@as(?u8, 4), h.repl.ev.quit_code);
-    const out = h.output();
-    try testing.expect(std.mem.indexOf(u8, out, "Entering break loop") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Resuming top level") == null);
 }
 
 test "evalForms on empty input does nothing" {
@@ -289,7 +264,7 @@ test "init frees the repl when a later allocation fails" {
     try testing.expectError(error.OutOfMemory, zisp.repl.Repl.init(failing.allocator(), &aw.writer, null));
 }
 
-test "abort at top level returns to the prompt without a break loop" {
+test "abort at top level returns to the prompt without entering the debugger" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
     try h.run("(progn (abort) 1) (+ 1 2)");
@@ -303,13 +278,9 @@ test "the top level offers an abort restart" {
     try testing.expectEqualStrings("(ABORT)\n", h.output());
 }
 
-test "abort inside the break loop stays in the break loop" {
+test "abort inside the debugger returns to the debugger" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
-    try h.run("(car 1) (abort) :continue");
-    try testing.expectEqualStrings(
-        ";; Error: TypeError\n;; Entering break loop. :abort or :continue to resume.\n" ++
-            ";; Aborted.\n;; Resuming top level.\n",
-        h.output(),
-    );
+    try h.run("(car 1) (abort) (+ 2 2)");
+    try testing.expectEqualStrings(TYPE_ERROR_BANNER ++ "Debug> Debug> 4\nDebug> ;; Aborted.\n", h.output());
 }

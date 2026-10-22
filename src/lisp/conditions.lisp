@@ -22,6 +22,10 @@
 (defun condition-class-name-p (name)
   (and (symbolp name) (get name '%condition-class) t))
 
+;; Every condition class name, which is what `subtypep` walks to find the
+;; classes descending from one.
+(defvar *%condition-class-names* (list 'condition))
+
 ;;; --- define-condition ---
 
 (defun %condition-slot-option (options key)
@@ -146,6 +150,7 @@ a function named `(setf ...)`, which zisp has no namespace for yet."
   "What a `define-condition` comes to once its initforms have been closed
 over. Keeping the work here rather than in the expansion is what makes a
 definition cost a few calls instead of a macro walk over every slot."
+  (pushnew name *%condition-class-names*)
   (%put name '%condition-class
         (%make-condition-class
          name
@@ -202,9 +207,13 @@ definition cost a few calls instead of a macro walk over every slot."
   ((datum :initarg :datum :reader type-error-datum)
    (expected-type :initarg :expected-type :reader type-error-expected-type))
   (:report (lambda (condition stream)
-             (format stream "~S is not of type ~S."
-                     (type-error-datum condition)
-                     (type-error-expected-type condition)))))
+             ;; A native that rejected an argument without saying which
+             ;; leaves both slots nil.
+             (if (or (type-error-datum condition) (type-error-expected-type condition))
+                 (format stream "~S is not of type ~S."
+                         (type-error-datum condition)
+                         (type-error-expected-type condition))
+                 (format stream "An argument is not of the type the function needs.")))))
 
 (define-condition simple-type-error (simple-condition type-error) ())
 
@@ -626,14 +635,21 @@ error with restarts to use a value in its place or to store one."
 
 (defvar *debugger-hook* nil)
 
+;; True while the REPL reads from a person, which is when there is
+;; someone for the default debugger to ask.
+(defvar *%interactive-debugger* nil)
+
 (defun invoke-debugger (condition)
   "Hand CONDITION to `*debugger-hook*`, bound to nil while it runs so a
-failure inside the hook does not reach it again. Where there is no hook,
-or the hook returns, the condition unwinds to whatever catches it."
+failure inside the hook does not reach it again, and then to the default
+debugger when the REPL is reading from a person. Where the debugger
+returns, the condition unwinds to whatever catches it."
   (let ((hook *debugger-hook*))
     (when hook
       (let ((*debugger-hook* nil))
         (funcall hook condition hook))))
+  (when *%interactive-debugger*
+    (%default-debugger condition))
   (%raise-condition condition (%condition-raise-kind condition)))
 
 ;;; --- handling ---

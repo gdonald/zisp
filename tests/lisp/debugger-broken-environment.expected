@@ -1,0 +1,13 @@
+;; Debugger entered on SIMPLE-ERROR:
+;;   Gave up after 3 retries.
+;; Restarts:
+;;   0: [ABORT] Return to the top level.
+Debug> 30
+Debug> ;; Aborted.
+PORT-SEPARATOR
+;; Debugger entered on SIMPLE-ERROR:
+;;   No port separator in "localhost".
+;; Restarts:
+;;   0: [ABORT] Return to the top level.
+Debug> ("localhost" NIL)
+Debug> ;; Aborted.

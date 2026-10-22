@@ -148,3 +148,18 @@ test "special declaration corpus" {
     const checked = try runCorpus("special-declaration", @embedFile("lisp/special-declaration-corpus.lisp"));
     try testing.expectEqual(@as(u32, 8), checked);
 }
+
+test "function body corpus" {
+    const checked = try runCorpus("function-body", @embedFile("lisp/function-body-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 19), checked);
+}
+
+test "subtypep corpus" {
+    const checked = try runCorpus("subtypep", @embedFile("lisp/subtypep-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 155), checked);
+}
+
+test "unwind-protect corpus" {
+    const checked = try runCorpus("unwind-protect", @embedFile("lisp/unwind-protect-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 22), checked);
+}

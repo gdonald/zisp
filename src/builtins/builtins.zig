@@ -24,6 +24,7 @@ pub const gc = @import("gc.zig");
 pub const registerGc = gc.registerGc;
 const equality = @import("../runtime/equality.zig");
 const proto_class = @import("../runtime/proto_class.zig");
+const frames = @import("frames.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -136,6 +137,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("ASSOC", &assocFn);
     _ = try ev.defineNative("FBOUNDP", &fboundpFn);
     _ = try ev.defineNative("BOUNDP", &boundpFn);
+    _ = try ev.defineNative("CONSTANTP", &constantpFn);
     _ = try ev.defineNative("MAKUNBOUND", &makunboundFn);
     _ = try ev.defineNative("FMAKUNBOUND", &fmakunboundFn);
 
@@ -173,6 +175,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try streams.registerStreams(ev);
     try types.registerTypes(ev);
     try proto_class.registerProtoClass(ev);
+    try frames.registerFrames(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
     try pathnames.registerPathnames(ev);
@@ -188,6 +191,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try system.evalSource(ev, loop_source);
     try system.evalSource(ev, sequences_source);
     try system.evalSource(ev, conditions_source);
+    try system.evalSource(ev, types_source);
+    try system.evalSource(ev, debugger_source);
 }
 
 // --- conses, plists, symbol cells ---
@@ -291,6 +296,17 @@ fn boundpFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
     if (!args[0].isSymbol()) return Error.TypeError;
     return if (ev.env.lookupValue(args[0]) != null) value.T else value.NIL;
+}
+
+/// `(constantp form &optional environment)`: a constant variable, a
+/// `quote` form, or any object that evaluates to itself.
+fn constantpFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
+    const form = args[0];
+    if (form.isSymbol()) return boolv(symbol_mod.symbol(form).constant);
+    if (form.isCons()) return boolv(heap.car(form).equalsRaw(try ev.interner.intern("QUOTE")));
+    return value.T;
 }
 
 fn makunboundFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -519,6 +535,8 @@ const lists_source = @embedFile("../lisp/lists.lisp");
 const loop_source = @embedFile("../lisp/loop.lisp");
 const sequences_source = @embedFile("../lisp/sequences.lisp");
 const conditions_source = @embedFile("../lisp/conditions.lisp");
+const types_source = @embedFile("../lisp/types.lisp");
+const debugger_source = @embedFile("../lisp/debugger.lisp");
 
 /// `(error datum args...)` as the prelude needs it before the condition
 /// system is loaded. `conditions.lisp` replaces it with the one that

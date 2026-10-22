@@ -1,0 +1,11 @@
+;; Debugger entered on SIMPLE-ERROR:
+;;   Limit 10 reached.
+;; Restarts:
+;;   0: [ABORT] Return to the top level.
+Debug> ;; Debugger entered on TYPE-ERROR:
+;;   An argument is not of the type the function needs.
+;; Restarts:
+;;   0: [ABORT] Return to debug level 1.
+;;   1: [ABORT] Return to the top level.
+Debug[2]> Debug> 11
+Debug> ;; Aborted.
