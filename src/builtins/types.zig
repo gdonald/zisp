@@ -369,10 +369,10 @@ fn typepClass(ev: *Evaluator, v: Value, class: Value) Error!bool {
 /// some of: the stream classes past `file-stream` and `string-stream`, and
 /// the CLOS metaobjects.
 const unmade_classes = [_][]const u8{
-    "SYNONYM-STREAM",    "BROADCAST-STREAM",          "CONCATENATED-STREAM",
-    "TWO-WAY-STREAM",    "ECHO-STREAM",               "GENERIC-FUNCTION",
-    "STANDARD-OBJECT",   "STANDARD-GENERIC-FUNCTION", "METHOD",
-    "STANDARD-METHOD",   "METHOD-COMBINATION",        "STRUCTURE-CLASS",
+    "SYNONYM-STREAM",  "BROADCAST-STREAM",          "CONCATENATED-STREAM",
+    "TWO-WAY-STREAM",  "ECHO-STREAM",               "GENERIC-FUNCTION",
+    "STANDARD-OBJECT", "STANDARD-GENERIC-FUNCTION", "METHOD",
+    "STANDARD-METHOD", "METHOD-COMBINATION",        "STRUCTURE-CLASS",
     "STANDARD-CLASS",
 };
 
