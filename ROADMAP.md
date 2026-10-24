@@ -575,7 +575,7 @@ The Common Lisp Object System. Large, but mostly implementable in Lisp once the 
   - [x] 7.3.1. Multiple inheritance
   - [x] 7.3.2. C3 linearization for class precedence list. Inconsistent hierarchies (no valid linearization exists) MUST signal `error` at `defclass` time — silently producing a wrong order is the failure mode to prevent. Acceptance: 5 cases in `tests/lisp/c3-corpus.lisp` covering: diamond inheritance, multiple-inheritance ordering preservation, the canonical inconsistent hierarchy from the C3 paper (must error), depth-first-but-monotonic edge case, MRO across 5+ levels
   - [x] 7.3.3. `class-precedence-list` reflection
-- [ ] 7.4. Metaobject Protocol (AMOP subset)
+- [x] 7.4. Metaobject Protocol (AMOP subset)
   - [x] 7.4.1. `class-of`, `find-class`, `(setf find-class)`
   - [x] 7.4.2. `standard-class`, `standard-object`, `standard-generic-function`, `standard-method`
   - [x] 7.4.3. `compute-applicable-methods`. Split:
@@ -586,7 +586,7 @@ The Common Lisp Object System. Large, but mostly implementable in Lisp once the 
   - [x] 7.4.4. `compute-effective-method` — verified by a user-defined method combination producing correct effective methods for 3+ method definitions. The `:around` method MUST transform the inner result (e.g. wrap in `(list :around-result ...)`) — a no-op `:around` would pass a sloppy implementation, so the transformation is the assertion
   - [x] 7.4.5. `slot-definition` introspection per AMOP. MUST expose: `slot-definition-name`, `slot-definition-type`, `slot-definition-allocation`, `slot-definition-initargs`, `slot-definition-initform`, `slot-definition-initfunction`, `slot-definition-readers`, `slot-definition-writers`. `class-slots` returns effective slot definitions; `class-direct-slots` returns direct (per-class) ones. Acceptance: 6 cases in `tests/lisp/slot-introspection.lisp` defining classes that exercise each accessor with non-default values; introspection results match the source declaration
   - [x] 7.4.6. `validate-superclass` controls valid metaclass combinations. Default: `standard-class` permits only `standard-class`/`standard-object` superclasses. Acceptance: 3 cases in `tests/lisp/validate-superclass.lisp`: (a) defining a class with a metaclass-incompatible superclass signals `error` at `defclass` time, (b) a user metaclass with an explicit `validate-superclass` method allows the combination, (c) the error message names which superclass failed validation
-  - [ ] 7.4.7. Phase 6's hand-rolled condition class system is **deleted** here; conditions are real CLOS instances. Acceptance: `grep -r "minimal-condition-class" src/` returns nothing; all `conditions/` ansi-test still passes
+  - [x] 7.4.7. Phase 6's hand-rolled condition class system is **deleted** here; conditions are real CLOS instances. Acceptance: `grep -r "minimal-condition-class" src/` returns nothing; all `conditions/` ansi-test still passes
 - [x] 7.5. `print-object`, `describe-object`
   - [x] 7.5.1. `print-object` as the universal printer hook. The Phase 1 printer is rewritten to dispatch through `print-object` for ALL recursive printing — top-level, nested in lists, nested in vectors, nested as slot values of other instances, inside `format` `~A`/`~S` directives. Acceptance: defining `(defmethod print-object ((x my-class) stream) (format stream "<MY ~A>" (slot-value x 'name)))` causes that method to fire in all 5 contexts; `tests/lisp/print-object-dispatch.lisp` asserts the literal output for each. NOT bail-able to "top-level dispatch only" — the recursive contexts are the test
   - [x] 7.5.2. `describe`, `describe-object`
@@ -603,13 +603,13 @@ Phase 8: LOOP and Heavy Iteration
 
 - [ ] 8.1. Loop facility — done means: `vendor/ansi-test/iteration/loop*.lsp` pass rate ≥ 95% AND a 200-form corpus from "Practical Common Lisp" + CLHS section 6 expands identically to SBCL (`tests/lisp/loop-corpus.lisp`)
   - [x] 8.1.1. `loop` macro — simple form (body repeated forever)
-  - [ ] 8.1.2. Iteration clauses — one session each:
+  - [x] 8.1.2. Iteration clauses — one session each:
     - [x] 8.1.2a. `for ... in` (list elements) and `for ... on` (cdr-walk)
     - [x] 8.1.2b. `for ... = ... then ...` (assignment with optional step form)
     - [x] 8.1.2c. `for ... from ... to ... by ...` (numeric, including `downto`, `below`, `above`)
     - [x] 8.1.2d. `for ... across` (vector elements)
     - [x] 8.1.2e. `for ... being the hash-keys/hash-values [using ...]`
-    - [ ] 8.1.2f. `for ... being the symbols/external-symbols/present-symbols [of package]`
+    - [x] 8.1.2f. `for ... being the symbols/external-symbols/present-symbols [of package]`
     - [x] 8.1.2g. Multiple parallel `for` clauses (terminate when any source exhausts)
   - [x] 8.1.3. Termination — one session each:
     - [x] 8.1.3a. `while`, `until`
@@ -623,13 +623,13 @@ Phase 8: LOOP and Heavy Iteration
   - [x] 8.1.5. `into` accumulators with explicit interaction tests: `collect ... into x` + `count ... into y` + `finally (return (list x y))`
   - [x] 8.1.6. `with` for local bindings (parallel and sequential)
   - [x] 8.1.7. `initially`, `finally` (multiple of each, ordering matters)
-  - [ ] 8.1.8. `if`/`when`/`unless`/`else`/`end` clauses — nested conditionals with `and`/`it` references
+  - [x] 8.1.8. `if`/`when`/`unless`/`else`/`end` clauses — nested conditionals with `and`/`it` references
   - [x] 8.1.9. `named` loops with `return-from`
   - [ ] 8.1.10. Type declarations: `for x fixnum ...` actually inform compilation (Phase 9)
-- [ ] 8.2. Other iteration
+- [x] 8.2. Other iteration
   - [x] 8.2.1. `do`, `do*` with multiple stepped variables, end-test, result form, body. `do` evaluates step forms in PARALLEL (all step forms reference the old values); `do*` evaluates SEQUENTIALLY (each step form sees prior steps' new values). Acceptance: 8 cases in `tests/lisp/do-corpus.lisp` distinguishing parallel-vs-sequential semantics — including `(do ((a 1) (b a)) ...)` failing in `do` (unbound `a` in `b`'s init context per spec) but working in `do*`
-  - [ ] 8.2.2. `dolist`, `dotimes` — including optional result form, `return`/`return-from` to exit early, the variable being bound to NIL after normal completion (per spec). Acceptance: `vendor/ansi-test/iteration/do*.lsp` and `dolist*.lsp` pass rate ≥ 95%
-  - [ ] 8.2.3. `dohash` helper (zisp extension, wraps `maphash` with the `dolist`-style binding form)
+  - [x] 8.2.2. `dolist`, `dotimes` — including optional result form, `return`/`return-from` to exit early, the variable being bound to NIL after normal completion (per spec). Acceptance: `vendor/ansi-test/iteration/do*.lsp` and `dolist*.lsp` pass rate ≥ 95%
+  - [x] 8.2.3. `dohash` helper (zisp extension, wraps `maphash` with the `dolist`-style binding form)
 - [ ] 8.3. Loop testing
   - [ ] 8.3.1. Cross-test loop expansions against SBCL on a fixed corpus
 

@@ -57,3 +57,39 @@
 (equal (loop for outer from 1 to 2
              append (loop for inner from 1 to 2 collect (list outer inner)))
        '((1 1) (1 2) (2 1) (2 2)))
+(progn
+  (defpackage "LOOP-CORPUS-SYMBOLS" (:use) (:export "ALPHA"))
+  (intern "BETA" "LOOP-CORPUS-SYMBOLS")
+  (equal (sort (loop for symbol being the symbols of "LOOP-CORPUS-SYMBOLS"
+                     collect (symbol-name symbol))
+               #'string<)
+         '("ALPHA" "BETA")))
+(equal (loop for symbol being the external-symbols of "LOOP-CORPUS-SYMBOLS"
+             collect (symbol-name symbol))
+       '("ALPHA"))
+(eql (loop for symbol being each present-symbol in "LOOP-CORPUS-SYMBOLS" count t) 2)
+(handler-case (progn (loop for symbol being the symbols of "LOOP-CORPUS-MISSING" do (print symbol)) nil)
+  (package-error () t))
+(equal (loop for x in '(1 2 3 4 5 6)
+             when (evenp x) collect x into evens and count t into even-count
+             else collect x into odds
+             end
+             finally (return (list evens even-count odds)))
+       '((2 4 6) 3 (1 3 5)))
+(equal (loop for x in '(1 nil 3)
+             when x collect it)
+       '(1 3))
+(equal (loop for x from 1 to 6
+             if (evenp x)
+               if (zerop (mod x 3)) collect (list :six x)
+               else collect (list :even x)
+               end
+             else collect (list :odd x))
+       '((:odd 1) (:even 2) (:odd 3) (:even 4) (:odd 5) (:six 6)))
+(equal (loop for x in '(a b nil)
+             unless x return :found)
+       :found)
+(eql (loop for x from 1 to 5 finally (return x)) 5)
+(equal (loop with a = 1 and b = 2 with c = (+ a b) return (list a b c)) '(1 2 3))
+(handler-case (progn (macroexpand '(loop for x in nil for x in nil)) nil)
+  (program-error () t))

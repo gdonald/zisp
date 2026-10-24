@@ -20,3 +20,27 @@
 (let ((steps 0))
   (do ((i 0 (1+ i))) ((= i 3)) (declare (ignore i)) (setq steps (1+ steps)))
   (eql steps 3))
+
+;; dohash runs its body once for each entry, binding the key and value,
+;; inside a block named nil, and returns its result form.
+(let ((table (make-hash-table)) (sum 0))
+  (setf (gethash 1 table) 10 (gethash 2 table) 20)
+  (and (eql (dohash (key value table sum) (incf sum (+ key value))) 33)
+       (eql sum 33)))
+(let ((table (make-hash-table)))
+  (setf (gethash :a table) 1)
+  (eq (dohash (key value table :finished) (return :early)) :early))
+(null (dohash (key value (make-hash-table))))
+
+;; Declarations at the head of a do, dolist or dotimes body cover its
+;; variables and its result form.
+(let ((x :outer))
+  (declare (special x))
+  (let ((x :inner))
+    (declare (ignorable x))
+    (eq (dotimes (i 1 x) (declare (special x))) :outer)))
+(let ((seen nil))
+  (flet ((peek () (locally (declare (special e)) e)))
+    (dolist (e '(a b) (equal (reverse seen) '(a b)))
+      (declare (special e))
+      (push (peek) seen))))

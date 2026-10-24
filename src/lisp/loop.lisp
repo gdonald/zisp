@@ -1,455 +1,610 @@
-;; The LOOP facility. The expander parses clauses left to right into six
-;; buckets — variable bindings, prologue, per-iteration body, stepping,
-;; epilogue and result form — then emits one block / tagbody.
+;; The LOOP facility (CLHS 6.1).
+;;
+;; The expander reads the clauses left to right. Variable clauses add
+;; bindings, the forms that set their variables before the first pass,
+;; and the forms that step them before each later one. Main clauses add
+;; forms to the body. The expansion is one block holding the bindings,
+;; nested in clause order, around a tagbody:
+;;
+;;   initially forms, first steps, NEXT body, steps, (go NEXT),
+;;   END finally forms, (return-from name result)
+;;
+;; A variable clause tests for the end before it sets its variable, so a
+;; variable keeps the last value it had when the loop runs out.
 
 (in-package "COMMON-LISP")
 
-(defvar *loop-into-tails* nil)
+(defvar *%loop-tokens* nil)
+(defvar *%loop-name* nil)
+(defvar *%loop-end* nil)
+;; Binding groups, innermost first: each is (parallel-p bindings).
+(defvar *%loop-groups* nil)
+(defvar *%loop-variables* nil)
+(defvar *%loop-prologue* nil)
+(defvar *%loop-first* nil)
+(defvar *%loop-steps* nil)
+(defvar *%loop-body* nil)
+(defvar *%loop-epilogue* nil)
+;; Accumulation targets: (variable category tail flag), the anonymous one
+;; under the name nil.
+(defvar *%loop-accumulators* nil)
+(defvar *%loop-accumulator-bindings* nil)
+(defvar *%loop-anonymous* nil)
+(defvar *%loop-boolean-result* nil)
 
-(defvar %loop-keywords
-  '("NAMED" "WITH" "FOR" "AS" "REPEAT" "WHILE" "UNTIL" "ALWAYS" "NEVER" "THEREIS"
-    "DO" "DOING" "COLLECT" "COLLECTING" "APPEND" "APPENDING" "NCONC" "NCONCING"
-    "COUNT" "COUNTING" "SUM" "SUMMING" "MAXIMIZE" "MAXIMIZING"
-    "MINIMIZE" "MINIMIZING" "INITIALLY" "FINALLY" "RETURN" "IF" "WHEN" "UNLESS"
-    "ELSE" "END" "AND" "INTO" "FROM" "UPFROM" "DOWNFROM" "TO" "UPTO" "DOWNTO"
-    "BELOW" "ABOVE" "BY" "IN" "ON" "ACROSS" "BEING" "OF-TYPE" "="))
+(defun %loop-keyword-p (token &rest names)
+  (and (symbolp token) token
+       (member (symbol-name token) names :test #'string=)
+       t))
 
-(defun %kw (form name)
-  (and form (symbolp form) (string= (symbol-name form) name)))
+(defun %loop-error (control &rest arguments)
+  (error '%simple-program-error :format-control control :format-arguments arguments))
 
-(defun %kw-in (form names)
-  (dolist (name names nil) (when (%kw form name) (return t))))
+(defun %loop-peek () (car *%loop-tokens*))
 
-(defun %loop-keyword-p (form)
-  (%kw-in form %loop-keywords))
+(defun %loop-pop ()
+  (if (null *%loop-tokens*)
+      (%loop-error "The LOOP form ends where a form was expected.")
+      (pop *%loop-tokens*)))
 
-(defun %lp (binds prologue main steps epilogue result)
-  (list binds prologue main steps epilogue result))
+(defun %loop-next-is (&rest names)
+  (apply #'%loop-keyword-p (%loop-peek) names))
 
-(defun %lp-empty () (%lp nil nil nil nil nil nil))
+;;; --- variables ---
 
-(defun %lp-merge (a b)
-  (%lp (append (nth 0 a) (nth 0 b))
-       (append (nth 1 a) (nth 1 b))
-       (append (nth 2 a) (nth 2 b))
-       (append (nth 3 a) (nth 3 b))
-       (append (nth 4 a) (nth 4 b))
-       (or (nth 5 a) (nth 5 b))))
-
-(defun %st-list (state) (nth 0 state))
-(defun %st-tail (state) (nth 1 state))
-(defun %st-count (state) (nth 2 state))
-(defun %st-extreme (state) (nth 3 state))
-(defun %st-done (state) (nth 4 state))
-
-(defun %loop-tail-for (var)
-  (let ((hit (assoc var *loop-into-tails*)))
-    (if hit
-        (cdr hit)
-        (let ((tail (gensym "TAIL")))
-          (setq *loop-into-tails* (cons (cons var tail) *loop-into-tails*))
-          tail))))
-
-(defun %loop-vars (pattern)
+(defun %loop-pattern-variables (pattern)
   (cond ((null pattern) nil)
         ((symbolp pattern) (list pattern))
-        ((consp pattern) (append (%loop-vars (car pattern)) (%loop-vars (cdr pattern))))
-        (t nil)))
+        ((consp pattern) (append (%loop-pattern-variables (car pattern))
+                                 (%loop-pattern-variables (cdr pattern))))
+        (t (%loop-error "~S cannot be a LOOP variable." pattern))))
 
-(defun %loop-setqs (pattern form)
+(defun %loop-declare (pattern)
+  "Record the variables PATTERN binds, rejecting one bound already."
+  (dolist (variable (%loop-pattern-variables pattern))
+    (when (or (member variable *%loop-variables*)
+              (assoc variable *%loop-accumulators*))
+      (%loop-error "The LOOP variable ~S is bound more than once." variable))
+    (push variable *%loop-variables*)))
+
+(defun %loop-destructure (pattern form)
+  "Forms that set the variables of PATTERN from the value of FORM."
   (cond ((null pattern) nil)
-        ((symbolp pattern) (list (list 'setq pattern form)))
-        ((consp pattern)
-         (append (%loop-setqs (car pattern) (list 'car form))
-                 (%loop-setqs (cdr pattern) (list 'cdr form))))
+        ((symbolp pattern) (list `(setq ,pattern ,form)))
+        (t (let ((value (gensym "VALUE")))
+             (list `(let ((,value ,form))
+                      ,@(%loop-destructure (car pattern) `(car ,value))
+                      ,@(%loop-destructure (cdr pattern) `(cdr ,value))))))))
+
+(defun %loop-type-default (type)
+  (cond ((member type '(fixnum integer number real rational bit)) 0)
+        ((member type '(float single-float double-float short-float long-float)) (coerce 0 type))
+        ((and (consp type) (member (car type) '(integer mod unsigned-byte signed-byte))) 0)
         (t nil)))
 
-(defun %loop-binds (pattern)
-  (mapcar (lambda (var) (list var nil)) (%loop-vars pattern)))
+(defun %loop-optional-type (variable)
+  "The type a variable is declared with, read off the tokens, or nil."
+  (let ((token (%loop-peek)))
+    (cond ((%loop-keyword-p token "OF-TYPE") (%loop-pop) (%loop-pop))
+          ((and (symbolp token) (member token '(fixnum float t nil))) (%loop-pop))
+          ((and (consp variable) (consp token)
+                (or (null (cdr *%loop-tokens*))
+                    (and (symbolp (cadr *%loop-tokens*)) (cadr *%loop-tokens*))))
+           (%loop-pop)
+           nil)
+          (t nil))))
 
-(defun %loop-forms-until-keyword (forms)
-  (let ((collected nil))
+(defun %loop-compound-type-p (type)
+  (and (consp type)
+       (member (car type) '(integer mod unsigned-byte signed-byte float single-float
+                            double-float real rational or and not member satisfies))))
+
+(defun %loop-bindings-for (pattern type &optional type-tree)
+  "A binding for each variable of PATTERN, to the default for its type.
+TYPE is one type for them all, or a tree of types shaped like PATTERN."
+  (cond ((null pattern) nil)
+        ((symbolp pattern)
+         (list (list pattern (%loop-type-default type))))
+        ((and (consp type) (or type-tree (not (%loop-compound-type-p type))))
+         (append (%loop-bindings-for (car pattern) (car type) t)
+                 (%loop-bindings-for (cdr pattern) (cdr type) t)))
+        (t (append (%loop-bindings-for (car pattern) type)
+                   (%loop-bindings-for (cdr pattern) type)))))
+
+(defun %loop-add-group (parallel bindings)
+  (when bindings (push (list parallel bindings) *%loop-groups*)))
+
+;;; --- with ---
+
+(defun %loop-with ()
+  (let ((bindings nil) (parallel nil))
     (tagbody
+     next
+      (let* ((pattern (%loop-pop))
+             (type (%loop-optional-type pattern)))
+        (%loop-declare pattern)
+        (if (%loop-next-is "=")
+            (progn
+              (%loop-pop)
+              (let ((form (%loop-pop)))
+                (if (and pattern (symbolp pattern))
+                    (push (list pattern form) bindings)
+                    (let ((value (gensym "WITH")))
+                      (push (list value form) bindings)
+                      (dolist (binding (%loop-bindings-for pattern type))
+                        (push binding bindings))
+                      (push (list (gensym "IGNORED")
+                                  `(progn ,@(%loop-destructure pattern value) nil))
+                            bindings)))))
+            (dolist (binding (%loop-bindings-for pattern type))
+              (push binding bindings))))
+      (when (%loop-next-is "AND")
+        (%loop-pop)
+        (setq parallel t)
+        (go next)))
+    ;; A destructuring binding refers to the one before it, so a group
+    ;; holding one is bound in sequence.
+    (%loop-add-group (and parallel (every (lambda (b) (symbol-package (car b))) bindings))
+                     (nreverse bindings))))
+
+;;; --- for and as ---
+
+;; A variable clause comes to bindings, what runs before the first pass,
+;; and what runs before each later one. Each of the two is a list of
+;; forms to run, tests that end the loop, and (pattern form) settings.
+(defun %loop-spec (bindings first-forms first-tests first-sets step-forms step-tests step-sets)
+  (list bindings (list first-forms first-tests first-sets) (list step-forms step-tests step-sets)))
+
+(defun %loop-for-arithmetic (variable)
+  (let ((start nil) (start-p nil) (end nil) (end-kind nil) (step nil) (down nil)
+        (bindings nil) (counter (gensym "COUNTER")))
+    (block prepositions
+      (tagbody
        next
-       (when (or (null forms) (%loop-keyword-p (car forms))) (go done))
-       (setq collected (cons (car forms) collected))
-       (setq forms (cdr forms))
-       (go next)
-       done)
-    (cons (nreverse collected) forms)))
-
-;; Accumulation. The anonymous accumulators live in the state; INTO names a
-;; caller-visible variable instead, and repeated INTO of one name shares a tail.
-
-(defun %loop-into-target (forms state kind)
-  (if (%kw (car forms) "INTO")
-      (let ((var (cadr forms)))
-        (list var
-              (if (eq kind :list) (%loop-tail-for var) nil)
-              (cddr forms)
-              nil))
-      (list (cond ((eq kind :list) (%st-list state))
-                  ((eq kind :count) (%st-count state))
-                  (t (%st-extreme state)))
-            (if (eq kind :list) (%st-tail state) nil)
-            forms
-            t)))
-
-(defun %loop-collect-forms (acc tail value splice)
-  (let ((cell (gensym "CELL")))
-    (if splice
-        `((let ((,cell ,value))
-            (when ,cell
-              (if ,tail (rplacd ,tail ,cell) (setq ,acc ,cell))
-              (setq ,tail (last ,cell)))))
-        `((let ((,cell (cons ,value nil)))
-            (if ,tail (rplacd ,tail ,cell) (setq ,acc ,cell))
-            (setq ,tail ,cell))))))
-
-(defun %loop-accumulate (head forms state)
-  (let* ((value (car forms))
-         (rest (cdr forms))
-         (list-kind (%kw-in head '("COLLECT" "COLLECTING" "APPEND" "APPENDING"
-                                   "NCONC" "NCONCING")))
-         (count-kind (%kw-in head '("COUNT" "COUNTING" "SUM" "SUMMING")))
-         (kind (cond (list-kind :list) (count-kind :count) (t :extreme)))
-         (target (%loop-into-target rest state kind))
-         (acc (nth 0 target))
-         (tail (nth 1 target))
-         (remaining (nth 2 target))
-         (anonymous (nth 3 target))
-         (binds (if anonymous nil (list (list acc nil))))
-         (prologue (if (or anonymous (not (eq kind :count))) nil (list `(setq ,acc 0))))
-         (main
-          (cond (list-kind
-                 (%loop-collect-forms
-                  acc tail
-                  (if (%kw-in head '("APPEND" "APPENDING")) `(copy-list ,value) value)
-                  (not (%kw-in head '("COLLECT" "COLLECTING")))))
-                ((%kw-in head '("COUNT" "COUNTING"))
-                 (list `(when ,value (setq ,acc (1+ ,acc)))))
-                ((%kw-in head '("SUM" "SUMMING"))
-                 (list `(setq ,acc (+ ,acc ,value))))
-                (t
-                 (let ((probe (gensym "PROBE"))
-                       (better (if (%kw-in head '("MAXIMIZE" "MAXIMIZING")) '> '<)))
-                   (list `(let ((,probe ,value))
-                            (when (or (null ,acc) (,better ,probe ,acc))
-                              (setq ,acc ,probe)))))))))
-    (cons (%lp (append binds (if (and (not anonymous) (eq kind :list))
-                                 (list (list tail nil))
-                                 nil))
-               prologue main nil nil
-               (if anonymous acc nil))
-          remaining)))
-
-;; FOR clauses. Each contributes a prologue that primes the variable, a body
-;; test that leaves the loop when the source runs out, and a step.
-
-(defun %loop-for-numeric (pattern forms state)
-  (let ((start nil) (limit nil) (step nil) (descending nil) (test nil))
-    (tagbody
-       next
-       (cond ((%kw-in (car forms) '("FROM" "UPFROM"))
-              (setq start (cadr forms)) (setq forms (cddr forms)))
-             ((%kw (car forms) "DOWNFROM")
-              (setq start (cadr forms)) (setq descending t) (setq forms (cddr forms)))
-             ((%kw-in (car forms) '("TO" "UPTO"))
-              (setq limit (cadr forms)) (setq test '>) (setq forms (cddr forms)))
-             ((%kw (car forms) "BELOW")
-              (setq limit (cadr forms)) (setq test '>=) (setq forms (cddr forms)))
-             ((%kw (car forms) "DOWNTO")
-              (setq limit (cadr forms)) (setq test '<) (setq descending t)
-              (setq forms (cddr forms)))
-             ((%kw (car forms) "ABOVE")
-              (setq limit (cadr forms)) (setq test '<=) (setq descending t)
-              (setq forms (cddr forms)))
-             ((%kw (car forms) "BY")
-              (setq step (cadr forms)) (setq forms (cddr forms)))
-             (t (go done)))
-       (go next)
-       done)
-    (when (and descending (member test '(> >=)))
-      (setq test (if (eq test '>) '< '<=)))
-    (let ((limit-var (gensym "LIMIT"))
-          (step-var (gensym "STEP"))
-          (stepping (list (if descending '- '+))))
-      ;; The bindings are sequential, so a variable takes its first value
-      ;; where the form giving it is still outside its own scope. That is
-      ;; what lets `for i from (if (< i 0) 2 1)` read the `i` it shadows
-      ;; while `for j from i` reads the loop variable before it.
-      (cons (%lp (if (symbolp pattern)
-                     (list (list pattern (or start 0))
-                           (list limit-var limit)
-                           (list step-var (or step 1)))
-                     (append (%loop-binds pattern)
-                             (list (list limit-var limit) (list step-var (or step 1)))))
-                 (if (symbolp pattern) nil (%loop-setqs pattern (or start 0)))
-                 (if test (list `(if (,test ,(car (%loop-vars pattern)) ,limit-var)
-                                     (go ,(%st-done state))))
-                     nil)
-                 (%loop-setqs pattern
-                              (append stepping
-                                      (list (car (%loop-vars pattern)) step-var)))
-                 nil nil)
-            forms))))
-
-(defun %loop-for (forms state)
-  (let* ((pattern (car forms))
-         (rest (cdr forms)))
-    (when (%kw (car rest) "OF-TYPE") (setq rest (cddr rest)))
-    (when (and (not (%loop-keyword-p (car rest))) (symbolp (car rest)) (car rest))
-      (setq rest (cdr rest)))
-    (cond
-      ((%kw-in (car rest) '("IN" "ON"))
-       (let* ((on (%kw (car rest) "ON"))
-              (source (cadr rest))
-              (after (cddr rest))
-              (stepper (if (%kw (car after) "BY") (cadr after) nil))
-              (remaining (if stepper (cddr after) after))
-              (walk (gensym "WALK")))
-         (cons (%lp (append (%loop-binds pattern) (list (list walk nil)))
-                    (list `(setq ,walk ,source))
-                    (append (list `(if ,(if on `(atom ,walk) `(endp ,walk))
-                                       (go ,(%st-done state))))
-                            (%loop-setqs pattern (if on walk `(car ,walk))))
-                    (list `(setq ,walk ,(if stepper `(funcall ,stepper ,walk) `(cdr ,walk))))
-                    nil nil)
-               remaining)))
-      ((%kw (car rest) "ACROSS")
-       (let ((source (cadr rest))
-             (vector (gensym "VECTOR"))
-             (index (gensym "INDEX")))
-         (cons (%lp (append (%loop-binds pattern) (list (list vector nil) (list index nil)))
-                    (list `(setq ,vector ,source) `(setq ,index 0))
-                    (append (list `(if (>= ,index (length ,vector)) (go ,(%st-done state))))
-                            (%loop-setqs pattern `(aref ,vector ,index)))
-                    (list `(setq ,index (1+ ,index)))
-                    nil nil)
-               (cddr rest))))
-      ((%kw (car rest) "=")
-       (let* ((initial (cadr rest))
-              (after (cddr rest))
-              (has-then (%kw (car after) "THEN"))
-              (then (if has-then (cadr after) nil))
-              (remaining (if has-then (cddr after) after)))
-         ;; Without THEN the form is evaluated at the top of every
-         ;; iteration, after the FOR clauses to its left have stepped, so
-         ;; it can read what they just set.
-         (cons (if has-then
-                   (%lp (%loop-binds pattern)
-                        (%loop-setqs pattern initial)
-                        nil
-                        (%loop-setqs pattern then)
-                        nil nil)
-                   (%lp (%loop-binds pattern)
-                        nil
-                        (%loop-setqs pattern initial)
-                        nil nil nil))
-               remaining)))
-      ((%kw (car rest) "BEING")
-       (%loop-for-hash pattern rest state))
-      (t (%loop-for-numeric pattern rest state)))))
-
-(defun %loop-for-hash (pattern forms state)
-  (let* ((rest (cdr forms)))
-    (when (%kw-in (car rest) '("THE" "EACH")) (setq rest (cdr rest)))
-    (let* ((what (car rest))
-           (table (caddr rest))
-           (after (cdddr rest))
-           (using (if (%kw (car after) "USING") (cadr after) nil))
-           (remaining (if using (cddr after) after))
-           (keys (%kw-in what '("HASH-KEY" "HASH-KEYS")))
-           (entries (gensym "ENTRIES"))
-           (entry (gensym "ENTRY"))
-           (extra (if using (cadr using) nil)))
-      (cons (%lp (append (%loop-binds pattern)
-                         (if extra (%loop-binds extra) nil)
-                         (list (list entries nil)))
-                 (list `(setq ,entries (%hash-table-entries ,table)))
-                 (append (list `(if (endp ,entries) (go ,(%st-done state)))
-                               `(let ((,entry (car ,entries)))
-                                  ,@(%loop-setqs pattern (if keys `(car ,entry) `(cdr ,entry)))
-                                  ,@(if extra
-                                        (%loop-setqs extra (if keys `(cdr ,entry) `(car ,entry)))
-                                        nil)))
-                         nil)
-                 (list `(setq ,entries (cdr ,entries)))
-                 nil nil)
-            remaining))))
-
-(defun %loop-with (forms state)
-  (let ((binds nil)
-        (prologue nil))
-    (tagbody
-       next
-       (let* ((pattern (car forms))
-              (rest (cdr forms)))
-         (when (and (not (%loop-keyword-p (car rest))) (symbolp (car rest)) (car rest))
-           (setq rest (cdr rest)))
-         (setq binds (append binds (%loop-binds pattern)))
-         (when (%kw (car rest) "=")
-           (setq prologue (append prologue (%loop-setqs pattern (cadr rest))))
-           (setq rest (cddr rest)))
-         (setq forms rest))
-       (when (%kw (car forms) "AND")
-         (setq forms (cdr forms))
+         (let ((token (%loop-peek)))
+           (cond ((%loop-keyword-p token "FROM" "UPFROM" "DOWNFROM")
+                  (when start-p (%loop-error "LOOP: ~S starts twice." variable))
+                  (when (%loop-keyword-p token "DOWNFROM") (setq down t))
+                  (%loop-pop)
+                  (setq start-p t)
+                  (push (list counter (%loop-pop)) bindings)
+                  (setq start counter))
+                 ((%loop-keyword-p token "TO" "UPTO" "BELOW" "DOWNTO" "ABOVE")
+                  (when end-kind (%loop-error "LOOP: ~S ends twice." variable))
+                  (setq end-kind (intern (symbol-name token) "KEYWORD"))
+                  (when (member end-kind '(:downto :above)) (setq down t))
+                  (%loop-pop)
+                  (setq end (gensym "END"))
+                  (push (list end (%loop-pop)) bindings))
+                 ((%loop-keyword-p token "BY")
+                  (when step (%loop-error "LOOP: ~S has two steps." variable))
+                  (%loop-pop)
+                  (setq step (gensym "STEP"))
+                  (push (list step (%loop-pop)) bindings))
+                 (t (return-from prepositions))))
          (go next)))
-    (cons (%lp binds prologue nil nil nil nil) forms)))
+    (unless start-p (push (list counter 0) bindings))
+    (let* ((by (or step 1))
+           (test (case end-kind
+                   ((:to :upto) (if down `(< ,counter ,end) `(> ,counter ,end)))
+                   (:below `(>= ,counter ,end))
+                   (:downto `(< ,counter ,end))
+                   (:above `(<= ,counter ,end))
+                   (t nil)))
+           (tests (if test (list test) nil))
+           (sets (if variable (list (list variable counter)) nil)))
+      (%loop-spec (nreverse bindings) nil tests sets
+                  (list `(setq ,counter ,(if down `(- ,counter ,by) `(+ ,counter ,by))))
+                  tests sets))))
 
-(defun %loop-conditional (head forms state)
-  (let* ((negated (%kw head "UNLESS"))
-         (test (car forms))
-         (parsed (%loop-clause (cdr forms) state))
-         (part (car parsed))
-         (rest (cdr parsed))
-         (then (nth 2 part))
-         (else nil))
-    (tagbody
-       next
-       (when (%kw (car rest) "AND")
-         (let* ((more (%loop-clause (cdr rest) state)))
-           (setq then (append then (nth 2 (car more))))
-           (setq part (%lp-merge part (%lp (nth 0 (car more)) (nth 1 (car more))
-                                           nil (nth 3 (car more)) (nth 4 (car more))
-                                           (nth 5 (car more)))))
-           (setq rest (cdr more))
-           (go next))))
-    (when (%kw (car rest) "ELSE")
-      (let ((parsed-else (%loop-clause (cdr rest) state)))
-        (setq else (nth 2 (car parsed-else)))
-        (setq part (%lp-merge part (%lp (nth 0 (car parsed-else)) (nth 1 (car parsed-else))
-                                        nil (nth 3 (car parsed-else))
-                                        (nth 4 (car parsed-else))
-                                        (nth 5 (car parsed-else)))))
-        (setq rest (cdr parsed-else))))
-    (when (%kw (car rest) "END") (setq rest (cdr rest)))
-    (cons (%lp (nth 0 part) (nth 1 part)
-               (list (if negated
-                         `(if ,test (progn ,@else) (progn ,@then))
-                         `(if ,test (progn ,@then) (progn ,@else))))
-               (nth 3 part) (nth 4 part) (nth 5 part))
-          rest)))
+(defun %loop-step-function (form)
+  "How a `by` form advances a list: called by name where it is a quoted or
+#' function name, and through a variable otherwise."
+  (if (and (consp form) (member (car form) '(function quote)) (symbolp (cadr form)))
+      (values (cadr form) nil)
+      (let ((fn (gensym "STEP")))
+        (values fn (list (list fn form))))))
 
-(defun %loop-clause (forms state)
-  (let ((head (car forms))
-        (rest (cdr forms)))
+(defun %loop-advance (fn-name fn-binding tail)
+  (if fn-binding `(funcall ,fn-name ,tail) `(,fn-name ,tail)))
+
+(defun %loop-for-in-on (variable on)
+  (%loop-pop)
+  (let ((tail (gensym "TAIL"))
+        (list-form (%loop-pop))
+        (fn 'cdr) (fn-binding nil))
+    (when (%loop-next-is "BY")
+      (%loop-pop)
+      (multiple-value-setq (fn fn-binding) (%loop-step-function (%loop-pop))))
+    (let ((test (if on `(atom ,tail) `(endp ,tail)))
+          (sets (if variable (list (list variable (if on tail `(car ,tail)))) nil)))
+      (%loop-spec (append (list (list tail list-form)) fn-binding)
+                  nil (list test) sets
+                  (list `(setq ,tail ,(%loop-advance fn fn-binding tail)))
+                  (list test) sets))))
+
+(defun %loop-for-equals (variable)
+  (%loop-pop)
+  (let ((first (%loop-pop)))
+    (if (%loop-next-is "THEN")
+        (progn
+          (%loop-pop)
+          (let ((then (%loop-pop)))
+            (%loop-spec nil nil nil (list (list variable first)) nil nil (list (list variable then)))))
+        (%loop-spec nil nil nil (list (list variable first)) nil nil (list (list variable first))))))
+
+(defun %loop-for-across (variable)
+  (%loop-pop)
+  (let* ((vector (gensym "VECTOR"))
+         (index (gensym "INDEX"))
+         (test `(>= ,index (length ,vector)))
+         (sets (if variable (list (list variable `(aref ,vector ,index))) nil)))
+    (%loop-spec (list (list vector (%loop-pop)) (list index 0))
+                nil (list test) sets
+                (list `(setq ,index (1+ ,index))) (list test) sets)))
+
+(defun %loop-hash-entries (table)
+  (let ((entries nil))
+    (maphash (lambda (key value) (push (cons key value) entries)) table)
+    (nreverse entries)))
+
+(defun %loop-package-symbols (which designator)
+  (let ((package (if (packagep designator) designator (find-package designator)))
+        (found nil))
+    (unless package
+      (error 'package-error :package designator))
+    (case which
+      (:external (do-external-symbols (symbol package) (pushnew symbol found)))
+      (:present (do-symbols (symbol package)
+                  (when (member (nth-value 1 (find-symbol (symbol-name symbol) package))
+                                '(:internal :external))
+                    (pushnew symbol found))))
+      (t (do-symbols (symbol package) (pushnew symbol found))))
+    found))
+
+(defun %loop-for-being (variable)
+  (%loop-pop)
+  (unless (%loop-next-is "THE" "EACH")
+    (%loop-error "LOOP: BEING has to be followed by THE or EACH."))
+  (%loop-pop)
+  (let ((kind (%loop-pop))
+        (tail (gensym "ENTRIES")))
     (cond
-      ((%kw-in head '("FOR" "AS")) (%loop-for rest state))
-      ((%kw head "WITH") (%loop-with rest state))
-      ((%kw head "REPEAT")
-       (let ((counter (gensym "COUNTER")))
-         (cons (%lp (list (list counter nil))
-                    (list `(setq ,counter ,(car rest)))
-                    (list `(if (<= ,counter 0) (go ,(%st-done state))))
-                    (list `(setq ,counter (1- ,counter)))
-                    nil nil)
-               (cdr rest))))
-      ((%kw head "WHILE")
-       (cons (%lp nil nil (list `(if (not ,(car rest)) (go ,(%st-done state)))) nil nil nil)
-             (cdr rest)))
-      ((%kw head "UNTIL")
-       (cons (%lp nil nil (list `(if ,(car rest) (go ,(%st-done state)))) nil nil nil)
-             (cdr rest)))
-      ((%kw head "ALWAYS")
-       (cons (%lp nil nil (list `(if (not ,(car rest)) (return nil))) nil nil t)
-             (cdr rest)))
-      ((%kw head "NEVER")
-       (cons (%lp nil nil (list `(if ,(car rest) (return nil))) nil nil t)
-             (cdr rest)))
-      ((%kw head "THEREIS")
-       (let ((probe (gensym "PROBE")))
-         (cons (%lp nil nil
-                    (list `(let ((,probe ,(car rest))) (if ,probe (return ,probe))))
-                    nil nil nil)
-               (cdr rest))))
-      ((%kw head "RETURN")
-       (cons (%lp nil nil (list `(return ,(car rest))) nil nil nil) (cdr rest)))
-      ((%kw-in head '("DO" "DOING"))
-       (let ((split (%loop-forms-until-keyword rest)))
-         (cons (%lp nil nil (car split) nil nil nil) (cdr split))))
-      ((%kw head "INITIALLY")
-       (let ((split (%loop-forms-until-keyword rest)))
-         (cons (%lp nil (car split) nil nil nil nil) (cdr split))))
-      ((%kw head "FINALLY")
-       (let ((split (%loop-forms-until-keyword rest)))
-         (cons (%lp nil nil nil nil (car split) nil) (cdr split))))
-      ((%kw-in head '("IF" "WHEN" "UNLESS")) (%loop-conditional head rest state))
-      ((%loop-keyword-p head) (%loop-accumulate head rest state))
-      (t (error "Unknown LOOP clause: ~s" head)))))
+      ((%loop-keyword-p kind "HASH-KEY" "HASH-KEYS" "HASH-VALUE" "HASH-VALUES")
+       (unless (%loop-next-is "OF" "IN") (%loop-error "LOOP: ~S needs OF or IN." kind))
+       (%loop-pop)
+       (let* ((table (%loop-pop))
+              (keys (%loop-keyword-p kind "HASH-KEY" "HASH-KEYS"))
+              (other nil))
+         (when (%loop-next-is "USING")
+           (%loop-pop)
+           (let ((using (%loop-pop)))
+             (unless (and (consp using)
+                          (%loop-keyword-p (car using) (if keys "HASH-VALUE" "HASH-KEY")))
+               (%loop-error "LOOP: ~S is not a USING clause for ~S." using kind))
+             (setq other (cadr using))
+             (%loop-declare other)))
+         (let ((sets (append (if variable
+                                 (list (list variable (if keys `(caar ,tail) `(cdar ,tail))))
+                                 nil)
+                             (if other
+                                 (list (list other (if keys `(cdar ,tail) `(caar ,tail))))
+                                 nil))))
+           (%loop-spec (append (list (list tail `(%loop-hash-entries ,table)))
+                               (%loop-bindings-for other nil))
+                       nil (list `(endp ,tail)) sets
+                       (list `(setq ,tail (cdr ,tail))) (list `(endp ,tail)) sets))))
+      ((%loop-keyword-p kind "SYMBOL" "SYMBOLS" "PRESENT-SYMBOL" "PRESENT-SYMBOLS"
+                        "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS")
+       (let ((which (cond ((%loop-keyword-p kind "PRESENT-SYMBOL" "PRESENT-SYMBOLS") :present)
+                          ((%loop-keyword-p kind "EXTERNAL-SYMBOL" "EXTERNAL-SYMBOLS") :external)
+                          (t :symbols)))
+             (package '*package*))
+         (when (%loop-next-is "OF" "IN")
+           (%loop-pop)
+           (setq package (%loop-pop)))
+         (let ((sets (if variable (list (list variable `(car ,tail))) nil)))
+           (%loop-spec (list (list tail `(%loop-package-symbols ,which ,package)))
+                       nil (list `(endp ,tail)) sets
+                       (list `(setq ,tail (cdr ,tail))) (list `(endp ,tail)) sets))))
+      (t (%loop-error "LOOP: ~S is not something to iterate BEING over." kind)))))
 
-(defun %loop-parse (forms state)
-  (let ((part (%lp-empty)))
+(defun %loop-for-one ()
+  (let* ((pattern (%loop-pop))
+         (type (%loop-optional-type pattern)))
+    (%loop-declare pattern)
+    (let ((spec (cond ((%loop-next-is "IN") (%loop-for-in-on pattern nil))
+                      ((%loop-next-is "ON") (%loop-for-in-on pattern t))
+                      ((%loop-next-is "=") (%loop-for-equals pattern))
+                      ((%loop-next-is "ACROSS") (%loop-for-across pattern))
+                      ((%loop-next-is "BEING") (%loop-for-being pattern))
+                      ((%loop-next-is "FROM" "UPFROM" "DOWNFROM" "TO" "UPTO" "BELOW"
+                                      "DOWNTO" "ABOVE" "BY")
+                       (when (consp pattern)
+                         (%loop-error "LOOP: an arithmetic FOR needs a variable, given ~S." pattern))
+                       (%loop-for-arithmetic pattern))
+                      (t (%loop-error "LOOP: ~S is not how a FOR clause goes on." (%loop-peek))))))
+      ;; The variable's own binding comes after the hidden ones, which
+      ;; hold what the clause's forms evaluate to.
+      (list (append (car spec) (%loop-bindings-for pattern type))
+            (cadr spec) (caddr spec)))))
+
+(defun %loop-emit-phase (specs which)
+  "The forms of one phase of a group of FOR clauses: each clause's own
+forms and end tests in turn, then the settings, made in parallel when
+the clauses were joined by AND."
+  (let ((forms nil) (sets nil))
+    (dolist (spec specs)
+      (destructuring-bind (own tests settings) (nth which spec)
+        (dolist (form own) (push form forms))
+        (dolist (test tests) (push `(when ,test (go ,*%loop-end*)) forms))
+        (dolist (setting settings) (push setting sets))))
+    (setq sets (nreverse sets))
+    (cond ((null sets))
+          ((null (cdr sets))
+           (dolist (form (%loop-destructure (caar sets) (cadar sets))) (push form forms)))
+          (t (let ((temps (mapcar (lambda (setting) (declare (ignore setting)) (gensym "NEW")) sets)))
+               (push `(let ,(mapcar (lambda (temp setting) (list temp (cadr setting))) temps sets)
+                        ,@(mapcan (lambda (temp setting) (%loop-destructure (car setting) temp))
+                                  temps sets))
+                     forms))))
+    (nreverse forms)))
+
+(defun %loop-for ()
+  (let ((specs (list (%loop-for-one))))
     (tagbody
-       next
-       (when (null forms) (go done))
-       (let ((parsed (%loop-clause forms state)))
-         (setq part (%lp-merge part (car parsed)))
-         (setq forms (cdr parsed)))
-       (go next)
-       done)
-    part))
+     next
+       (when (%loop-next-is "AND")
+         (%loop-pop)
+         (push (%loop-for-one) specs)
+         (go next)))
+    (setq specs (nreverse specs))
+    (%loop-add-group (cdr specs) (mapcan (lambda (spec) (copy-list (car spec))) specs))
+    (setq *%loop-first* (append (reverse (%loop-emit-phase specs 1)) *%loop-first*))
+    (setq *%loop-steps* (append (reverse (%loop-emit-phase specs 2)) *%loop-steps*))))
 
-(defun %loop-dedupe-binds (binds)
-  (let ((seen nil)
-        (result nil))
-    (dolist (bind binds (nreverse result))
-      (unless (member (car bind) seen)
-        (setq seen (cons (car bind) seen))
-        (setq result (cons bind result))))))
+(defun %loop-repeat ()
+  (let ((counter (gensym "REPEAT")))
+    (%loop-add-group nil (list (list counter (%loop-pop))))
+    (push `(when (<= ,counter 0) (go ,*%loop-end*)) *%loop-first*)
+    (push `(setq ,counter (1- ,counter)) *%loop-steps*)
+    (push `(when (<= ,counter 0) (go ,*%loop-end*)) *%loop-steps*)))
 
-;; `loop-finish` leaves the loop through its epilogue, so it comes to a
-;; jump to the tag the termination tests use. The substitution happens
-;; before anything is expanded, which is what keeps a nested `loop` from
-;; taking the outer loop's tag: it rewrites its own when it expands.
-(defun %loop-substitute-finish (form tag)
-  (if (atom form)
+;;; --- accumulation ---
+
+(defun %loop-category (keyword)
+  (cond ((%loop-keyword-p keyword "COLLECT" "COLLECTING" "APPEND" "APPENDING" "NCONC" "NCONCING")
+         :list)
+        ((%loop-keyword-p keyword "COUNT" "COUNTING" "SUM" "SUMMING") :number)
+        (t :extreme)))
+
+(defun %loop-accumulator (name category type)
+  "The (variable category tail flag) entry NAME accumulates into, made
+the first time. NAME is nil for the loop's own result."
+  (let ((entry (assoc name *%loop-accumulators*)))
+    (cond (entry
+           (unless (eq (cadr entry) category)
+             (%loop-error "LOOP: ~S accumulates two kinds of value." (or name "The result")))
+           entry)
+          (t
+           (when (and name (member name *%loop-variables*))
+             (%loop-error "The LOOP variable ~S is bound more than once." name))
+           (when (and (null name) *%loop-boolean-result*)
+             (%loop-error "LOOP cannot both accumulate a result and test with ~A."
+                          *%loop-boolean-result*))
+           (let* ((variable (or name (gensym "RESULT")))
+                  (tail (if (eq category :list) (gensym "TAIL") nil))
+                  (flag (if (eq category :extreme) (gensym "SEEN") nil))
+                  (initial (if (eq category :number) (or (%loop-type-default type) 0) nil))
+                  (made (list name category tail flag variable)))
+             (push (list variable initial) *%loop-accumulator-bindings*)
+             (when tail (push (list tail nil) *%loop-accumulator-bindings*))
+             (when flag (push (list flag nil) *%loop-accumulator-bindings*))
+             (push made *%loop-accumulators*)
+             (unless name (setq *%loop-anonymous* variable))
+             made)))))
+
+(defun %loop-accumulation (keyword it)
+  (let* ((form (%loop-form it))
+         (name (when (%loop-next-is "INTO") (%loop-pop) (%loop-pop)))
+         (type (%loop-accumulation-type))
+         (entry (%loop-accumulator name (%loop-category keyword) type))
+         (variable (nth 4 entry))
+         (tail (nth 2 entry))
+         (flag (nth 3 entry))
+         (value (gensym "VALUE")))
+    (cond ((%loop-keyword-p keyword "COLLECT" "COLLECTING")
+           `(let ((,value (list ,form)))
+              (if ,tail (setf (cdr ,tail) ,value) (setq ,variable ,value))
+              (setq ,tail ,value)))
+          ((%loop-keyword-p keyword "APPEND" "APPENDING" "NCONC" "NCONCING")
+           `(let ((,value ,(if (%loop-keyword-p keyword "APPEND" "APPENDING")
+                               `(copy-list ,form)
+                               form)))
+              (when ,value
+                (if ,tail (setf (cdr ,tail) ,value) (setq ,variable ,value))
+                (setq ,tail (last ,value)))))
+          ((%loop-keyword-p keyword "COUNT" "COUNTING")
+           `(when ,form (setq ,variable (1+ ,variable))))
+          ((%loop-keyword-p keyword "SUM" "SUMMING")
+           `(setq ,variable (+ ,variable ,form)))
+          (t
+           (let ((compare (if (%loop-keyword-p keyword "MAXIMIZE" "MAXIMIZING") '> '<)))
+             `(let ((,value ,form))
+                (when (or (not ,flag) (,compare ,value ,variable))
+                  (setq ,variable ,value ,flag t))))))))
+
+(defun %loop-accumulation-type ()
+  (let ((token (%loop-peek)))
+    (cond ((%loop-keyword-p token "OF-TYPE") (%loop-pop) (%loop-pop))
+          ((and (symbolp token) token (not (keywordp token))
+                (member token '(fixnum float t nil integer number real rational)))
+           (%loop-pop))
+          (t nil))))
+
+(defun %loop-form (it)
+  "The next form, with `it` standing for the value of the enclosing
+conditional's test where there is one."
+  (let ((form (%loop-pop)))
+    (if (and it (%loop-keyword-p form "IT")) it form)))
+
+;;; --- main clauses ---
+
+(defun %loop-compound-forms ()
+  (let ((forms nil))
+    (tagbody
+     next
+       (when (and *%loop-tokens* (consp (%loop-peek)))
+         (push (%loop-pop) forms)
+         (go next)))
+    (nreverse forms)))
+
+(defun %loop-boolean (kind)
+  (when (assoc nil *%loop-accumulators*)
+    (%loop-error "LOOP cannot both accumulate a result and test with ~A." kind))
+  (setq *%loop-boolean-result* kind))
+
+(defun %loop-selectable (it)
+  "One clause a conditional can hold, as a form."
+  (let ((keyword (%loop-pop)))
+    (cond ((%loop-keyword-p keyword "DO" "DOING")
+           (let ((forms (%loop-compound-forms)))
+             (unless forms (%loop-error "LOOP: DO needs at least one form."))
+             `(progn ,@forms)))
+          ((%loop-keyword-p keyword "RETURN")
+           `(return-from ,*%loop-name* ,(%loop-form it)))
+          ((%loop-keyword-p keyword "COLLECT" "COLLECTING" "APPEND" "APPENDING" "NCONC"
+                            "NCONCING" "COUNT" "COUNTING" "SUM" "SUMMING" "MAXIMIZE"
+                            "MAXIMIZING" "MINIMIZE" "MINIMIZING")
+           (%loop-accumulation keyword it))
+          ((%loop-keyword-p keyword "IF" "WHEN" "UNLESS")
+           (%loop-conditional keyword))
+          (t (%loop-error "LOOP: ~S cannot follow a conditional." keyword)))))
+
+(defun %loop-selectables (it)
+  (let ((forms (list (%loop-selectable it))))
+    (tagbody
+     next
+       (when (%loop-next-is "AND")
+         (%loop-pop)
+         (push (%loop-selectable nil) forms)
+         (go next)))
+    (nreverse forms)))
+
+(defun %loop-conditional (keyword)
+  (let* ((test (%loop-pop))
+         (it (gensym "IT"))
+         (then (%loop-selectables it))
+         (else (when (%loop-next-is "ELSE")
+                 (%loop-pop)
+                 (%loop-selectables it))))
+    (when (%loop-next-is "END") (%loop-pop))
+    `(let ((,it ,test))
+       (if ,(if (%loop-keyword-p keyword "UNLESS") `(not ,it) it)
+           (progn ,@then)
+           (progn ,@else)))))
+
+(defun %loop-clause ()
+  (let ((keyword (%loop-peek)))
+    (cond ((%loop-keyword-p keyword "WITH") (%loop-pop) (%loop-with))
+          ((%loop-keyword-p keyword "FOR" "AS") (%loop-pop) (%loop-for))
+          ((%loop-keyword-p keyword "REPEAT") (%loop-pop) (%loop-repeat))
+          ((%loop-keyword-p keyword "INITIALLY")
+           (%loop-pop)
+           (setq *%loop-prologue* (append (reverse (%loop-compound-forms)) *%loop-prologue*)))
+          ((%loop-keyword-p keyword "FINALLY")
+           (%loop-pop)
+           (setq *%loop-epilogue* (append (reverse (%loop-compound-forms)) *%loop-epilogue*)))
+          ((%loop-keyword-p keyword "WHILE")
+           (%loop-pop)
+           (push `(unless ,(%loop-pop) (go ,*%loop-end*)) *%loop-body*))
+          ((%loop-keyword-p keyword "UNTIL")
+           (%loop-pop)
+           (push `(when ,(%loop-pop) (go ,*%loop-end*)) *%loop-body*))
+          ((%loop-keyword-p keyword "ALWAYS")
+           (%loop-pop)
+           (%loop-boolean "ALWAYS")
+           (push `(unless ,(%loop-pop) (return-from ,*%loop-name* nil)) *%loop-body*))
+          ((%loop-keyword-p keyword "NEVER")
+           (%loop-pop)
+           (%loop-boolean "NEVER")
+           (push `(when ,(%loop-pop) (return-from ,*%loop-name* nil)) *%loop-body*))
+          ((%loop-keyword-p keyword "THEREIS")
+           (%loop-pop)
+           (%loop-boolean "THEREIS")
+           (let ((value (gensym "VALUE")))
+             (push `(let ((,value ,(%loop-pop)))
+                      (when ,value (return-from ,*%loop-name* ,value)))
+                   *%loop-body*)))
+          ((%loop-keyword-p keyword "DO" "DOING" "RETURN" "COLLECT" "COLLECTING" "APPEND"
+                            "APPENDING" "NCONC" "NCONCING" "COUNT" "COUNTING" "SUM"
+                            "SUMMING" "MAXIMIZE" "MAXIMIZING" "MINIMIZE" "MINIMIZING"
+                            "IF" "WHEN" "UNLESS")
+           (push (%loop-selectable nil) *%loop-body*))
+          (t (%loop-error "~S is not a LOOP clause." keyword)))))
+
+;;; --- the expansion ---
+
+(defun %loop-wrap-groups (groups form)
+  "FORM inside the binding groups, outermost first."
+  (if (null groups)
       form
-      (if (eq (car form) 'quote)
-          form
-          (if (eq (car form) 'loop)
-              form
-              (if (and (eq (car form) 'loop-finish) (null (cdr form)))
-                  (list 'go tag)
-                  (cons (%loop-substitute-finish (car form) tag)
-                        (%loop-substitute-finish (cdr form) tag)))))))
+      (destructuring-bind (parallel bindings) (car groups)
+        `(,(if parallel 'let 'let*) ,bindings
+          ,(%loop-wrap-groups (cdr groups) form)))))
 
-(defmacro loop-finish ()
-  (error "LOOP-FINISH is only meaningful inside LOOP."))
+(defun %loop-result ()
+  (cond (*%loop-anonymous* *%loop-anonymous*)
+        ((member *%loop-boolean-result* '("ALWAYS" "NEVER") :test #'equal) t)
+        (t nil)))
 
 (defun %loop-expand (forms)
-  (let ((*loop-into-tails* nil)
-        (name nil))
-    (when (%kw (car forms) "NAMED")
-      (setq name (cadr forms))
-      (setq forms (cddr forms)))
-    (let* ((state (list (gensym "ITEMS") (gensym "TAIL") (gensym "COUNT")
-                        (gensym "EXTREME") (gensym "DONE")))
-           (part (%loop-parse forms state))
-           (top (gensym "TOP"))
-           (tails (mapcar (lambda (entry) (list (cdr entry) nil)) *loop-into-tails*))
-           (result (nth 5 part)))
-      (%loop-substitute-finish
-       `(block ,name
-          (let* ((,(%st-list state) nil) (,(%st-tail state) nil)
-                 (,(%st-count state) 0) (,(%st-extreme state) nil)
-                 ,@(%loop-dedupe-binds (append (nth 0 part) tails)))
+  (let ((*%loop-tokens* forms)
+        (*%loop-name* nil)
+        (*%loop-end* (gensym "END"))
+        (*%loop-groups* nil)
+        (*%loop-variables* nil)
+        (*%loop-prologue* nil)
+        (*%loop-first* nil)
+        (*%loop-steps* nil)
+        (*%loop-body* nil)
+        (*%loop-epilogue* nil)
+        (*%loop-accumulators* nil)
+        (*%loop-accumulator-bindings* nil)
+        (*%loop-anonymous* nil)
+        (*%loop-boolean-result* nil)
+        (next (gensym "NEXT")))
+    (when (%loop-next-is "NAMED")
+      (%loop-pop)
+      (setq *%loop-name* (%loop-pop)))
+    (tagbody
+     again
+       (when *%loop-tokens*
+         (%loop-clause)
+         (go again)))
+    `(block ,*%loop-name*
+       ,(%loop-wrap-groups
+         (cons (list nil (reverse *%loop-accumulator-bindings*)) (reverse *%loop-groups*))
+         `(macrolet ((loop-finish () '(go ,*%loop-end*)))
             (tagbody
-               ,@(nth 1 part)
-               ,top
-               ,@(nth 2 part)
-               ,@(nth 3 part)
-               (go ,top)
-               ,(%st-done state))
-            ,@(nth 4 part)
-            ,(if (eq result t) t result)))
-       (%st-done state)))))
+               ,@(reverse *%loop-prologue*)
+               ,@(reverse *%loop-first*)
+               ,next
+               ,@(reverse *%loop-body*)
+               ,@(reverse *%loop-steps*)
+               (go ,next)
+               ,*%loop-end*
+               ,@(reverse *%loop-epilogue*)
+               (return-from ,*%loop-name* ,(%loop-result))))))))
 
 (defmacro loop (&rest forms)
   (if (or (null forms) (consp (car forms)))
       (let ((top (gensym "TOP")))
         `(block nil (tagbody ,top (progn ,@forms) (go ,top))))
       (%loop-expand forms)))
+
+(defmacro loop-finish ()
+  (error "LOOP-FINISH is only meaningful inside a LOOP."))
 
 (export '(loop loop-finish))
 

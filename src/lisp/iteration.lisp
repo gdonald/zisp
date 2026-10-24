@@ -9,6 +9,11 @@
       nil
       (cons (list (car plist) (cadr plist)) (%pairs (cddr plist)))))
 
+(defun %leading-declares (body)
+  (if (and (consp (car body)) (eq (caar body) 'declare))
+      (cons (car body) (%leading-declares (cdr body)))
+      nil))
+
 (defun %strip-declares (body)
   (if (and (consp (car body)) (eq (caar body) 'declare))
       (%strip-declares (cdr body))
@@ -41,6 +46,7 @@
         (steps (%do-steps varlist)))
     `(block nil
        (,binder ,(mapcar #'%do-binding varlist)
+         ,@(%leading-declares body)
          (tagbody
             ,top
             (if ,(car endlist) (return (progn ,@(cdr endlist))))
@@ -60,6 +66,7 @@
         (done (gensym "DONE")))
     `(block nil
        (let ((,remaining ,list) (,var nil))
+         ,@(%leading-declares body)
          (tagbody
             ,top
             (if (endp ,remaining) (go ,done))
@@ -77,6 +84,7 @@
         (done (gensym "DONE")))
     `(block nil
        (let ((,limit ,count) (,var 0))
+         ,@(%leading-declares body)
          (tagbody
             ,top
             (if (>= ,var ,limit) (go ,done))
@@ -87,5 +95,19 @@
          ,result))))
 
 (export '(psetq do do* dolist dotimes))
+
+(defmacro ext::dohash ((key value table &optional result) &body body)
+  "Run BODY once for each entry of TABLE with KEY and VALUE bound to it,
+inside a block named nil, and return RESULT."
+  `(block nil
+     (maphash (lambda (,key ,value)
+                (declare (ignorable ,key ,value))
+                ,@body)
+              ,table)
+     (let ((,key nil) (,value nil))
+       (declare (ignorable ,key ,value))
+       ,result)))
+
+(export 'ext::dohash "EXTENSIONS")
 
 (in-package "COMMON-LISP-USER")

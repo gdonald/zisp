@@ -67,12 +67,12 @@ fn runCorpus(name: []const u8, text: []const u8) !u32 {
 
 test "loop corpus" {
     const checked = try runCorpus("loop", @embedFile("lisp/loop-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 39), checked);
+    try testing.expectEqual(@as(u32, 50), checked);
 }
 
 test "do, dolist, dotimes and psetq corpus" {
     const checked = try runCorpus("iteration", @embedFile("lisp/iteration-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 16), checked);
+    try testing.expectEqual(@as(u32, 21), checked);
 }
 
 test "do and do* corpus" {
