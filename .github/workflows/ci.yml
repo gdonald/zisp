@@ -1,12 +1,15 @@
 name: CI
 
+# Runs after the home lab's Jenkins build passes and reports the
+# continuous-integration/jenkins/branch commit status. A status event runs
+# this file from the default branch, so the job checks out the commit the
+# status is for.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  status
 
 jobs:
   test:
+    if: github.event.context == 'continuous-integration/jenkins/branch' && github.event.state == 'success'
     runs-on: ubuntu-latest
     env:
       # Force Node 24 for JS-based actions whose upstream still ships
@@ -16,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.sha }}
           submodules: recursive
 
       - uses: mlugg/setup-zig@v2
