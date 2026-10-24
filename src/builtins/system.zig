@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
+const circle_mod = @import("../runtime/circle.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
 const format = @import("format.zig");
@@ -38,9 +39,9 @@ pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("TRUENAME", &truenameFn);
     _ = try ev.defineNative("PROBE-FILE", &probeFileFn);
     _ = try ev.defineNative("FILE-WRITE-DATE", &fileWriteDateFn);
-    _ = try ev.defineNative("PRIN1-TO-STRING", toStringFn(true));
-    _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(false));
-    _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(true));
+    _ = try ev.defineNative("PRIN1-TO-STRING", toStringFn(.escape));
+    _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(.plain));
+    _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(.current));
     function.asFunction(try ev.defineNative("READ-FROM-STRING", &readFromStringFn))
         .preserves_values = true;
     _ = try ev.defineNative("READ", &readFn);
@@ -192,22 +193,30 @@ fn formatTailFn(p: *anyopaque, args: []const Value) Error!Value {
 
 // --- printing to a string ---
 
-fn toStringFn(comptime escape: bool) function.NativeFn {
+/// Whether a string comes out escaped always, never, or as
+/// `*print-escape*` says.
+const Escaping = enum { escape, plain, current };
+
+fn toStringFn(comptime escaping: Escaping) function.NativeFn {
     return struct {
         fn f(p: *anyopaque, args: []const Value) Error!Value {
             const ev = evaluator(p);
             if (args.len != 1) return Error.WrongArgCount;
             var aw = std.Io.Writer.Allocating.init(ev.allocator);
             defer aw.deinit();
-            if (!escape) {
+            const settings = switch (escaping) {
+                .escape => format.prin1Settings(ev),
+                .plain => format.princSettings(ev),
+                .current => format.writeSettings(ev),
+            };
+            if (!settings.escape) {
                 var arena = std.heap.ArenaAllocator.init(ev.allocator);
                 defer arena.deinit();
                 if (try format.reportText(ev, arena.allocator(), args[0])) |text| {
                     return ev.heap.allocString(text);
                 }
             }
-            const settings = if (escape) format.prin1Settings(ev) else format.princSettings(ev);
-            try printer.write(ev.allocator, &aw.writer, args[0], settings);
+            printer.write(ev.allocator, &aw.writer, args[0], settings) catch |e| return ev.printFailure(e);
             return ev.heap.allocString(aw.written());
         }
     }.f;
@@ -528,12 +537,24 @@ pub fn compileSource(ev: *Evaluator, source: []const u8, out: *std.ArrayList(Val
     }
 }
 
-/// `(compile-file "path")` — minimal compilation to a fasl that holds the
-/// load-time forms as readable source. Returns the fasl's namestring.
+/// `(compile-file "path" &key output-file ...)` — minimal compilation to a
+/// fasl that holds the load-time forms as readable source. Returns the
+/// fasl's namestring and no warnings or failure. The other keywords are
+/// accepted and say nothing this compiler acts on.
 fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
-    if (args.len != 1) return Error.WrongArgCount;
+    if (args.len < 1 or args.len % 2 == 0) return Error.WrongArgCount;
     const path = try namestringOf(ev.heap.allocator, args[0]);
+    var output_file: ?[]const u8 = null;
+    var key_index: usize = 1;
+    while (key_index < args.len) : (key_index += 2) {
+        if (!args[key_index].isSymbol()) return Error.ProgramError;
+        if (std.mem.eql(u8, symbol_mod.symbol(args[key_index]).name, "OUTPUT-FILE") and
+            !args[key_index + 1].equalsRaw(value.NIL))
+        {
+            output_file = try namestringOf(ev.heap.allocator, args[key_index + 1]);
+        }
+    }
 
     const io = ev.io orelse return Error.FileError;
     const source = try readFileAlloc(ev, io, path);
@@ -558,10 +579,26 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
         try compileSource(ev, source, &load_forms);
     }
 
-    const fasl_path = try pathnames.faslPathOf(ev.allocator, path);
+    const fasl_path = if (output_file) |given| try ev.allocator.dupe(u8, given) else try pathnames.faslPathOf(ev.allocator, path);
     defer ev.allocator.free(fasl_path);
     try writeFasl(ev, io, fasl_path, load_forms.items);
-    return ev.heap.allocString(fasl_path);
+    const name = try ev.heap.allocString(fasl_path);
+    return ev.setValues(&.{ name, value.NIL, value.NIL });
+}
+
+/// The forms a fasl holds, with each literal object that has to be made
+/// again at load time replaced by a reference to one made there, through
+/// `%externalize-load-forms`. Where that is not defined the forms go as
+/// they are.
+fn externalizedForms(ev: *Evaluator, forms: []const Value, held: *@TypeOf(ev.heap.protect())) Error![]const Value {
+    const externalize = ev.env.lookupFunction(try ev.interner.intern("%EXTERNALIZE-LOAD-FORMS")) orelse return forms;
+    const list = try ev.heap.list(forms);
+    try held.push(list);
+    var rest = try ev.callFunction(externalize, &.{list});
+    try held.push(rest);
+    const start = held.items().len;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) try held.push(heap.car(rest));
+    return held.items()[start..];
 }
 
 fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value) Error!void {
@@ -572,8 +609,16 @@ fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value)
     var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
     const w = &file_writer.interface;
     w.print(";; zisp fasl (readable load-time forms)\n", .{}) catch return Error.FileError;
-    for (forms) |f| {
-        printer.write(ev.allocator, w, f, format.prin1Settings(ev)) catch return Error.FileError;
+    var held = ev.heap.protect();
+    defer held.close();
+    for (try externalizedForms(ev, forms, &held)) |f| {
+        // A gensym a macro put in more than one place has to read back as
+        // one symbol, which is what the labels say.
+        var state = try circle_mod.scan(ev.allocator, f);
+        defer state.deinit(ev.allocator);
+        var settings = format.prin1Settings(ev);
+        settings.circle = &state;
+        printer.write(ev.allocator, w, f, settings) catch return Error.FileError;
         w.writeByte('\n') catch return Error.FileError;
     }
     w.flush() catch return Error.FileError;

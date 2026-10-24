@@ -367,13 +367,16 @@ fn divideExactFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn onePlusFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    return fold(evaluator(p), .add, 1, args);
+    if (heap.isComplex(args[0])) return foldComplex(ev, .add, &.{ args[0], Value.fromFixnum(1) });
+    return fold(ev, .add, 1, args);
 }
 
 fn oneMinusFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
+    if (heap.isComplex(args[0])) return foldComplex(ev, .sub, &.{ args[0], Value.fromFixnum(1) });
     switch (try contagionOf(args)) {
         .rational => {},
         .single => return boxFloat(ev, f32, @as(f32, @floatCast(asF64(args[0]))) - 1),

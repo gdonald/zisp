@@ -23,6 +23,7 @@ const circle_mod = @import("circle.zig");
 const pathname = @import("pathname.zig");
 const symbol = @import("symbol.zig");
 const package = @import("package.zig");
+const function = @import("../eval/function.zig");
 const Value = value.Value;
 
 const MAX_DEPTH: u32 = 1024;
@@ -68,6 +69,20 @@ pub const Settings = struct {
     /// everything else gets a `pkg:` or `pkg::` prefix. When null there is
     /// no package context and no symbol is qualified.
     current_package: ?*package.Package = null,
+    /// What prints an instance, which is `print-object` once an evaluator
+    /// is at hand. Without one an instance prints as `#<CLASS>`.
+    hook: ?ObjectHook = null,
+    /// The one object the hook is not asked about, so `print-object`'s
+    /// default method can hand an object back to the printer.
+    unhooked: Value = .{ .raw = 0 },
+};
+
+/// Prints an object on the printer's behalf. `wants` says whether it
+/// takes the object at all.
+pub const ObjectHook = struct {
+    context: *anyopaque,
+    wants: *const fn (context: *anyopaque, v: Value) bool,
+    print: *const fn (context: *anyopaque, writer: *std.Io.Writer, v: Value, settings: Settings) PrintError!void,
 };
 
 /// `prin1` defaults: `*print-escape*` T.
@@ -87,7 +102,7 @@ const PrintCtx = struct {
     }
 };
 
-const PrintError = std.Io.Writer.Error || std.mem.Allocator.Error;
+pub const PrintError = std.Io.Writer.Error || std.mem.Allocator.Error;
 
 /// Write `v` to `writer` using the supplied settings. The other entry
 /// points are thin wrappers around this one.
@@ -144,6 +159,13 @@ fn printValue(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
             if (label.printed) return ctx.writer.print("#{d}#", .{id});
             label.printed = true;
             try ctx.writer.print("#{d}=", .{id});
+        }
+    }
+    if (ctx.settings.hook) |hook| {
+        if (!v.equalsRaw(ctx.settings.unhooked) and hook.wants(hook.context, v)) {
+            var inner = ctx.settings;
+            inner.unhooked = .{ .raw = 0 };
+            return hook.print(hook.context, ctx.writer, v, inner);
         }
     }
     switch (v.tag()) {
@@ -345,8 +367,39 @@ fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
             try printQuotedUtf8(ctx, text);
         },
         .package => try ctx.writer.print("#<PACKAGE \"{s}\">", .{package.asPackage(v).name}),
+        .function, .closure => try printFunction(ctx, v),
         else => try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()}),
     }
+}
+
+fn printFunction(ctx: *PrintCtx, v: Value) PrintError!void {
+    const f = function.asFunction(v);
+    if (f.kind == .funcallable) return printInstance(ctx, f.payload.funcallable.class);
+    try ctx.writer.writeAll("#<");
+    try writeCased(ctx, "FUNCTION");
+    try ctx.writer.writeByte(' ');
+    if (f.name) |name| {
+        try writeCased(ctx, name);
+    } else {
+        try ctx.writer.writeByte('(');
+        try writeCased(ctx, "LAMBDA");
+        try ctx.writer.writeByte(')');
+    }
+    try ctx.writer.writeByte('>');
+}
+
+/// An instance printed with no hook to ask: its class's name, which is
+/// the first slot every class keeps.
+fn printInstance(ctx: *PrintCtx, class: Value) PrintError!void {
+    try ctx.writer.writeAll("#<");
+    if (heap.isStructure(class)) {
+        const slots = heap.asStructure(class).constSlice()[0];
+        if (heap.isArray(slots) and heap.asArray(slots).storage_len > 0) {
+            const name = heap.arrayElements(slots)[0];
+            if (name.isSymbol()) try writeCased(ctx, symbol.name(name));
+        }
+    }
+    try ctx.writer.writeByte('>');
 }
 
 /// Slot names live on the structure name's plist under `%STRUCTURE-SLOTS`,
@@ -368,39 +421,10 @@ fn structureSlotNames(name: Value) Value {
     return value.NIL;
 }
 
-/// The name a condition class carries where a `defstruct` instance
-/// carries the symbol it was defined under. Matching it by name keeps the
-/// printer free of an interner reference.
-const CONDITION_CLASS = "%CONDITION-CLASS";
-
-fn isConditionClass(name: Value) bool {
-    return name.isSymbol() and std.mem.eql(u8, symbol.name(name), CONDITION_CLASS);
-}
-
-/// A condition names itself with its class and a class names itself with
-/// `%condition-class`, so neither has slot names on a symbol's plist and
-/// neither reads as `#S(...)`.
-fn printConditionish(ctx: *PrintCtx, v: Value) PrintError!void {
-    const obj = heap.asStructure(v);
-    try ctx.writer.writeAll("#<");
-    if (isConditionClass(obj.name)) {
-        try writeCased(ctx, "CONDITION-CLASS");
-        try ctx.writer.writeByte(' ');
-        const named = obj.constSlice()[0];
-        if (named.isSymbol()) try writeCased(ctx, symbol.name(named));
-    } else {
-        const named = heap.asStructure(obj.name).constSlice()[0];
-        if (named.isSymbol()) try writeCased(ctx, symbol.name(named));
-    }
-    try ctx.writer.writeByte('>');
-}
-
 fn printStructure(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     const obj = heap.asStructure(v);
-    if (!obj.name.isSymbol() or isConditionClass(obj.name)) {
-        return printConditionish(ctx, v);
-    }
+    if (!obj.name.isSymbol()) return printInstance(ctx, obj.name);
     if (std.mem.eql(u8, symbol.name(obj.name), "RESTART") and obj.constSlice().len > 0) {
         try ctx.writer.writeAll("#<");
         try writeCased(ctx, "RESTART");

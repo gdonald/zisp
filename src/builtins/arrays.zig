@@ -40,6 +40,8 @@ pub fn registerArrays(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAKE-ARRAY", &makeArrayFn);
     _ = try ev.defineNative("AREF", &arefFn);
     _ = try ev.defineNative("%SET-AREF", &setArefFn);
+    _ = try ev.defineNative("SVREF", &svrefFn);
+    _ = try ev.defineNative("%SET-SVREF", &setSvrefFn);
     _ = try ev.defineNative("ROW-MAJOR-AREF", &rowMajorArefFn);
     _ = try ev.defineNative("%SET-ROW-MAJOR-AREF", &setRowMajorArefFn);
     _ = try ev.defineNative("ARRAYP", &arraypFn);
@@ -430,6 +432,32 @@ fn setArefFn(p: *anyopaque, args: []const Value) Error!Value {
     try checkElement(a.element_type, new_value);
     heap.setSlot(ev.heap, args[0], try rowMajorIndex(a, subscripts), new_value);
     return new_value;
+}
+
+/// The index `index_v` names in `v`, which has to be a simple vector.
+fn simpleVectorIndex(ev: *Evaluator, v: Value, index_v: Value) Error!usize {
+    if (!heap.isArray(v)) return ev.typeMismatch(v, "SIMPLE-VECTOR");
+    const a = heap.asArray(v);
+    const simple = a.rank == 1 and a.element_type == .t and !a.adjustable and
+        !a.has_fill_pointer and a.displaced_to.equalsRaw(value.NIL);
+    if (!simple) return ev.typeMismatch(v, "SIMPLE-VECTOR");
+    if (!index_v.isFixnum() or index_v.toFixnum() < 0 or index_v.toFixnum() >= a.storage_len) {
+        return Error.TypeError;
+    }
+    return @intCast(index_v.toFixnum());
+}
+
+fn svrefFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    return heap.arrayElements(args[0])[try simpleVectorIndex(ev, args[0], args[1])];
+}
+
+fn setSvrefFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 3) return Error.WrongArgCount;
+    heap.setSlot(ev.heap, args[0], try simpleVectorIndex(ev, args[0], args[1]), args[2]);
+    return args[2];
 }
 
 fn rowMajorOffset(v: Value, index_v: Value, limit: usize) Error!usize {

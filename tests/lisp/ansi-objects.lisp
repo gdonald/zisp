@@ -1,0 +1,63 @@
+;; The ansi-test `objects` files, in the order the suite's own loader
+;; runs them. `tests/lisp/ansi-rt.lisp` has to be loaded first, which is
+;; what `tests/run-rt-tests.sh objects` does.
+
+(in-package :cl-test)
+
+(compile-and-load* "defclass-aux.lsp")
+
+(run-ansi-files
+ "objects"
+ '(
+   "objects/defclass.lsp"
+   "objects/defclass-01.lsp"
+   "objects/defclass-02.lsp"
+   "objects/defclass-03.lsp"
+   "objects/defclass-errors.lsp"
+   "objects/defclass-forward-reference.lsp"
+   "objects/ensure-generic-function.lsp"
+   "objects/allocate-instance.lsp"
+   "objects/reinitialize-instance.lsp"
+   "objects/shared-initialize.lsp"
+   "objects/change-class.lsp"
+   "objects/update-instance-for-different-class.lsp"
+   "objects/slot-boundp.lsp"
+   "objects/slot-exists-p.lsp"
+   "objects/slot-makunbound.lsp"
+   "objects/slot-missing.lsp"
+   "objects/slot-unbound.lsp"
+   "objects/slot-value.lsp"
+   "objects/method-qualifiers.lsp"
+   "objects/no-applicable-method.lsp"
+   "objects/no-next-method.lsp"
+   "objects/remove-method.lsp"
+   "objects/make-instance.lsp"
+   "objects/make-instances-obsolete.lsp"
+   "objects/make-load-form.lsp"
+   "objects/make-load-form-order.lsp"
+   "objects/make-load-form-saving-slots.lsp"
+   "objects/with-accessors.lsp"
+   "objects/with-slots.lsp"
+   "objects/defgeneric.lsp"
+   "objects/defgeneric-method-combination-aux.lsp"
+   "objects/defgeneric-method-combination-plus.lsp"
+   "objects/defgeneric-method-combination-append.lsp"
+   "objects/defgeneric-method-combination-nconc.lsp"
+   "objects/defgeneric-method-combination-list.lsp"
+   "objects/defgeneric-method-combination-max.lsp"
+   "objects/defgeneric-method-combination-min.lsp"
+   "objects/defgeneric-method-combination-and.lsp"
+   "objects/defgeneric-method-combination-or.lsp"
+   "objects/defgeneric-method-combination-progn.lsp"
+   "objects/find-class.lsp"
+   "objects/next-method-p.lsp"
+   "objects/call-next-method.lsp"
+   "objects/compute-applicable-methods.lsp"
+   "objects/define-method-combination.lsp"
+   "objects/define-method-combination-long-form.lsp"
+   "objects/find-method.lsp"
+   "objects/add-method.lsp"
+   "objects/class-name.lsp"
+   "objects/class-of.lsp"
+   "objects/unbound-slot.lsp"
+   "objects/defmethod.lsp"))

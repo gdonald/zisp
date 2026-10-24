@@ -30,12 +30,15 @@ before loading have a harness of their own:
 zig build rt-tests -- format                # through the ReleaseSafe build
 tests/run-rt-tests.sh format                # pass rate, non-zero below the floor
 tests/run-rt-tests.sh typep subtypep        # several slices
+tests/run-rt-tests.sh objects               # the CLOS files, in the suite's own order
 FLOOR=95 tests/run-rt-tests.sh typep        # raise the floor
 ```
 
 A slice is a driver at `tests/lisp/ansi-<name>.lisp` naming the files it
-wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it. It
-also loads the suite's `notes.lsp` and switches off the tests noted
+wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it,
+with the suite's `universe.lsp` and `cl-symbol-names.lsp`, which the
+auxiliary files and many tests read. It also loads the suite's
+`notes.lsp` and switches off the tests noted
 `:nil-vectors-are-strings`: an array of element type `nil` upgrades to
 `bit` in zisp, so no `(vector nil)` is a string.
 
@@ -110,7 +113,11 @@ The framework itself runs: `rt-package.lsp` defines the package, `rt.lsp`
 defines `deftest`, `do-tests`, and the entry structure, and a test defined
 with `deftest` is reported by `(do-tests)`.
 
-Loading a category's own test files goes through `gclload1.lsp`, which
-loads `universe.lsp`. That file builds a generic function with `defgeneric`
-and asks for `find-class` and `find-method`, so the whole-suite driver
-waits on the object system.
+The suite's own loader, `gclload1.lsp`, runs to the end: it compiles
+`rt.lsp` and the auxiliary files to fasls, loads them and `universe.lsp`,
+and enters `cl-test`. `zig build gclload` checks that through
+`tests/run-gclload.sh`, which runs it in a copy of the suite with no
+fasls in it. `gclload1.lsp` reuses a fasl it finds newer than its source,
+so one an older zisp left in the checkout would be loaded in place of a
+fresh compile, and the copy is also what keeps the checkout from being
+written to.

@@ -20,7 +20,16 @@ pub fn main(init: std.process.Init.Minimal) void {
     var fail_count: usize = 0;
     var leaks: usize = 0;
 
+    // `ZISP_TEST_FILTER` runs only the tests whose names contain it.
+    const filter = init.environ.getPosix("ZISP_TEST_FILTER");
+
     for (test_fn_list, 0..) |test_fn, i| {
+        if (filter) |wanted| {
+            if (std.mem.indexOf(u8, test_fn.name, wanted) == null) {
+                skip_count += 1;
+                continue;
+            }
+        }
         testing.allocator_instance = .init(std.heap.page_allocator, .{
             .canary = 0xc3a701ba,
             .check_write_after_free = true,

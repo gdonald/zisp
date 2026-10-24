@@ -14,10 +14,11 @@
 (check (string= "foo-bar" (let ((*print-case* :downcase)) (prin1-to-string 'foo-bar))))
 (check (string= "Foo-Bar" (let ((*print-case* :capitalize)) (prin1-to-string 'foo-bar))))
 
-;; Escaping is what `prin1` and `princ` differ over, and the variable is
-;; what says so.
+;; Escaping is what `prin1` and `princ` differ over. `prin1` escapes
+;; whatever the variable says, and `write` does what it says.
 (check (string= "\"hi\"" (prin1-to-string "hi")))
-(check (string= "hi" (let ((*print-escape* nil)) (prin1-to-string "hi"))))
+(check (string= "\"hi\"" (let ((*print-escape* nil)) (prin1-to-string "hi"))))
+(check (string= "hi" (let ((*print-escape* nil)) (write-to-string "hi"))))
 (check (string= "hi" (princ-to-string "hi")))
 
 ;; A `princ` that must read back is escaped anyway.

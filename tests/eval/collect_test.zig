@@ -152,8 +152,10 @@ test "the trigger fires once enough has been allocated" {
     _ = try fx.eval("(setq *gc-trigger* 4096)");
     _ = try fx.eval("(defun churn (n) (if (> n 0) (progn (list 1 2 3) (churn (- n 1))) t))");
 
-    // Bringing the prelude up costs collections of its own, so what the
-    // trigger did is what this counts, not what the run has done so far.
+    // Bringing the prelude up costs collections of its own, and can leave
+    // one owed, so that one is taken first and what the trigger did is
+    // what this counts.
+    try collect.maybeCollect(&fx.ev);
     const before = fx.ev.gc_count;
 
     _ = try fx.eval("(churn 500)");
@@ -237,9 +239,16 @@ test "a value the Lisp stack no longer holds is reclaimed" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     // A cached macro expansion outlives the call form it is keyed on by
-    // one collection, so the prelude's last ones go in the second.
-    try collect.collectScoped(&fx.ev, .major);
-    try collect.collectScoped(&fx.ev, .major);
+    // one collection, and an expansion that holds another macro call
+    // keeps that one for a collection more, so the prelude's go over
+    // several. Collecting until nothing more goes leaves only what is live.
+    var settled = fx.liveBytes();
+    var rounds: usize = 0;
+    while (rounds < 16) : (rounds += 1) {
+        try collect.collectScoped(&fx.ev, .major);
+        if (fx.liveBytes() == settled) break;
+        settled = fx.liveBytes();
+    }
     const before = fx.liveBytes();
     {
         var held = fx.ev.protect();

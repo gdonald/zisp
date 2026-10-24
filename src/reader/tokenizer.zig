@@ -483,13 +483,26 @@ pub const Tokenizer = struct {
         start_idx: usize,
     ) Error!Token {
         var radix: u32 = 0;
+        var too_large = false;
+        const digits_start_idx = self.idx;
         while (self.peek()) |c| {
             if (!std.ascii.isDigit(c)) break;
-            radix = radix * 10 + (c - '0');
-            if (radix > 36) return Error.BadRadix;
+            if (radix <= 36) radix = radix * 10 + (c - '0');
+            if (radix > 36) too_large = true;
             self.advance();
         }
-        if (radix < 2) return Error.BadRadix;
+        const label_digits = self.src[digits_start_idx..self.idx];
+        if (self.peek()) |marker| {
+            if (marker == '=' or marker == '#') {
+                self.advance();
+                return .{
+                    .kind = if (marker == '=') .hash_label_define else .hash_label_reference,
+                    .pos = start_pos,
+                    .text = label_digits,
+                };
+            }
+        }
+        if (too_large or radix < 2) return Error.BadRadix;
         const r_marker = self.peek() orelse return Error.BadNumericLiteral;
         if (r_marker != 'r' and r_marker != 'R') return Error.BadNumericLiteral;
         self.advance();

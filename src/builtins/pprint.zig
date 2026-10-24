@@ -31,7 +31,7 @@ pub fn registerPprint(ev: *Evaluator) !void {
     _ = try ev.defineNative("PPRINT", &pprintFn);
     _ = try ev.defineNative("PRIN1", writerFn(.escape));
     _ = try ev.defineNative("PRINC", writerFn(.plain));
-    _ = try ev.defineNative("%WRITE", writerFn(.escape));
+    _ = try ev.defineNative("%WRITE", writerFn(.current));
     _ = try ev.defineNative("PRINT", &printFn);
     _ = try ev.defineNative("TERPRI", &terpriFn);
     _ = try ev.defineNative("FRESH-LINE", &freshLineFn);
@@ -354,9 +354,9 @@ fn recordValue(ev: *Evaluator, s: *Stream, v: Value) Error!void {
         }
     }
     if (v.isCons()) return printList(ev, s, v, .linear, true);
-    var settings = format.prin1Settings(ev);
+    var settings = format.writeSettings(ev);
     settings.circle = s.circle;
-    const text = try printer.writeToOwnedSlice(ev.allocator, v, settings);
+    const text = printer.writeToOwnedSlice(ev.allocator, v, settings) catch |e| return ev.printFailure(e);
     defer ev.allocator.free(text);
     try recordText(ev, s, text);
 }
@@ -450,7 +450,9 @@ fn pprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
 
 // --- the printing operations ---
 
-const WriteStyle = enum { escape, plain };
+/// How a printing operation escapes: always, never, or as
+/// `*print-escape*` says.
+const WriteStyle = enum { escape, plain, current };
 
 /// Whether printing should lay a list out rather than run it flat.
 fn prettyWanted(ev: *Evaluator) Error!bool {
@@ -459,7 +461,7 @@ fn prettyWanted(ev: *Evaluator) Error!bool {
 
 fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyle) Error!void {
     const target = try streams.streamOf(ev, stream, .output);
-    if (style == .escape and v.isCons() and try prettyWanted(ev)) {
+    if (style != .plain and v.isCons() and try prettyWanted(ev)) {
         if (target.kind == .pretty) {
             try recordValue(ev, target, v);
             return;
@@ -477,14 +479,18 @@ fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyl
             return streams.emitBytes(ev, target, text);
         }
     }
-    var settings = if (style == .escape) format.prin1Settings(ev) else format.princSettings(ev);
+    var settings = switch (style) {
+        .escape => format.prin1Settings(ev),
+        .plain => format.princSettings(ev),
+        .current => format.writeSettings(ev),
+    };
     var state: ?circle_mod.State = null;
     defer if (state) |*owned| owned.deinit(ev.allocator);
     if (format.circleWanted(ev)) {
         state = try circle_mod.scan(ev.allocator, v);
         settings.circle = &state.?;
     }
-    const text = try printer.writeToOwnedSlice(ev.allocator, v, settings);
+    const text = printer.writeToOwnedSlice(ev.allocator, v, settings) catch |e| return ev.printFailure(e);
     defer ev.allocator.free(text);
     try streams.emitBytes(ev, target, text);
 }

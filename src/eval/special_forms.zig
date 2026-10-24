@@ -37,6 +37,8 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("%IGNORE-ERRORS", &ignoreErrors);
     try ev.registerSpecialForm("%CATCH-ERROR", &catchError);
     try ev.registerSpecialForm("THE", &theForm);
+    try ev.registerSpecialForm("PROGV", &progvForm);
+    try ev.registerSpecialForm("LOAD-TIME-VALUE", &loadTimeValueForm);
     try ev.registerSpecialForm("DECLARE", &declareForm);
     try ev.registerSpecialForm("VALUES", &valuesForm);
     try ev.registerSpecialForm("VALUES-LIST", &valuesListForm);
@@ -192,13 +194,13 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
         if (!rest.isCons()) return Error.BadArgList;
         const def = heap.car(rest);
         if (!def.isCons()) return Error.BadArgList;
-        const name = heap.car(def);
-        if (!name.isSymbol()) return Error.TypeError;
+        const given = heap.car(def);
+        const name = try ev.functionNameSymbol(given);
         const after_name = heap.cdr(def);
         if (!after_name.isCons()) return Error.BadArgList;
         const params = heap.car(after_name);
         try validateParams(ev, params);
-        const fn_body = try blockBody(ev, name, heap.cdr(after_name));
+        const fn_body = try blockBody(ev, blockName(given), heap.cdr(after_name));
         try ev.env.retainChain(ev.env.top_value);
         try ev.env.retainChain(captured_fenv);
         const closure = try function.allocClosure(
@@ -209,7 +211,7 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
             ev.env.top_value,
             captured_fenv,
         );
-        try frame.bind(ev.allocator, name, closure);
+        try frame.bind(ev.env.frameAllocator(), name, closure);
         rest = heap.cdr(rest);
     }
 
@@ -247,7 +249,7 @@ fn macrolet(ev: *Evaluator, args: Value) Error!Value {
             captured_fenv,
             null,
         );
-        try frame.bind(ev.allocator, name, expander);
+        try frame.bind(ev.env.frameAllocator(), name, expander);
         rest = heap.cdr(rest);
     }
 
@@ -274,7 +276,7 @@ fn symbolMacrolet(ev: *Evaluator, args: Value) Error!Value {
         const after_name = heap.cdr(def);
         if (!after_name.isCons() or !heap.cdr(after_name).equalsRaw(value.NIL)) return Error.BadArgList;
         const marker = try ev.heap.allocStructure(marker_name, &.{heap.car(after_name)});
-        try frame.bind(ev.allocator, name, marker);
+        try frame.bind(ev.env.frameAllocator(), name, marker);
         rest = heap.cdr(rest);
     }
 
@@ -292,8 +294,21 @@ fn functionForm(ev: *Evaluator, args: Value) Error!Value {
     const head = heap.car(arg);
     if (!head.isSymbol()) return Error.TypeError;
     const head_sym = symbol_mod.symbol(head);
+    if (std.mem.eql(u8, head_sym.name, "SETF")) {
+        const name = try ev.functionNameSymbol(arg);
+        const f = ev.env.lookupFunction(name) orelse
+            return ev.unbound(arg, Error.UnboundFunction);
+        return ev.set1(f);
+    }
     if (!std.mem.eql(u8, head_sym.name, "LAMBDA")) return Error.TypeError;
     return lambda(ev, heap.cdr(arg));
+}
+
+/// The block a function body named `given` is wrapped in: `(setf name)`
+/// gets a block named `name`.
+fn blockName(given: Value) Value {
+    if (given.isCons()) return heap.car(heap.cdr(given));
+    return given;
 }
 
 fn validateParams(ev: *Evaluator, params: Value) Error!void {
@@ -315,7 +330,7 @@ fn mentions(tree: Value, symbol: Value) bool {
 /// would take its last form out of tail position, and with it the call
 /// trampoline that keeps deep tail recursion off the host stack.
 fn blockBody(ev: *Evaluator, name: Value, body: Value) Error!Value {
-    if (!mentions(body, try ev.interner.intern("RETURN-FROM"))) return body;
+    if (!mentions(body, try ev.cachedSymbol(&ev.sym_return_from, "RETURN-FROM"))) return body;
 
     var held = ev.heap.protect();
     defer held.close();
@@ -337,13 +352,13 @@ fn blockBody(ev: *Evaluator, name: Value, body: Value) Error!Value {
 
 fn defun(ev: *Evaluator, args: Value) Error!Value {
     if (!args.isCons()) return Error.BadArgList;
-    const name = heap.car(args);
-    if (!name.isSymbol()) return Error.TypeError;
+    const given = heap.car(args);
+    const name = try ev.functionNameSymbol(given);
     const after_name = heap.cdr(args);
     if (!after_name.isCons()) return Error.BadArgList;
     const params = heap.car(after_name);
     try lambda_list.validate(ev, params, false);
-    const body = try blockBody(ev, name, heap.cdr(after_name));
+    const body = try blockBody(ev, blockName(given), heap.cdr(after_name));
 
     try ev.env.captureCurrent();
     const closure = try function.allocClosure(
@@ -355,7 +370,7 @@ fn defun(ev: *Evaluator, args: Value) Error!Value {
         ev.env.top_function,
     );
     ev.env.defineGlobalFunction(name, closure);
-    return ev.set1(name);
+    return ev.set1(given);
 }
 
 fn defmacro(ev: *Evaluator, args: Value) Error!Value {
@@ -407,6 +422,11 @@ fn destructuringBind(ev: *Evaluator, args: Value) Error!Value {
     if (!rest.isCons()) return Error.BadArgList;
     const expr_val = try ev.eval(heap.car(rest));
     const body = heap.cdr(rest);
+    // Init forms run while the value is taken apart, and what of it is
+    // not bound yet is reachable from nowhere else.
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(expr_val);
 
     _ = try ev.env.pushValueFrame();
     defer ev.env.popValueFrame();
@@ -788,6 +808,42 @@ fn catchError(ev: *Evaluator, args: Value) Error!Value {
     return ev.setValues(outcome.items());
 }
 
+/// `(progv symbols values form*)`: the body with each of SYMBOLS bound
+/// dynamically to the value in the same place of VALUES, and the symbols
+/// past the end of VALUES bound with no value at all.
+fn progvForm(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons() or !heap.cdr(args).isCons()) return Error.BadArgList;
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(try ev.eval(heap.car(args)));
+    try held.push(try ev.eval(heap.car(heap.cdr(args))));
+    const mark = ev.dynamicMark();
+    defer ev.unwindSpecials(mark);
+    var symbols = held.items()[0];
+    var values = held.items()[1];
+    while (symbols.isCons()) : (symbols = heap.cdr(symbols)) {
+        const sym = heap.car(symbols);
+        if (!sym.isSymbol()) return Error.TypeError;
+        if (symbol_mod.symbol(sym).constant) return Error.ProgramError;
+        if (values.isCons()) {
+            try ev.bindSpecial(sym, heap.car(values));
+            values = heap.cdr(values);
+        } else {
+            try ev.bindSpecial(sym, value.SPECIAL_UNBOUND);
+        }
+    }
+    return prognBody(ev, heap.cdr(heap.cdr(args)));
+}
+
+/// `(load-time-value form &optional read-only-p)`. What `eval` does with
+/// one is evaluate FORM in the null lexical environment, each time.
+fn loadTimeValueForm(ev: *Evaluator, args: Value) Error!Value {
+    if (!args.isCons()) return Error.BadArgList;
+    const previous = try ev.enterEnvironment(value.NIL);
+    defer ev.leaveEnvironment(previous);
+    return ev.set1(try ev.eval(heap.car(args)));
+}
+
 fn theForm(ev: *Evaluator, args: Value) Error!Value {
     if (!args.isCons()) return Error.BadArgList;
     const after_type = heap.cdr(args);
@@ -955,7 +1011,7 @@ fn multipleValueBind(ev: *Evaluator, args: Value) Error!Value {
         const var_sym = heap.car(rest);
         if (!var_sym.isSymbol()) return Error.TypeError;
         const v = if (i < produced.items().len) produced.items()[i] else value.NIL;
-        try ev.env.top_value.?.bind(ev.allocator, var_sym, v);
+        try ev.env.top_value.?.bind(ev.env.frameAllocator(), var_sym, v);
         rest = heap.cdr(rest);
     }
     return prognBody(ev, body);

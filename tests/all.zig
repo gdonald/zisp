@@ -69,6 +69,7 @@ comptime {
     _ = @import("builtins/merge_pathnames_corpus_test.zig");
     _ = @import("builtins/logical_pathname_corpus_test.zig");
     _ = @import("builtins/strings_test.zig");
+    _ = @import("builtins/instances_test.zig");
     _ = @import("builtins/sequences_test.zig");
     _ = @import("builtins/arrays_test.zig");
     _ = @import("builtins/hash_tables_test.zig");

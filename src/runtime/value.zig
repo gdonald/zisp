@@ -20,11 +20,15 @@ pub const FIXNUM_MAX: i64 = (@as(i64, 1) << 60) - 1;
 pub const Value = extern struct {
     raw: u64,
 
-    pub fn tag(self: Value) Tag {
-        return @fromBackingInt(@intCast(@as(u3, @truncate(self.raw))));
+    pub inline fn tag(self: Value) Tag {
+        return @bitCast(@as(u3, @truncate(self.raw)));
     }
 
-    pub fn equalsRaw(self: Value, other: Value) bool {
+    inline fn hasTag(self: Value, wanted: Tag) bool {
+        return (self.raw & TAG_MASK) == @backingInt(wanted);
+    }
+
+    pub inline fn equalsRaw(self: Value, other: Value) bool {
         return self.raw == other.raw;
     }
 
@@ -36,77 +40,77 @@ pub const Value = extern struct {
         return .{ .raw = @bitCast(shifted) };
     }
 
-    pub fn toFixnum(self: Value) i64 {
-        std.debug.assert(self.tag() == .fixnum);
+    pub inline fn toFixnum(self: Value) i64 {
+        std.debug.assert(self.hasTag(.fixnum));
         const signed: i64 = @bitCast(self.raw);
         return signed >> TAG_BITS;
     }
 
-    pub fn isFixnum(self: Value) bool {
-        return self.tag() == .fixnum;
+    pub inline fn isFixnum(self: Value) bool {
+        return self.hasTag(.fixnum);
     }
 
     // --- cons pointer ---
 
-    pub fn fromConsAddr(addr: u64) Value {
+    pub inline fn fromConsAddr(addr: u64) Value {
         std.debug.assert((addr & TAG_MASK) == 0);
         return .{ .raw = addr | @backingInt(Tag.cons) };
     }
 
-    pub fn toConsAddr(self: Value) u64 {
-        std.debug.assert(self.tag() == .cons);
+    pub inline fn toConsAddr(self: Value) u64 {
+        std.debug.assert(self.hasTag(.cons));
         return self.raw & ~TAG_MASK;
     }
 
-    pub fn isCons(self: Value) bool {
-        return self.tag() == .cons;
+    pub inline fn isCons(self: Value) bool {
+        return self.hasTag(.cons);
     }
 
     // --- symbol pointer ---
 
-    pub fn fromSymbolAddr(addr: u64) Value {
+    pub inline fn fromSymbolAddr(addr: u64) Value {
         std.debug.assert((addr & TAG_MASK) == 0);
         return .{ .raw = addr | @backingInt(Tag.symbol) };
     }
 
-    pub fn toSymbolAddr(self: Value) u64 {
-        std.debug.assert(self.tag() == .symbol);
+    pub inline fn toSymbolAddr(self: Value) u64 {
+        std.debug.assert(self.hasTag(.symbol));
         return self.raw & ~TAG_MASK;
     }
 
-    pub fn isSymbol(self: Value) bool {
-        return self.tag() == .symbol;
+    pub inline fn isSymbol(self: Value) bool {
+        return self.hasTag(.symbol);
     }
 
     // --- heap object pointer ---
 
-    pub fn fromHeapAddr(addr: u64) Value {
+    pub inline fn fromHeapAddr(addr: u64) Value {
         std.debug.assert((addr & TAG_MASK) == 0);
         return .{ .raw = addr | @backingInt(Tag.heap) };
     }
 
-    pub fn toHeapAddr(self: Value) u64 {
-        std.debug.assert(self.tag() == .heap);
+    pub inline fn toHeapAddr(self: Value) u64 {
+        std.debug.assert(self.hasTag(.heap));
         return self.raw & ~TAG_MASK;
     }
 
-    pub fn isHeap(self: Value) bool {
-        return self.tag() == .heap;
+    pub inline fn isHeap(self: Value) bool {
+        return self.hasTag(.heap);
     }
 
     // --- character ---
 
-    pub fn fromChar(codepoint: u21) Value {
+    pub inline fn fromChar(codepoint: u21) Value {
         return .{ .raw = (@as(u64, codepoint) << TAG_BITS) | @backingInt(Tag.char) };
     }
 
-    pub fn toChar(self: Value) u21 {
-        std.debug.assert(self.tag() == .char);
+    pub inline fn toChar(self: Value) u21 {
+        std.debug.assert(self.hasTag(.char));
         return @truncate(self.raw >> TAG_BITS);
     }
 
-    pub fn isChar(self: Value) bool {
-        return self.tag() == .char;
+    pub inline fn isChar(self: Value) bool {
+        return self.hasTag(.char);
     }
 
     // --- special immediates ---
@@ -120,8 +124,8 @@ pub const Value = extern struct {
         return @truncate(self.raw >> TAG_BITS);
     }
 
-    pub fn isSpecial(self: Value) bool {
-        return self.tag() == .special;
+    pub inline fn isSpecial(self: Value) bool {
+        return self.hasTag(.special);
     }
 };
 

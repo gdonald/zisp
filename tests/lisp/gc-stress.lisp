@@ -47,6 +47,9 @@
 (defvar *small-count* 0)
 (defvar *large-count* 0)
 
+;; The first collection drops the macro expansion cache, and what that
+;; cache held is reclaimed by the second.
+(gc)
 (gc)
 
 (setq *baseline* (room-value :live-bytes))

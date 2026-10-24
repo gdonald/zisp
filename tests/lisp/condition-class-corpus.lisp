@@ -117,13 +117,9 @@
     ((slot :initarg :slot :reader maybe-bound-slot)))
   t)
 
-(null (%condition-boundp
-       (make-condition 'maybe-bound)
-       (%condition-slot-index (find-condition-class 'maybe-bound) 'slot)))
+(null (slot-boundp (make-condition 'maybe-bound) 'slot))
 
-(%condition-boundp
- (make-condition 'maybe-bound :slot nil)
- (%condition-slot-index (find-condition-class 'maybe-bound) 'slot))
+(slot-boundp (make-condition 'maybe-bound :slot nil) 'slot)
 
 ;;; a name that is not a condition type
 

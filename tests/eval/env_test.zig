@@ -69,10 +69,10 @@ test "inner frame shadows outer; pop restores outer" {
 
     const x = try sc.sym("X");
     _ = try env.pushValueFrame();
-    try env.top_value.?.bind(env.allocator, x, value.Value.fromFixnum(1));
+    try env.top_value.?.bind(env.frameAllocator(), x, value.Value.fromFixnum(1));
 
     _ = try env.pushValueFrame();
-    try env.top_value.?.bind(env.allocator, x, value.Value.fromFixnum(99));
+    try env.top_value.?.bind(env.frameAllocator(), x, value.Value.fromFixnum(99));
     try std.testing.expectEqual(@as(i64, 99), env.lookupValue(x).?.toFixnum());
 
     env.popValueFrame();
@@ -133,7 +133,7 @@ test "assignValue mutates innermost lexical binding" {
 
     const x = try sc.sym("X");
     _ = try env.pushValueFrame();
-    try env.top_value.?.bind(env.allocator, x, value.Value.fromFixnum(1));
+    try env.top_value.?.bind(env.frameAllocator(), x, value.Value.fromFixnum(1));
 
     _ = try env.pushValueFrame();
     // Inner frame doesn't bind x; assignValue should still find outer.
@@ -165,7 +165,7 @@ test "assignFunction mirrors assignValue but on function cell" {
     try std.testing.expect(symbol_mod.symbol(f).function_cell.equalsRaw(value.Value.fromFixnum(33)));
 
     _ = try env.pushFunctionFrame();
-    try env.top_function.?.bind(env.allocator, f, value.Value.fromFixnum(44));
+    try env.top_function.?.bind(env.frameAllocator(), f, value.Value.fromFixnum(44));
     env.assignFunction(f, value.Value.fromFixnum(55));
     try std.testing.expectEqual(@as(i64, 55), env.lookupFunction(f).?.toFixnum());
     // Global cell unchanged because lexical binding intercepted.
@@ -184,7 +184,7 @@ test "frame promotes to hash map past threshold" {
     while (i <= HASH_THRESHOLD) : (i += 1) {
         const name = try std.fmt.bufPrint(&name_buf, "V{d}", .{i});
         const sym = try sc.sym(name);
-        try f.bind(env.allocator, sym, value.Value.fromFixnum(@intCast(i)));
+        try f.bind(env.frameAllocator(), sym, value.Value.fromFixnum(@intCast(i)));
     }
     try std.testing.expect(f.isHashed());
 
@@ -209,12 +209,12 @@ test "rebind in promoted (hashed) frame replaces value" {
     while (i <= HASH_THRESHOLD + 1) : (i += 1) {
         const name = try std.fmt.bufPrint(&name_buf, "V{d}", .{i});
         const sym = try sc.sym(name);
-        try f.bind(env.allocator, sym, value.Value.fromFixnum(@intCast(i)));
+        try f.bind(env.frameAllocator(), sym, value.Value.fromFixnum(@intCast(i)));
     }
     try std.testing.expect(f.isHashed());
 
     const sym0 = try sc.sym("V0");
-    try f.bind(env.allocator, sym0, value.Value.fromFixnum(999));
+    try f.bind(env.frameAllocator(), sym0, value.Value.fromFixnum(999));
     try std.testing.expectEqual(@as(i64, 999), f.find(sym0).?.toFixnum());
 }
 
@@ -241,7 +241,7 @@ test "assign in promoted frame mutates existing binding" {
     while (i <= HASH_THRESHOLD + 1) : (i += 1) {
         const name = try std.fmt.bufPrint(&name_buf, "V{d}", .{i});
         const sym = try sc.sym(name);
-        try f.bind(env.allocator, sym, value.Value.fromFixnum(@intCast(i)));
+        try f.bind(env.frameAllocator(), sym, value.Value.fromFixnum(@intCast(i)));
     }
     const v0 = try sc.sym("V0");
     try std.testing.expect(f.assign(v0, value.Value.fromFixnum(-1)));
@@ -264,7 +264,7 @@ test "popValueFrame on empty env is a no-op" {
     try std.testing.expect(env.top_function == null);
 }
 
-test "deinit frees deeply nested frames" {
+test "deinit frees frames left on the chain" {
     var sc = try ScratchSym.init(std.testing.allocator);
     defer sc.deinit();
     var env = Env.init(std.testing.allocator);
@@ -305,7 +305,7 @@ test "find on empty frame returns null" {
     try std.testing.expect(f.find(x) == null);
 }
 
-test "popFunctionFrame restores parent and frees" {
+test "popFunctionFrame restores the parent frame" {
     var sc = try ScratchSym.init(std.testing.allocator);
     defer sc.deinit();
     var env = Env.init(std.testing.allocator);
@@ -313,10 +313,10 @@ test "popFunctionFrame restores parent and frees" {
 
     const f = try sc.sym("F");
     _ = try env.pushFunctionFrame();
-    try env.top_function.?.bind(env.allocator, f, value.Value.fromFixnum(1));
+    try env.top_function.?.bind(env.frameAllocator(), f, value.Value.fromFixnum(1));
 
     const inner = try env.pushFunctionFrame();
-    try inner.bind(env.allocator, f, value.Value.fromFixnum(2));
+    try inner.bind(env.frameAllocator(), f, value.Value.fromFixnum(2));
     try std.testing.expectEqual(@as(i64, 2), env.lookupFunction(f).?.toFixnum());
 
     env.popFunctionFrame();
@@ -332,27 +332,39 @@ test "a frame that fails to allocate leaves the chain as it was" {
     try std.testing.expect(env.top_value == null);
 }
 
-test "popping a frame no closure captured frees it" {
-    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
-    var env = Env.init(counting.allocator());
+test "a popped frame no closure captured is reused by the next push" {
+    var env = Env.init(std.testing.allocator);
     defer env.deinit();
 
-    _ = try env.pushValueFrame();
-    _ = try env.pushFunctionFrame();
+    const first = try env.pushValueFrame();
     env.popValueFrame();
-    env.popFunctionFrame();
-    try std.testing.expectEqual(counting.allocations, counting.deallocations);
+    const second = try env.pushFunctionFrame();
+    try std.testing.expectEqual(first, second);
 }
 
-test "a captured frame outlives its pop and is freed with the env" {
+test "a reused frame starts with no bindings" {
     var sc = try ScratchSym.init(std.testing.allocator);
     defer sc.deinit();
-    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
-    var env = Env.init(counting.allocator());
+    var env = Env.init(std.testing.allocator);
+    defer env.deinit();
+
+    const x = try sc.sym("X");
+    const first = try env.pushValueFrame();
+    try first.bind(env.frameAllocator(), x, value.Value.fromFixnum(1));
+    env.popValueFrame();
+    const second = try env.pushValueFrame();
+    try std.testing.expect(second.find(x) == null);
+}
+
+test "a captured frame outlives its pop and is not reused" {
+    var sc = try ScratchSym.init(std.testing.allocator);
+    defer sc.deinit();
+    var env = Env.init(std.testing.allocator);
+    defer env.deinit();
 
     const x = try sc.sym("X");
     const outer = try env.pushValueFrame();
-    try outer.bind(env.allocator, x, value.Value.fromFixnum(1));
+    try outer.bind(env.frameAllocator(), x, value.Value.fromFixnum(1));
     _ = try env.pushValueFrame();
     try env.captureCurrent();
     const inner = env.top_value.?;
@@ -362,8 +374,8 @@ test "a captured frame outlives its pop and is freed with the env" {
     try std.testing.expect(outer.captured and inner.captured);
     try std.testing.expectEqual(@as(i64, 1), outer.find(x).?.toFixnum());
     try std.testing.expectEqual(@as(usize, 2), env.captured_frames.items.len);
-    env.deinit();
-    try std.testing.expectEqual(counting.allocations, counting.deallocations);
+    const fresh = try env.pushValueFrame();
+    try std.testing.expect(fresh != outer and fresh != inner);
 }
 
 test "capturing a chain twice records each frame once" {

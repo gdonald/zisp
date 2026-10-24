@@ -13,9 +13,9 @@
 ;;; `default` is true and wholly outside it otherwise.
 ;;;
 ;;; A kind is a keyword, except for two families. The direct instances of
-;;; a condition class are the kind keyed by the class object, and the
+;;; a class CLOS defined are the kind keyed by the class object, and the
 ;;; instances of a structure type the kind keyed by its name. The kinds
-;;; `:condition-rest` and `:struct-rest` stand for every member of their
+;;; `:instance-rest` and `:struct-rest` stand for every member of their
 ;;; family the entries do not name.
 ;;;
 ;;; What a specifier cannot be decided for, such as `satisfies`, parses to
@@ -42,15 +42,7 @@
   '(:file-stream :string-stream :synonym-stream :broadcast-stream
     :concatenated-stream :two-way-stream :echo-stream :stream))
 
-(defparameter *%class-kinds* '(:built-in-class :structure-class :standard-class :class))
-
-(defparameter *%generic-function-kinds* '(:generic-function :standard-generic-function))
-
-(defparameter *%function-kinds* (cons :function *%generic-function-kinds*))
-
-(defparameter *%standard-object-kinds*
-  (append *%class-kinds* *%generic-function-kinds*
-          '(:standard-method :method :method-combination :standard-object)))
+(defparameter *%function-kinds* '(:function))
 
 (defun %discrete-kind-p (kind)
   (member kind '(:integer :base-char :extended-char)))
@@ -553,7 +545,7 @@ excludes."
 (defun %family-rest (kind)
   (cond ((keywordp kind) nil)
         ((symbolp kind) :struct-rest)
-        (t :condition-rest)))
+        (t :instance-rest)))
 
 (defun %ct-lookup (ctype kind)
   (let ((entry (assoc kind (cdr ctype))))
@@ -615,7 +607,8 @@ excludes."
           (t :complex-double))))
 
 (defun %kind-of (object)
-  (cond ((symbolp object) (if (keywordp object) :keyword :symbol))
+  (cond ((%instance-p object) (%instance-class object))
+        ((symbolp object) (if (keywordp object) :keyword :symbol))
         ((integerp object) :integer)
         ((rationalp object) :ratio)
         ((typep object 'single-float) :single-float)
@@ -624,8 +617,6 @@ excludes."
         ((characterp object) (if (< (char-code object) 256) :base-char :extended-char))
         ((consp object) :cons)
         ((arrayp object) (%array-kind-of object))
-        ((%condition-class-p object) (if (%built-in-class-p object) :built-in-class :class))
-        ((%condition-p object) (%condition-class-of object))
         ((%structure-p object) (%structure-name object))
         ((hash-table-p object) :hash-table)
         ((functionp object) :function)
@@ -688,23 +679,38 @@ excludes."
                 (%fixnum-bound most-negative-fixnum)
                 (%fixnum-bound most-positive-fixnum)))
 
-(defvar *%condition-ctypes* (make-hash-table :test #'eq))
+(defvar *%class-ctypes* (make-hash-table :test #'eq))
 
-(defun %ct-condition-class (name)
-  "The direct instances of NAME and of every condition class known to
-descend from it, and of any class defined later for `condition` itself.
-Each is built once for each set of classes defined so far."
-  (let ((cached (gethash name *%condition-ctypes*)))
-    (if (and cached (eq (car cached) *%condition-class-names*))
+;; Classes no object is made a direct instance of. Leaving them out of
+;; the kinds lets their subclasses stand for them, which is what makes
+;; `(and function standard-object)` a subtype of `generic-function`.
+(defparameter *%abstract-classes* '(funcallable-standard-object))
+
+(defun %class-descendants (class)
+  "CLASS and every class below it, leaving out built-in classes, whose
+instances are kinds of their own, and the classes with no direct
+instances."
+  (let ((found nil)
+        (seen nil)
+        (built-in (find-class 'built-in-class))
+        (abstract (mapcar #'find-class *%abstract-classes*)))
+    (labels ((walk (c)
+               (unless (%memq c seen)
+                 (push c seen)
+                 (unless (or (eq (%instance-class c) built-in) (%memq c abstract))
+                   (push c found))
+                 (dolist (sub (%class-ref c direct-subclasses)) (walk sub)))))
+      (walk class))
+    found))
+
+(defun %ct-clos-class (class)
+  "The instances of CLASS and of every class known now to descend from
+it. Each is built once for each state of the class hierarchy."
+  (let ((cached (gethash class *%class-ctypes*)))
+    (if (and cached (eql (car cached) *%class-epoch*))
         (cdr cached)
-        (let ((class (get name '%condition-class))
-              (kinds (if (eq name 'condition) (list :condition-rest) nil)))
-          (dolist (other *%condition-class-names*)
-            (let ((other-class (get other '%condition-class)))
-              (when (%condition-subtypep other-class class)
-                (push other-class kinds))))
-          (cdr (setf (gethash name *%condition-ctypes*)
-                     (cons *%condition-class-names* (%ct-full-kinds kinds))))))))
+        (cdr (setf (gethash class *%class-ctypes*)
+                   (cons *%class-epoch* (%ct-full-kinds (%class-descendants class))))))))
 
 (defvar *%named-ctypes* (make-hash-table :test #'eq))
 
@@ -757,16 +763,6 @@ one this file knows. Each is built once."
     (sequence (%ct-or (%ct-named 'list) (%ct-vectors *%array-kinds*)))
     (hash-table (%ct-full-kinds '(:hash-table)))
     ((function compiled-function) (%ct-full-kinds *%function-kinds*))
-    (generic-function (%ct-full-kinds *%generic-function-kinds*))
-    (standard-generic-function (%ct-full-kinds '(:standard-generic-function)))
-    (standard-object (%ct-full-kinds *%standard-object-kinds*))
-    (class (%ct-full-kinds *%class-kinds*))
-    (built-in-class (%ct-full-kinds '(:built-in-class)))
-    (structure-class (%ct-full-kinds '(:structure-class)))
-    (standard-class (%ct-full-kinds '(:standard-class)))
-    (method (%ct-full-kinds '(:standard-method :method)))
-    (standard-method (%ct-full-kinds '(:standard-method)))
-    (method-combination (%ct-full-kinds '(:method-combination)))
     (package (%ct-full-kinds '(:package)))
     (pathname (%ct-full-kinds '(:pathname :logical-pathname)))
     (logical-pathname (%ct-full-kinds '(:logical-pathname)))
@@ -893,10 +889,16 @@ part type upgrades to."
 
 (defun %parse-symbol (spec)
   (let ((named (%ct-named spec)))
-    (cond (named (%exact named))
-          ((get spec '%condition-class) (%exact (%ct-condition-class spec)))
+    (cond ((and named (%memq spec '(function compiled-function)))
+           (%exact (%ct-or named (%ct-clos-class (find-class 'function)))))
+          (named (%exact named))
           ((get spec '%structure-slots)
-           (%exact (%ct-full-kinds (list spec))))
+           (%exact (%ct-full-kinds (let ((class (find-class spec nil)))
+                                     (if class
+                                         (mapcar (lambda (c) (%class-ref c name))
+                                                 (%class-descendants class))
+                                         (list spec))))))
+          ((find-class spec nil) (%exact (%ct-clos-class (find-class spec))))
           ((get spec '%deftype-expander)
            (%parse (funcall (get spec '%deftype-expander) nil)))
           (t (%unknown)))))
@@ -961,10 +963,18 @@ part type upgrades to."
            (%parse (funcall (get head '%deftype-expander) args)))
           (t (%unknown)))))
 
+(defun %parse-class-object (class)
+  "A class as a type specifier: its name's type where the name is proper,
+and the instances of it and its subclasses otherwise."
+  (let ((name (%class-ref class name)))
+    (if (and name (symbolp name) (eq (find-class name nil) class))
+        (%parse name)
+        (%exact (%ct-clos-class class)))))
+
 (defun %parse (spec)
   (cond ((symbolp spec) (%parse-symbol spec))
         ((consp spec) (%parse-compound spec))
-        ((%condition-class-p spec) (%parse (%condition-class-name spec)))
+        ((%class-p spec) (%parse-class-object spec))
         (t (%unknown))))
 
 ;;; --- the interface ---
@@ -1063,28 +1073,7 @@ of OBJECTS, the only objects the answer could turn on."
                     ((subtypep typespec 'float) 'float)
                     (t 'real))))))
 
-;; The standard types a class stands for until CLOS defines classes of its
-;; own. Each is a class object carrying the type's name.
-(defparameter *%built-in-class-names*
-  '(t array bit-vector character complex cons float function hash-table
-    integer list logical-pathname null number package pathname random-state
-    ratio rational readtable real sequence stream string symbol vector))
-
-(defun %built-in-class-p (object)
-  (and (%condition-class-p object)
-       (eq (get (%condition-class-name object) '%built-in-class) object)))
-
-(defun find-class (symbol &optional (errorp t) environment)
-  (declare (ignore environment))
-  (cond ((get symbol '%condition-class))
-        ((get symbol '%built-in-class))
-        ((or (member symbol *%built-in-class-names*) (get symbol '%structure-slots))
-         (%put symbol '%built-in-class (%make-condition-class symbol nil nil nil))
-         (get symbol '%built-in-class))
-        (errorp (error "~S does not name a class." symbol))
-        (t nil)))
-
-(export '(subtypep upgraded-array-element-type upgraded-complex-part-type find-class
+(export '(subtypep upgraded-array-element-type upgraded-complex-part-type
           keyword boolean atom fixnum bignum bit unsigned-byte signed-byte ratio
           short-float single-float double-float long-float extended-char
           standard-char base-char simple-array simple-vector base-string

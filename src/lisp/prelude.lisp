@@ -173,7 +173,19 @@
       (let ((expander (get (car place) '%setf-expander)))
         (if expander
             (funcall expander place env)
-            (error "no setf expander for ~s" (car place))))))
+            (multiple-value-bind (expansion expanded) (macroexpand-1 place env)
+              (if expanded
+                  (get-setf-expansion expansion env)
+                  (%setf-function-expansion place)))))))
+
+(defun %setf-function-expansion (place)
+  "CLHS 5.1.2.9: a place with no expander that is not a macro form is a
+call to the function named `(setf accessor)`, given the new value first."
+  (let ((temps (mapcar (lambda (arg) (declare (ignore arg)) (gensym)) (cdr place)))
+        (store (gensym)))
+    (values temps (cdr place) (list store)
+            `(funcall #'(setf ,(car place)) ,store ,@temps)
+            `(,(car place) ,@temps))))
 
 (defun %setf-expand-1 (place val-form)
   (if (symbolp place)
@@ -274,6 +286,7 @@
 (defsetf cddddr (x) (v) `(progn (rplacd (cdddr ,x) ,v) ,v))
 (defsetf elt %set-elt)
 (defsetf aref %set-aref)
+(defsetf svref %set-svref)
 (defsetf row-major-aref %set-row-major-aref)
 (defsetf fill-pointer %set-fill-pointer)
 (defsetf logical-pathname-translations %set-logical-pathname-translations)
@@ -282,6 +295,7 @@
 (defsetf symbol-value %set-symbol-value)
 (defsetf symbol-function %set-symbol-function)
 (defsetf symbol-plist %set-symbol-plist)
+(defsetf fdefinition %set-fdefinition)
 
 (defsetf gethash (key table &optional default) (new)
   (declare (ignore default))
@@ -366,6 +380,78 @@
                 (,(car stores) (- ,access-form ,delta)))
            ,store-form))))
 
+;; --- psetf, rotatef, shiftf, multiple-value-setq ---
+
+(defun %place-expansions (places)
+  (mapcar (lambda (place) (multiple-value-list (get-setf-expansion place))) places))
+
+(defmacro psetf (&rest pairs)
+  "Every place's subforms and its new value are evaluated left to right,
+and only then are the places stored into."
+  (when (oddp (length pairs))
+    (error "odd number of arguments to PSETF"))
+  (let ((steps nil))
+    (do ((walk pairs (cddr walk)))
+        ((null walk))
+      (push (cons (multiple-value-list (get-setf-expansion (car walk))) (cadr walk)) steps))
+    (setq steps (nreverse steps))
+    (let ((body `(progn ,@(mapcar (lambda (step) (nth 3 (car step))) steps) nil)))
+      (dolist (step (reverse steps) body)
+        (destructuring-bind ((temps vals stores store-form access-form) . value) step
+          (declare (ignore store-form access-form))
+          (setq body `(let* ,(%pair-lists temps vals)
+                        (multiple-value-bind ,stores ,value ,body))))))))
+
+(defmacro rotatef (&rest places)
+  (if (null places)
+      nil
+      (let* ((expansions (%place-expansions places))
+             (bindings (mapcan (lambda (e) (%pair-lists (first e) (second e))) expansions))
+             (rotated (append (cdr expansions) (list (car expansions))))
+             (body `(progn ,@(mapcar #'fourth expansions) nil)))
+        (mapc (lambda (target source)
+                (setq body `(multiple-value-bind ,(third target) ,(fifth source) ,body)))
+              (reverse expansions) (reverse rotated))
+        `(let* ,bindings ,body))))
+
+(defmacro shiftf (&rest places-and-value)
+  (let* ((places (butlast places-and-value))
+         (new-value (car (last places-and-value)))
+         (expansions (%place-expansions places))
+         (bindings (mapcan (lambda (e) (%pair-lists (first e) (second e))) expansions))
+         (old (gensym "OLD"))
+         (sources (append (mapcar #'fifth (cdr expansions)) (list new-value)))
+         (body `(progn ,@(mapcar #'fourth expansions) ,old)))
+    (mapc (lambda (target source)
+            (setq body `(multiple-value-bind ,(third target) ,source ,body)))
+          (reverse expansions) (reverse sources))
+    `(let* (,@bindings (,old ,(fifth (car expansions))))
+       ,body)))
+
+(defmacro multiple-value-setq (variables form)
+  (let ((values (gensym "VALUES")))
+    `(let ((,values (multiple-value-list ,form)))
+       ,@(let ((index -1))
+           (mapcar (lambda (variable)
+                     (setq index (1+ index))
+                     `(setf ,variable (nth ,index ,values)))
+                   variables))
+       (car ,values))))
+
+(defun (setf aref) (new-value array &rest subscripts)
+  (apply #'%set-aref array (append subscripts (list new-value))))
+
+(define-setf-expander apply (function &rest arguments)
+  "`(setf (apply #'name ...) new)` calls `(setf name)` with the new value
+first and the arguments spread the way `apply` spreads them."
+  (unless (and (consp function) (eq (car function) 'function))
+    (error "setf of apply needs a function named with #', given ~S." function))
+  (let ((temps (mapcar (lambda (argument) (declare (ignore argument)) (gensym)) arguments))
+        (store (gensym "NEW")))
+    (values temps arguments (list store)
+            `(apply #'(setf ,(cadr function)) ,store ,@temps)
+            `(apply ,function ,@temps))))
+
 ;; --- defstruct ---
 
 (defun %struct-string (x)
@@ -387,7 +473,8 @@
   (labels ((scan (rest)
              (unless (null rest)
                (let ((key (if (consp (car rest)) (car (car rest)) (car rest))))
-                 (unless (member key '(:conc-name :constructor :predicate :copier))
+                 (unless (member key '(:conc-name :constructor :predicate :copier :include
+                                       :print-function :print-object))
                    (error "defstruct option ~S is not supported" key)))
                (scan (cdr rest)))))
     (scan options)))
@@ -397,6 +484,66 @@
 
 (defun %struct-slot-initform (slot)
   (if (consp slot) (car (cdr slot)) nil))
+
+(defun %struct-description (slot)
+  "A slot description as (name initform)."
+  (list (%struct-slot-name slot) (%struct-slot-initform slot)))
+
+(defun %struct-include (options)
+  "The (:include name override...) option, or nil."
+  (dolist (option options nil)
+    (when (and (consp option) (eq (car option) :include))
+      (return option))))
+
+(defun %struct-included-descriptions (include)
+  "The slot descriptions a structure takes from the one it includes, each
+override given in the :include option replacing the included initform."
+  (when include
+    (let ((parent (cadr include))
+          (overrides (mapcar #'%struct-description (cddr include))))
+      (unless (get parent '%structure-descriptions)
+        (error "~S is not a structure type that can be included." parent))
+      (mapcar (lambda (description)
+                (or (assoc (car description) overrides) description))
+              (get parent '%structure-descriptions)))))
+
+(defun %struct-constructors (name options)
+  "Each constructor the options ask for, as (name lambda-list), the
+lambda list nil for a keyword constructor. Without a :constructor option
+there is one keyword constructor named make-NAME."
+  (let ((found nil) (given nil))
+    (dolist (option options)
+      (cond ((eq option :constructor) (setq given t))
+            ((and (consp option) (eq (car option) :constructor))
+             (setq given t)
+             (when (cadr option)
+               (push (list (cadr option) (cddr option)) found)))))
+    (if given
+        (nreverse found)
+        (list (list (%struct-symbol "MAKE-" name) nil)))))
+
+(defun %struct-lambda-variables (lambda-list)
+  (let ((names nil))
+    (dolist (item lambda-list names)
+      (unless (member item lambda-list-keywords)
+        (push (let ((head (if (consp item) (car item) item)))
+                (if (consp head) (cadr head) head))
+              names)))))
+
+(defun %struct-constructor-form (name constructor descriptions)
+  (destructuring-bind (function-name positional) constructor
+    (if (null positional)
+        `(defun ,function-name (&key ,@descriptions)
+           (%make-structure ',name ,@(mapcar #'car descriptions)))
+        (let* ((variables (%struct-lambda-variables (car positional)))
+               (others (remove-if (lambda (description) (member (car description) variables))
+                                  descriptions)))
+          `(defun ,function-name (,@(car positional)
+                                  ,@(when others
+                                      (if (member '&aux (car positional))
+                                          others
+                                          (cons '&aux others))))
+             (%make-structure ',name ,@(mapcar #'car descriptions)))))))
 
 (defun %struct-accessors (conc slot-names)
   (mapcar (lambda (slot) (%struct-symbol conc slot)) slot-names))
@@ -409,38 +556,65 @@
                 (list '%set-structure-ref %obj ,index %new))
              (%struct-accessor-forms (cdr accessors) (+ index 1)))))
 
+(defun %struct-printer-forms (name options)
+  "A print-object method for the :print-function or :print-object option."
+  (let ((print-function (%struct-option options :print-function nil))
+        (print-object (%struct-option options :print-object nil)))
+    (cond (print-function
+           `((setq *%structure-print-object* t)
+             (defmethod print-object ((%object ,name) %stream)
+               (funcall (function ,print-function) %object %stream 0)
+               %object)))
+          (print-object
+           `((setq *%structure-print-object* t)
+             (defmethod print-object ((%object ,name) %stream)
+               (funcall (function ,print-object) %object %stream)
+               %object)))
+          (t nil))))
+
 (defmacro defstruct (name-and-options &rest slots)
   (let* ((name (if (consp name-and-options) (car name-and-options) name-and-options))
          (options (if (consp name-and-options) (cdr name-and-options) nil))
+         (slots (if (stringp (car slots)) (cdr slots) slots))
+         (include (%struct-include options))
+         (descriptions (append (%struct-included-descriptions include)
+                               (mapcar #'%struct-description slots)))
          (raw-conc (%struct-option options :conc-name (format nil "~A-" name)))
          (conc (if raw-conc (%struct-string raw-conc) ""))
-         (constructor (%struct-option options :constructor (%struct-symbol "MAKE-" name)))
+         (constructors (%struct-constructors name options))
          (predicate (%struct-option options :predicate (%struct-symbol name "-P")))
          (copier (%struct-option options :copier (%struct-symbol "COPY-" name)))
-         (slot-names (mapcar #'%struct-slot-name slots))
+         (slot-names (mapcar #'car descriptions))
          (accessors (%struct-accessors conc slot-names)))
     (%struct-check-options options)
     `(progn
        (%put ',name '%structure-slots ',slot-names)
-       ,@(when constructor
-           (list `(defun ,constructor
-                      (&key ,@(mapcar (lambda (slot)
-                                        (list (%struct-slot-name slot)
-                                              (%struct-slot-initform slot)))
-                                      slots))
-                    (%make-structure ',name ,@slot-names))))
+       (%put ',name '%structure-descriptions ',descriptions)
+       (%define-structure-class ',name ',slot-names ',(cadr include))
+       ,@(mapcar (lambda (constructor) (%struct-constructor-form name constructor descriptions))
+                 constructors)
        ,@(when predicate
            (list `(defun ,predicate (%struct)
-                    (and (%structure-p %struct)
-                         (eq (%structure-name %struct) ',name)))))
+                    (typep %struct ',name))))
        ,@(when copier
            (list `(defun ,copier (%struct) (%copy-structure %struct))))
        ,@(%struct-accessor-forms accessors 0)
+       ,@(%struct-printer-forms name options)
        ',name)))
+
+;; Set once a print-object method is defined for some structure type,
+;; which is when the printer starts asking print-object about structures.
+(defvar *%structure-print-object* nil)
 
 (%put '%lexical-environment '%structure-slots '(value-frames function-frames))
 
 (defun identity (x) x)
+
+(defun sleep (seconds)
+  (unless (and (realp seconds) (not (minusp seconds)))
+    (error 'type-error :datum seconds :expected-type '(real 0)))
+  (%sleep-nanoseconds (round (* seconds 1000000000)))
+  nil)
 
 ;; `write` and `write-to-string` take the printer variables as keyword
 ;; arguments, each defaulting to what the variable already holds. Binding
@@ -739,7 +913,7 @@ when the block will not fit before the right margin."
          (*readtable* (copy-readtable nil)))
      ,@body))
 
-(export '(with-standard-io-syntax formatter assert compile proclaim
+(export '(sleep psetf rotatef shiftf multiple-value-setq with-standard-io-syntax formatter assert compile proclaim
           write write-to-string
           lambda-list-keywords call-arguments-limit lambda-parameters-limit
           multiple-values-limit

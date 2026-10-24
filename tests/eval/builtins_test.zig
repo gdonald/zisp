@@ -517,7 +517,16 @@ test "gentemp argument errors" {
     defer fx.deinit(testing.allocator);
 
     try fx.expectErr(Error.TypeError, "(gentemp 5)");
-    try fx.expectErr(Error.WrongArgCount, "(gentemp \"A\" \"B\")");
+    try fx.expectErr(Error.NoSuchPackage, "(gentemp \"A\" \"NO-SUCH-PACKAGE\")");
+    try fx.expectErr(Error.WrongArgCount, "(gentemp \"A\" :keyword 1)");
+}
+
+test "gentemp interns into the package it is given" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT("(eq (symbol-package (gentemp \"OPTION\" :keyword)) (find-package :keyword))");
+    try fx.expectT("(eq (symbol-package (gentemp \"LOCAL\")) *package*)");
 }
 
 test "gensym supports the classic macro hygiene pattern" {

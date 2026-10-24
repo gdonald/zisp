@@ -28,6 +28,17 @@ fn defaultMacroExpander(ev: *Evaluator, form: Value) Error!?Value {
     return ev.macroexpand1(form);
 }
 
+/// Hashes a heap address by multiplying it through, which spreads the
+/// low bits an aligned address leaves zero without a general hash.
+const AddressContext = struct {
+    pub fn hash(_: AddressContext, key: u64) u64 {
+        return (key >> 3) *% 0x9E3779B97F4A7C15;
+    }
+    pub fn eql(_: AddressContext, a: u64, b: u64) bool {
+        return a == b;
+    }
+};
+
 const BlockEntry = struct { name: Value, id: u64 };
 /// One saved value cell, restored when the establishing form unwinds.
 const DynamicEntry = struct { sym: Value, saved: Value };
@@ -61,7 +72,6 @@ pub const Evaluator = struct {
     // Set by `quit` / `exit`; the driver reads it to choose the process exit
     // code after the in-flight `Quit` unwinds the evaluator.
     quit_code: ?u8 = null,
-    special_forms: std.AutoHashMapUnmanaged(u64, SpecialFormFn) = .{},
     macro_expander: MacroExpander = defaultMacroExpander,
     // Expansion of each macro call form, keyed by the call's cons address.
     // Re-expanding on every evaluation makes a macro inside a loop cost a
@@ -69,10 +79,17 @@ pub const Evaluator = struct {
     // used only while the head still names the same macro function, and the
     // whole table is dropped at each collection so no entry outlives the
     // cons it is keyed on.
-    macro_cache: std.AutoHashMapUnmanaged(u64, MacroExpansion) = .{},
+    macro_cache: std.HashMapUnmanaged(u64, MacroExpansion, AddressContext, 80) = .{},
     // Tail-position dispatch through these control forms reuses the caller's
     // frame instead of growing the native stack. Populated by registerStandard.
     sym_if: Value = undefined,
+    // Symbols the evaluator looks for on every form of some kind,
+    // interned on first use rather than by name each time.
+    sym_symbol_macro: Value = .{ .raw = 0 },
+    sym_macroexpand_hook: Value = .{ .raw = 0 },
+    sym_funcall: Value = .{ .raw = 0 },
+    sym_environment: Value = .{ .raw = 0 },
+    sym_return_from: Value = .{ .raw = 0 },
     sym_progn: Value = undefined,
     sym_declare: Value = undefined,
     sym_special: Value = undefined,
@@ -138,6 +155,13 @@ pub const Evaluator = struct {
     // Set while the condition standing for a native failure is being
     // built, so a failure in building it is not offered in turn.
     building_failure_condition: bool = false,
+    // Symbols the CLOS natives look up on every call, interned on first
+    // use. `instances.zig` says which index holds which.
+    clos_symbols: [64]Value = @splat(.{ .raw = 0 }),
+    // What a `print-object` method failed with while the printer was
+    // running it. The printer has no way to carry an evaluator's error, so
+    // it unwinds with `WriteFailed` and its caller takes this back.
+    print_failure: ?Error = null,
 
     // Shallow-binding stack for special variables. `let`, `let*`, and
     // lambda-list binding push the old value cell here and restore on exit,
@@ -202,7 +226,6 @@ pub const Evaluator = struct {
         self.finalizers.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.env.deinit();
-        self.special_forms.deinit(self.allocator);
         self.macro_cache.deinit(self.allocator);
         self.block_stack.deinit(self.allocator);
         self.tagbody_stack.deinit(self.allocator);
@@ -289,6 +312,40 @@ pub const Evaluator = struct {
     pub fn unbound(self: *Evaluator, sym: Value, err: Error) Error {
         self.error_symbol = sym;
         return err;
+    }
+
+    /// The error a printer call that failed with `err` stands for: what a
+    /// `print-object` method raised, where one did.
+    pub fn printFailure(self: *Evaluator, err: anyerror) Error {
+        if (self.print_failure) |held| {
+            self.print_failure = null;
+            return held;
+        }
+        return switch (err) {
+            error.OutOfMemory => Error.OutOfMemory,
+            else => Error.WriteFailed,
+        };
+    }
+
+    /// The symbol whose function cell holds the definition of the function
+    /// name `name`. A symbol is its own, and `(setf name)` is an uninterned
+    /// symbol kept on `name`'s property list.
+    pub fn functionNameSymbol(self: *Evaluator, name: Value) Error!Value {
+        if (name.isSymbol()) return name;
+        if (!name.isCons()) return Error.TypeError;
+        const head = heap_mod.car(name);
+        const rest = heap_mod.cdr(name);
+        if (!head.isSymbol() or !std.mem.eql(u8, symbol_mod.symbol(head).name, "SETF")) return Error.TypeError;
+        if (!rest.isCons() or !heap_mod.cdr(rest).equalsRaw(value.NIL)) return Error.TypeError;
+        const base = heap_mod.car(rest);
+        if (!base.isSymbol()) return Error.TypeError;
+        const key = try self.interner.intern("%SETF-FUNCTION-NAME");
+        if (symbol_mod.plistGet(base, key)) |held| return held;
+        const printed = try std.fmt.allocPrint(self.allocator, "(SETF {s})", .{symbol_mod.symbol(base).name});
+        defer self.allocator.free(printed);
+        const made = try self.interner.makeUninterned(printed);
+        try symbol_mod.plistPut(self.heap, base, key, made);
+        return made;
     }
 
     /// Record what a native rejected and the type it wanted, so the
@@ -436,12 +493,14 @@ pub const Evaluator = struct {
 
     pub fn registerSpecialForm(self: *Evaluator, name: []const u8, handler: SpecialFormFn) !void {
         const sym = try self.interner.intern(name);
-        try self.special_forms.put(self.allocator, sym.raw, handler);
+        symbol_mod.symbol(sym).special_form = @ptrCast(handler);
     }
 
     pub fn lookupSpecialForm(self: *const Evaluator, sym: Value) ?SpecialFormFn {
+        _ = self;
         std.debug.assert(sym.isSymbol());
-        return self.special_forms.get(sym.raw);
+        const handler = symbol_mod.symbol(sym).special_form orelse return null;
+        return @ptrCast(@alignCast(handler));
     }
 
     pub fn defineNative(self: *Evaluator, name: []const u8, native: NativeFn) !Value {
@@ -556,11 +615,17 @@ pub const Evaluator = struct {
     /// the form the symbol stands for.
     pub const SYMBOL_MACRO_NAME = "%SYMBOL-MACRO";
 
+    /// The symbol named `name`, interned into `slot` the first time.
+    pub fn cachedSymbol(self: *Evaluator, slot: *Value, name: []const u8) !Value {
+        if (slot.raw == 0) slot.* = try self.interner.intern(name);
+        return slot.*;
+    }
+
     /// The expansion `binding` holds when it is a symbol macro.
     pub fn symbolMacroExpansion(self: *Evaluator, binding: Value) ?Value {
         if (!heap_mod.isStructure(binding)) return null;
         const obj = heap_mod.asStructure(binding);
-        const name = self.interner.intern(SYMBOL_MACRO_NAME) catch return null;
+        const name = self.cachedSymbol(&self.sym_symbol_macro, SYMBOL_MACRO_NAME) catch return null;
         if (!obj.name.equalsRaw(name)) return null;
         return obj.slice()[0];
     }
@@ -670,8 +735,8 @@ pub const Evaluator = struct {
             value.NIL;
         try held.push(environment);
 
-        const hook_sym = try self.interner.intern("*MACROEXPAND-HOOK*");
-        const funcall_sym = try self.interner.intern("FUNCALL");
+        const hook_sym = try self.cachedSymbol(&self.sym_macroexpand_hook, "*MACROEXPAND-HOOK*");
+        const funcall_sym = try self.cachedSymbol(&self.sym_funcall, "FUNCALL");
         const hook = self.env.lookupValue(hook_sym) orelse funcall_sym;
         if (hook.equalsRaw(funcall_sym) or hook.equalsRaw(value.NIL)) {
             const expansion = try self.callFunction(held.items()[1], &.{ held.items()[0], held.items()[2] });
@@ -696,7 +761,7 @@ pub const Evaluator = struct {
     /// records them as addresses.
     pub fn captureEnvironment(self: *Evaluator) Error!Value {
         if (self.env.top_value == null and self.env.top_function == null) return value.NIL;
-        const name = try self.interner.intern(ENVIRONMENT_NAME);
+        const name = try self.cachedSymbol(&self.sym_environment, ENVIRONMENT_NAME);
         return self.heap.allocStructure(name, &.{
             frameAddress(self.env.top_value),
             frameAddress(self.env.top_function),
@@ -716,7 +781,7 @@ pub const Evaluator = struct {
         }
         if (!heap_mod.isStructure(environment)) return Error.TypeError;
         const obj = heap_mod.asStructure(environment);
-        if (!obj.name.equalsRaw(try self.interner.intern(ENVIRONMENT_NAME))) return Error.TypeError;
+        if (!obj.name.equalsRaw(try self.cachedSymbol(&self.sym_environment, ENVIRONMENT_NAME))) return Error.TypeError;
         self.env.top_value = frameAt(obj.slice()[0]);
         self.env.top_function = frameAt(obj.slice()[1]);
         return previous;
@@ -773,6 +838,7 @@ pub const Evaluator = struct {
                 return self.set1(result);
             },
             .closure => return self.applyClosure(fn_v, args),
+            .funcallable => return self.callFunction(f.payload.funcallable.function, args),
         }
     }
 

@@ -23,7 +23,7 @@ pub const pprint = @import("pprint.zig");
 pub const gc = @import("gc.zig");
 pub const registerGc = gc.registerGc;
 const equality = @import("../runtime/equality.zig");
-const proto_class = @import("../runtime/proto_class.zig");
+const instances = @import("instances.zig");
 const frames = @import("frames.zig");
 
 const Value = value.Value;
@@ -136,6 +136,9 @@ pub fn registerStandard(ev: *Evaluator) !void {
     _ = try ev.defineNative("MEMBER", &memberFn);
     _ = try ev.defineNative("ASSOC", &assocFn);
     _ = try ev.defineNative("FBOUNDP", &fboundpFn);
+    _ = try ev.defineNative("FDEFINITION", &fdefinitionFn);
+    _ = try ev.defineNative("SPECIAL-OPERATOR-P", &specialOperatorPFn);
+    _ = try ev.defineNative("%SET-FDEFINITION", &setFdefinitionFn);
     _ = try ev.defineNative("BOUNDP", &boundpFn);
     _ = try ev.defineNative("CONSTANTP", &constantpFn);
     _ = try ev.defineNative("MAKUNBOUND", &makunboundFn);
@@ -174,7 +177,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try characters.registerCharacters(ev);
     try streams.registerStreams(ev);
     try types.registerTypes(ev);
-    try proto_class.registerProtoClass(ev);
+    try instances.registerInstances(ev);
     try frames.registerFrames(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
@@ -190,6 +193,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try system.evalSource(ev, lists_source);
     try system.evalSource(ev, loop_source);
     try system.evalSource(ev, sequences_source);
+    try system.evalSource(ev, clos_source);
     try system.evalSource(ev, conditions_source);
     try system.evalSource(ev, types_source);
     try system.evalSource(ev, debugger_source);
@@ -286,9 +290,49 @@ fn setSymbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
 fn fboundpFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
+    const name = try ev.functionNameSymbol(args[0]);
+    if (ev.lookupSpecialForm(name) != null) return value.T;
+    return if (ev.env.lookupFunction(name) != null) value.T else value.NIL;
+}
+
+/// The special operators CLHS 3.1.2.1.2.1 lists. zisp implements some
+/// standard macros as special forms too, and those are not among them.
+const special_operators = [_][]const u8{
+    "BLOCK",           "CATCH",   "EVAL-WHEN", "FLET",                "FUNCTION",
+    "GO",              "IF",      "LABELS",    "LET",                 "LET*",
+    "LOAD-TIME-VALUE", "LOCALLY", "MACROLET",  "MULTIPLE-VALUE-CALL", "MULTIPLE-VALUE-PROG1",
+    "PROGN",           "PROGV",   "QUOTE",     "RETURN-FROM",         "SETQ",
+    "SYMBOL-MACROLET", "TAGBODY", "THE",       "THROW",               "UNWIND-PROTECT",
+};
+
+fn specialOperatorPFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
     if (!args[0].isSymbol()) return Error.TypeError;
-    if (ev.lookupSpecialForm(args[0]) != null) return value.T;
-    return if (ev.env.lookupFunction(args[0]) != null) value.T else value.NIL;
+    if (symbol_mod.homePackage(args[0]) == null) return value.NIL;
+    const name = symbol_mod.name(args[0]);
+    for (special_operators) |operator| {
+        if (std.mem.eql(u8, name, operator) and
+            std.mem.eql(u8, symbol_mod.homePackage(args[0]).?.name, "COMMON-LISP")) return value.T;
+    }
+    return value.NIL;
+}
+
+fn fdefinitionFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    const name = try ev.functionNameSymbol(args[0]);
+    return ev.env.lookupFunction(name) orelse ev.unbound(args[0], Error.UnboundFunction);
+}
+
+/// `(%set-fdefinition name function)` is `(setf (fdefinition name) function)`.
+fn setFdefinitionFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    const name = try ev.functionNameSymbol(args[0]);
+    if (!function.isFunction(args[1])) return Error.TypeError;
+    ev.env.defineGlobalFunction(name, args[1]);
+    return args[1];
 }
 
 fn boundpFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -318,10 +362,10 @@ fn makunboundFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn fmakunboundFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
-    symbol_mod.symbol(args[0]).function_cell = value.SPECIAL_UNBOUND;
+    const name = try ev.functionNameSymbol(args[0]);
+    symbol_mod.symbol(name).function_cell = value.SPECIAL_UNBOUND;
     return args[0];
 }
 
@@ -534,6 +578,7 @@ const iteration_source = @embedFile("../lisp/iteration.lisp");
 const lists_source = @embedFile("../lisp/lists.lisp");
 const loop_source = @embedFile("../lisp/loop.lisp");
 const sequences_source = @embedFile("../lisp/sequences.lisp");
+const clos_source = @embedFile("../lisp/clos.lisp");
 const conditions_source = @embedFile("../lisp/conditions.lisp");
 const types_source = @embedFile("../lisp/types.lisp");
 const debugger_source = @embedFile("../lisp/debugger.lisp");
@@ -717,14 +762,17 @@ fn appendFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len == 0) return value.NIL;
     var result = args[args.len - 1];
     var i: usize = args.len - 1;
+    var buffer: [1024]u8 align(16) = undefined;
+    var buffer_first = std.heap.BufferFirstAllocator.init(&buffer, ev.allocator);
+    const allocator = buffer_first.allocator();
     while (i > 0) {
         i -= 1;
         var elems: std.ArrayList(Value) = .empty;
-        defer elems.deinit(ev.allocator);
+        defer elems.deinit(allocator);
         var v = args[i];
         while (!isNil(v)) {
             if (!v.isCons()) return Error.TypeError;
-            try elems.append(ev.allocator, heap.car(v));
+            try elems.append(allocator, heap.car(v));
             v = heap.cdr(v);
         }
         result = try makeList(ev, elems.items, result);
@@ -908,23 +956,30 @@ fn gensymFn(p: *anyopaque, args: []const Value) Error!Value {
 
 /// `(gentemp [prefix-string])`. Interns the first `PREFIXn` name that is
 /// not already interned.
+/// `(gentemp &optional prefix package)`: a symbol named PREFIX and a
+/// counter, interned in PACKAGE (`*package*` by default) under a name
+/// nothing there has yet.
 fn gentempFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
-    if (args.len > 1) return Error.WrongArgCount;
+    if (args.len > 2) return Error.WrongArgCount;
 
     var prefix: []const u8 = "T";
-    if (args.len == 1) {
+    if (args.len >= 1) {
         const a = args[0];
         if (!heap.isString(a)) return Error.TypeError;
         prefix = try heap.stringUtf8Alloc(ev.heap.allocator, a);
     }
+    const pkg = if (args.len == 2)
+        try @import("../eval/special_forms.zig").resolvePackage(ev, args[1])
+    else
+        ev.interner.currentPackage();
 
     var n: i64 = 1;
     while (true) : (n += 1) {
         const name = try std.fmt.allocPrint(ev.allocator, "{s}{d}", .{ prefix, n });
         defer ev.allocator.free(name);
-        if (ev.interner.lookup(name) == null) {
-            return ev.interner.intern(name);
+        if (pkg.findSymbol(name) == null) {
+            return ev.interner.internIn(pkg, name);
         }
     }
 }

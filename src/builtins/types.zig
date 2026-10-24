@@ -7,7 +7,7 @@ const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
-const proto_class = @import("../runtime/proto_class.zig");
+const instances = @import("instances.zig");
 const package_mod = @import("../runtime/package.zig");
 const equality = @import("../runtime/equality.zig");
 const bignum = @import("../runtime/bignum.zig");
@@ -230,7 +230,7 @@ fn classOf(ev: *Evaluator, v: Value) Class {
         .stream => .stream,
         .random_state => .random_state,
         .readtable => .readtable,
-        .structure => .structure_object,
+        .structure => if (instances.isStandardInstance(v)) .t_type else .structure_object,
         else => .t_type,
     };
 }
@@ -241,7 +241,13 @@ fn typeOfFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const v = args[0];
-    if (proto_class.isInstance(ev, v)) return proto_class.className(proto_class.classOf(v));
+    if (instances.isInstance(v)) {
+        const class = instances.classOf(v);
+        const name = instances.classNameOf(class);
+        const named = try instances.classNamed(ev, name);
+        if (named != null and named.?.equalsRaw(class)) return name;
+        return class;
+    }
     if (heap.isStructure(v) and heap.asStructure(v).name.isSymbol()) return heap.asStructure(v).name;
     return ev.interner.intern(nameOf(classOf(ev, v)));
 }
@@ -343,38 +349,10 @@ fn deftypeExpansion(ev: *Evaluator, spec: Value) Error!?Value {
 
 pub fn typep(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     if (spec.isSymbol()) return typepAtomic(ev, v, spec);
-    if (proto_class.isClass(ev, spec)) return typepClass(ev, v, spec);
+    if (try instances.isClassObject(ev, spec)) return instances.classTypep(ev, v, spec);
     if (!spec.isCons()) return Error.ProgramError;
     return typepCompound(ev, v, spec);
 }
-
-/// The class `define-condition` recorded under `name`, or null where the
-/// name is not a condition type.
-fn conditionClassNamed(ev: *Evaluator, name: Value) Error!?Value {
-    const key = try ev.interner.intern("%CONDITION-CLASS");
-    const held = symbol_mod.plistGet(name, key) orelse return null;
-    return if (proto_class.isClass(ev, held)) held else null;
-}
-
-/// A class object stands for the type its name names, except that a
-/// condition class is matched by identity rather than by name.
-fn typepClass(ev: *Evaluator, v: Value, class: Value) Error!bool {
-    const name = proto_class.className(class);
-    if (try conditionClassNamed(ev, name) == null) return typep(ev, v, name);
-    if (!proto_class.isInstance(ev, v)) return false;
-    return proto_class.descendsFrom(proto_class.classOf(v), class);
-}
-
-/// The standard classes whose instances zisp makes none of, or makes only
-/// some of: the stream classes past `file-stream` and `string-stream`, and
-/// the CLOS metaobjects.
-const unmade_classes = [_][]const u8{
-    "SYNONYM-STREAM",  "BROADCAST-STREAM",          "CONCATENATED-STREAM",
-    "TWO-WAY-STREAM",  "ECHO-STREAM",               "GENERIC-FUNCTION",
-    "STANDARD-OBJECT", "STANDARD-GENERIC-FUNCTION", "METHOD",
-    "STANDARD-METHOD", "METHOD-COMBINATION",        "STRUCTURE-CLASS",
-    "STANDARD-CLASS",
-};
 
 fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     const name = symbol_mod.symbol(spec).name;
@@ -388,22 +366,12 @@ fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
         return heap.isStream(v) and heap.asStream(v).kind == .string;
     }
     if (std.mem.eql(u8, name, "COMPILED-FUNCTION")) return contains(.function_type, classOf(ev, v));
-    if (std.mem.eql(u8, name, "CLASS")) return proto_class.isClass(ev, v);
-    if (std.mem.eql(u8, name, "BUILT-IN-CLASS")) {
-        if (!proto_class.isClass(ev, v)) return false;
-        const named = try conditionClassNamed(ev, proto_class.className(v));
-        return named == null or !named.?.equalsRaw(v);
-    }
-    for (unmade_classes) |unmade| {
-        if (std.mem.eql(u8, name, unmade)) return false;
-    }
-    if (try conditionClassNamed(ev, spec)) |class| {
-        if (!proto_class.isInstance(ev, v)) return false;
-        return proto_class.descendsFrom(proto_class.classOf(v), class);
-    }
     if (classNamed(name)) |class| {
         if (class == .nil_type) return false;
         return contains(class, classOf(ev, v));
+    }
+    if (try instances.classNamed(ev, spec)) |class| {
+        if (try instances.isClassObject(ev, class)) return instances.classTypep(ev, v, class);
     }
     if (try deftypeExpansion(ev, spec)) |expansion| return typep(ev, v, expansion);
     // A structure name is a type naming its own instances.
@@ -476,6 +444,9 @@ fn typepCompound(ev: *Evaluator, v: Value, spec: Value) Error!bool {
         std.mem.eql(u8, name, "VECTOR") or std.mem.eql(u8, name, "STRING"))
     {
         return arrayType(ev, v, spec, name);
+    }
+    if (try instances.classNamed(ev, spec)) |class| {
+        if (try instances.isClassObject(ev, class)) return instances.classTypep(ev, v, class);
     }
     if (try deftypeExpansion(ev, spec)) |expansion| return typep(ev, v, expansion);
     return Error.ProgramError;

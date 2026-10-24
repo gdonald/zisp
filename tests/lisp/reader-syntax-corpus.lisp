@@ -22,3 +22,15 @@
   (and (eq (readtable-case copy) :preserve)
        (eq (readtable-case *readtable*) :upcase)))
 (not (eq (copy-readtable) (copy-readtable)))
+
+;; #n= labels an object and #n# refers back to it within the same read.
+(let ((list (read-from-string "(#1=(a b) #1#)")))
+  (eq (first list) (second list)))
+(let ((cell (read-from-string "#1=(a . #1#)")))
+  (eq cell (cdr cell)))
+(let ((vector (read-from-string "#2=#(1 #2#)")))
+  (eq vector (aref vector 1)))
+(equal (read-from-string "(#1=x #1# #2=y #2#)") '(x x y y))
+(eq (handler-case (read-from-string "(#3#)") (error () :unlabeled)) :unlabeled)
+(eq (handler-case (read-from-string "(#4=a #4=b)") (error () :twice)) :twice)
+(equal (read-from-string "#+(or) #5=(a #5#) done") 'done)

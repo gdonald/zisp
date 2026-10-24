@@ -90,9 +90,11 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
     marker.reach = if (scope == .minor) .young else .everything;
     defer marker.deinit();
     if (scope == .minor) try pushCardRoots(&marker, ev);
+    if (scope == .minor) try pushCapturedFrames(&marker, ev);
     try pushRoots(&marker, ev);
     try marker.run();
     marker.breakDeadWeakPointers();
+    if (scope == .major) pruneCapturedFrames(&marker, ev);
 
     // Source positions are keyed on a cons address, so an entry for a
     // dead cons has to go before that address is handed out again. Both
@@ -125,6 +127,29 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
     }
     ev.gc_count += 1;
     ev.gc_requested = false;
+}
+
+/// Every frame a closure captured, for a collection that reaches only the
+/// young generation: a closure a tenured object holds is not reached
+/// through that object, and a store into a captured frame goes through
+/// no write barrier.
+fn pushCapturedFrames(marker: *mark_mod.Marker, ev: *Evaluator) !void {
+    mark_mod.Marker.source = "a captured frame";
+    for (ev.env.captured_frames.items) |frame| try marker.pushFrame(frame);
+}
+
+/// Keep only the captured frames a full mark reached. The rest belong to
+/// closures nothing can call again, and what they hold has been swept, so
+/// no later collection may treat them as roots.
+fn pruneCapturedFrames(marker: *const mark_mod.Marker, ev: *Evaluator) void {
+    var kept: usize = 0;
+    for (ev.env.captured_frames.items) |frame| {
+        if (marker.visited_frames.contains(@intFromPtr(frame))) {
+            ev.env.captured_frames.items[kept] = frame;
+            kept += 1;
+        }
+    }
+    ev.env.captured_frames.shrinkRetainingCapacity(kept);
 }
 
 /// Move the finalizers whose object has gone onto the pending queue.
@@ -216,6 +241,11 @@ fn evacuateNursery(ev: *Evaluator) !void {
     evacuate_mod.Evacuator.root_source = "a dirty card";
     try e.scanCards();
     try updateRoots(&e, ev);
+    // A closure a tenured object holds is reached through nothing the
+    // walk descends into, and a store into its frames goes through no
+    // barrier, so every frame a closure captured is a root here.
+    evacuate_mod.Evacuator.root_source = "a captured frame";
+    for (ev.env.captured_frames.items) |frame| try e.pushFrame(frame);
     evacuate_mod.Evacuator.root_source = "a cached macro expansion";
     try updateExpansions(&e, ev);
     evacuate_mod.Evacuator.root_source = "reachable structure";

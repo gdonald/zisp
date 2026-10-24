@@ -22,6 +22,7 @@ pub fn registerGc(ev: *Evaluator) !void {
     _ = try ev.defineNative("GC", &gcFn);
     _ = try ev.defineNative("ROOM", &roomFn);
     _ = try ev.defineNative("GET-INTERNAL-REAL-TIME", &internalRealTimeFn);
+    _ = try ev.defineNative("%SLEEP-NANOSECONDS", &sleepNanosecondsFn);
     try defineExtension(ev, "MAKE-WEAK-POINTER", &makeWeakPointerFn);
     try defineExtension(ev, "WEAK-POINTER-VALUE", &weakPointerValueFn);
     try defineExtension(ev, "WEAK-POINTERP", &weakPointerPFn);
@@ -140,6 +141,16 @@ fn internalRealTimeFn(p: *anyopaque, args: []const Value) Error!Value {
     const io = ev.io orelse return Error.ProgramError;
     const now = std.Io.Timestamp.now(io, .awake).nanoseconds;
     return Value.fromFixnum(@intCast(@divFloor(now, std.time.ns_per_us)));
+}
+
+/// `(%sleep-nanoseconds n)` waits that long, which is what `sleep` comes to.
+fn sleepNanosecondsFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!args[0].isFixnum() or args[0].toFixnum() < 0) return Error.TypeError;
+    const io = ev.io orelse return Error.ProgramError;
+    io.sleep(std.Io.Duration.fromNanoseconds(args[0].toFixnum()), .awake) catch return Error.ProgramError;
+    return value.NIL;
 }
 
 /// Heap figures as a property list. `(room t)` also prints them.

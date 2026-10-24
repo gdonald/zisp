@@ -7,6 +7,7 @@
 const std = @import("std");
 const value = @import("value.zig");
 const heap = @import("heap.zig");
+const symbol = @import("symbol.zig");
 
 const Value = value.Value;
 
@@ -39,9 +40,11 @@ pub const State = struct {
     }
 };
 
-/// Objects with identity, which are the only ones a label can name.
+/// Objects with identity, which are the only ones a label can name. An
+/// uninterned symbol is one: two `#:g` read back as two symbols.
 fn addressOf(v: Value) ?u64 {
     if (v.isCons()) return v.toConsAddr();
+    if (v.isSymbol()) return if (symbol.homePackage(v) == null) v.toSymbolAddr() else null;
     if (v.tag() != .heap) return null;
     return switch (heap.heapType(v)) {
         .vector, .structure => v.toHeapAddr(),
@@ -72,6 +75,7 @@ fn visit(
         return;
     }
     try seen.put(allocator, address, {});
+    if (v.isSymbol()) return;
 
     if (v.isCons()) {
         try visit(allocator, heap.car(v), state, seen);

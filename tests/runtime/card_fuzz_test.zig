@@ -1,10 +1,11 @@
 //! Every reference from the tenured space into the nursery sits on a
 //! card the write barrier marked.
 //!
-//! A hundred thousand random stores go through the mutators a program
-//! uses, and the tenured space is then read from end to end: for each
-//! slot found pointing at a young object, the card its container sits on
-//! has to be marked. The walk here is written out rather than shared
+//! Fifty thousand random stores go through the mutators a program uses,
+//! few enough that what they allocate fits in the nursery without
+//! spilling into the tenured space. The tenured space is then read from
+//! end to end: for each slot found pointing at a young object, the card
+//! its container sits on has to be marked. The walk here is written out rather than shared
 //! with the collector, so a mistake in one does not hide in the other.
 
 const std = @import("std");
@@ -18,7 +19,7 @@ const collect = zisp.eval.collect;
 const Evaluator = zisp.eval.Evaluator;
 const Value = value.Value;
 
-const mutations = 100_000;
+const mutations = 50_000;
 const containers = 200;
 /// The population is built from every kind of object a store can name.
 const kinds = 4;

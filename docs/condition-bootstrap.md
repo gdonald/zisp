@@ -1,106 +1,35 @@
-# Condition bootstrap
+# Conditions as classes
 
-Conditions are classes, and zisp has no classes yet. Large parts of the
-standard library signal and handle conditions, so the condition system
-cannot wait for CLOS. This is the plan for the small class system that
-carries it until CLOS lands and takes over.
+A condition type is a CLOS class, and a condition is an instance of one.
+This is how that is put together and how the failures natives raise
+become conditions.
 
-The whole of it lives in `src/runtime/proto_class.zig`. Nothing else
-defines a class, a slot, or a precedence list, so the file name is what a
-later grep looks for when CLOS deletes it.
+## The classes
 
-The claim this doc makes is that nothing outside that file has to change
-when it goes: the names, the slots, the initargs and the accessors are
-the ones CLOS will end up with, and only what is behind them differs.
+`condition` is a class whose metaclass is `condition-class`, with `t` as
+its only superclass, so a condition is not a `standard-object`. Every
+other condition type is a subclass of it with the same metaclass.
+`condition-class` is one of the metaclasses whose instances reach their
+slots the standard way, so slot access, `make-instance` and dispatch on a
+condition take the same routes they take for a `standard-class`.
 
-## What zisp has now
+`define-condition` expands to `defclass` with `(:metaclass
+condition-class)`, `condition` standing in for an empty list of parent
+types. The slot options and `:default-initargs` are `defclass`'s, so
+readers, writers and accessors are generic functions, and a slot's
+`:type` is checked on a write.
 
-An error is a Zig error value out of `NativeError`: `TypeError`,
-`UnboundVariable`, `DivisionByZero`, and the rest. `%catch-error` turns
-the one that came out into a keyword named after it, and that keyword is
-what `handler-case` hands its clause. `handler-bind` is a stub that
-evaluates its handlers and drops them. A handler cannot dispatch on a
-type, because a keyword has no type to dispatch on, and it cannot read a
-datum, because nothing carries one.
-
-The evaluator records `error_symbol` at the raise sites that know a name,
-which is how the driver says which variable was unbound. That is the
-only piece of an error's payload that survives today.
-
-## The object
-
-A condition instance is a heap structure, which is the layout
-`defstruct` already uses: a header, one `Value` naming what the object
-is, and a run of slot values. A `defstruct` instance names itself with a
-symbol and a condition names itself with its class object, so the two
-are told apart by what that one field holds and the collector needs no
-new case.
-
-A class is a heap structure as well, naming itself with the symbol
-`%condition-class`. That is what `%condition-class-p` reads, and through
-it what `%condition-p` reads.
-
-CLOS keeps this layout. What it replaces is what the field points at.
-
-## The class
-
-A class is a heap object too, holding:
-
-- `name`, the symbol it was defined under.
-- `direct_supers`, the list of class objects it was defined over.
-- `precedence`, the list of class objects it and its supers linearize to.
-- `slots`, the effective slot list, in the order instances store them.
-- `report`, the `:report` function or `nil`.
-
-`precedence` is computed once, at definition, by the standard
-topological sort: a class precedes its supers, and the supers keep the
-order the definition gave them. Conditions may not be redefined here, so
-nothing recomputes it. `typep` against a class is a membership test on
-`precedence`, and `subtypep` between two classes is the same test.
-
-The hierarchy has no metaclass, no `validate-superclass`, no
-`change-class`, no slot with `:allocation :class`, and no multiple
-dispatch. A condition needs none of them.
-
-## The slots
-
-An effective slot is a name, the list of initarg keywords that fill it,
-an initform closure or `nil`, and the reader and writer function names
-`define-condition` was told to generate. `:type` is parsed and ignored,
-matching what `defstruct` does today.
-
-The effective slot list is the direct slots of each class in `precedence`
-order, least specific first, with a slot named twice keeping the most
-specific definition and its original position. An instance stores one
-`Value` per effective slot, in that order, so a reader is an index and a
-bounds check rather than a search.
-
-A slot that no initarg filled and that has no initform is unbound, which
-is a distinct marker value rather than `nil`: `slot-boundp` has to tell
-the two apart, and `unbound-slot` is one of the conditions being defined.
-
-## Accessors
-
-`define-condition` generates a native reader per `:reader` and
-`:accessor`, closing over the slot index, and a writer per `:accessor`
-and `:writer`. They are ordinary functions, not generic functions. A
-reader called on an object that is not an instance of the class it came
-from signals `type-error`, which is what a real generic function would do
-by failing to find a method.
-
-`slot-value` and `(setf slot-value)` work on these instances by looking
-the name up in the class's slot list.
+`make-condition` makes an instance of the class its type names. A
+compound type specifier such as `(or program-error type-error)` makes one
+of the first condition class that is of that type.
 
 ## Reporting
 
-A class keeps the function its `:report` option named, and a class with
-none of its own uses the nearest one it descends from. `princ`,
-`princ-to-string` and `~A` print a condition by running that function,
-which is what a program reads. `prin1` and `~S` print `#<TYPE>` instead,
-since a condition has no form that reads back.
-
-CLOS replaces this with a `print-object` method, and the two agree on
-what comes out.
+`:report` becomes a `print-object` method on the condition's class that
+runs the report when `*print-escape*` is nil and leaves an escaped print
+to the method below it. The method on `condition` itself prints
+`#<TYPE>`. `princ`, `princ-to-string` and `~A` bind `*print-escape*` to
+nil before `print-object` runs, which is how they get the report.
 
 ## Where the Zig errors go
 
@@ -146,33 +75,3 @@ unwinds out of `eval`, the evaluator builds its condition with
 declines, the condition is left in `error_condition`, so the frames
 further out pass it on without offering it again and `%catch-error`
 hands back that same object.
-
-## What CLOS deletes
-
-`src/runtime/proto_class.zig` is deleted whole. What replaces each
-piece:
-
-| Bootstrap | CLOS |
-| --- | --- |
-| the class object | `standard-class`, through `defclass` |
-| `precedence` computed at definition | `compute-class-precedence-list` |
-| the effective slot list | `compute-slots` and effective slot definitions |
-| generated native readers and writers | generic functions with methods |
-| `typep` against a class by list membership | `typep` through the class hierarchy |
-| the `report` function | `print-object` |
-
-`define-condition` stays, rewritten over `defclass`. The condition
-classes, their slot names, their initargs and their accessors keep the
-names they have, so nothing outside this file changes. The instance
-layout stays as it is.
-
-## What says it worked
-
-- `tests/lisp/handler-search.lisp`, covering nested `handler-bind` with
-  mixed condition types, a handler that declines, mixed
-  `handler-bind`/`handler-case` nesting, and a handler that signals a
-  different condition.
-- The `conditions/` slice of ansi-test, through
-  `tests/run-rt-tests.sh conditions`.
-- Once CLOS has taken over, `grep -r proto_class src/` finds nothing and
-  the same `conditions/` slice still passes.

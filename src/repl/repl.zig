@@ -23,6 +23,7 @@ const builtins = @import("../builtins/builtins.zig");
 const readtables = @import("../builtins/readtables.zig");
 const system = builtins.system;
 const streams = @import("../builtins/streams.zig");
+const format = @import("../builtins/format.zig");
 
 const Value = value.Value;
 const Evaluator = eval_pkg.Evaluator;
@@ -209,10 +210,8 @@ pub const Repl = struct {
     }
 
     fn printResult(self: *Repl, result: Value) Error!void {
-        try printer.write(self.gpa, self.out, result, .{
-            .escape = true,
-            .current_package = self.interner.currentPackage(),
-        });
+        printer.write(self.gpa, self.out, result, format.prin1Settings(&self.ev)) catch |e|
+            return self.ev.printFailure(e);
         try self.writeLine("\n");
     }
 

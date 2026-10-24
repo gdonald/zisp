@@ -232,6 +232,15 @@ pub fn build(b: *std.Build) void {
     const rt_step = b.step("rt-tests", "Run rt-based ansi-test slices: zig build rt-tests -- <slice>...");
     rt_step.dependOn(&rt_run.step);
 
+    // `zig build gclload` loads the suite through its own gclload1.lsp,
+    // in a copy of it, through tests/run-gclload.sh.
+    const gclload_run = b.addSystemCommand(&.{"env"});
+    gclload_run.addPrefixedFileArg("ZISP=", suite_exe.getEmittedBin());
+    gclload_run.addArgs(&.{ "bash", "tests/run-gclload.sh" });
+    gclload_run.step.dependOn(&suite_install.step);
+    const gclload_step = b.step("gclload", "Load the ansi-test suite through its own gclload1.lsp");
+    gclload_step.dependOn(&gclload_run.step);
+
     // `zig build subtypep-sbcl` compares zisp's subtypep with SBCL's
     // through tests/run-subtypep-sbcl-diff.sh. It needs sbcl on the PATH.
     const subtypep_sbcl_run = b.addSystemCommand(&.{"env"});

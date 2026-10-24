@@ -8,6 +8,7 @@ const Value = value.Value;
 pub const Kind = enum(u8) {
     native = 0,
     closure = 1,
+    funcallable = 2,
 };
 
 pub const NativeFn = *const fn (
@@ -50,6 +51,16 @@ pub const Closure = struct {
     def_pos: ?source_pos.SourcePosition = null,
 };
 
+/// An instance of a funcallable class, such as a generic function. It
+/// carries a class and slots the way any instance does, and a call to it
+/// is a call to `function`.
+pub const Funcallable = struct {
+    class: Value,
+    slots: Value,
+    wrapper: Value,
+    function: Value,
+};
+
 pub const HeapFunction = struct {
     header: heap.HeapHeader,
     kind: Kind,
@@ -65,6 +76,7 @@ pub const HeapFunction = struct {
     payload: union {
         native: NativeFn,
         closure: Closure,
+        funcallable: Funcallable,
     },
 };
 
@@ -110,6 +122,34 @@ pub fn allocClosure(
         } },
     };
     return Value.fromHeapAddr(@intFromPtr(obj));
+}
+
+pub fn allocFuncallable(
+    allocator: std.mem.Allocator,
+    class: Value,
+    slots: Value,
+    wrapper: Value,
+) !Value {
+    const obj = try allocator.create(HeapFunction);
+    obj.* = .{
+        .header = .{
+            .type_tag = .function,
+            .size = @sizeOf(HeapFunction),
+        },
+        .kind = .funcallable,
+        .name = null,
+        .payload = .{ .funcallable = .{
+            .class = class,
+            .slots = slots,
+            .wrapper = wrapper,
+            .function = value.NIL,
+        } },
+    };
+    return Value.fromHeapAddr(@intFromPtr(obj));
+}
+
+pub fn isFuncallable(v: Value) bool {
+    return isFunction(v) and asFunction(v).kind == .funcallable;
 }
 
 pub fn allocMacro(

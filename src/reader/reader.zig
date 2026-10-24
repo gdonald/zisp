@@ -34,6 +34,7 @@ const character = @import("../runtime/character.zig");
 const pathname_mod = @import("../runtime/pathname.zig");
 const symbol = @import("../runtime/symbol.zig");
 const source_pos = @import("../runtime/source_pos.zig");
+const stack_mod = @import("../runtime/stack.zig");
 
 const Token = tok.Token;
 const TokenKind = tok.TokenKind;
@@ -177,6 +178,10 @@ pub const Reader = struct {
     /// to null at the start of every public `read` call. Use
     /// `lastErrorPos` to retrieve after a failing read.
     last_error_pos: ?SourcePosition = null,
+    /// The `#n=` labels of the read in progress, as an alist from the
+    /// label's number to its object, held in the first slot of a region
+    /// the outermost `read` opens so a collection sees what they name.
+    labels: ?*stack_mod.Region = null,
 
     pub fn init(tokenizer: *Tokenizer, heap: *Heap, interner: *Interner) Reader {
         return .{
@@ -297,6 +302,13 @@ pub const Reader = struct {
     }
 
     fn readImpl(self: *Reader) Error!?Value {
+        // Labels last for one outermost read.
+        var label_region = self.heap.protect();
+        defer label_region.close();
+        try label_region.push(value.NIL);
+        const outer = self.labels;
+        self.labels = &label_region;
+        defer self.labels = outer;
         while (true) {
             const t = try self.nextToken();
             if (t.kind == .eof) return null;
@@ -340,6 +352,8 @@ pub const Reader = struct {
             .symbol => ReadStep{ .value = try self.parseSymbolOrIntegerAt(t.text, t.pos) },
             .keyword => ReadStep{ .value = try self.parseKeywordAt(t.text, t.pos) },
             .uninterned => ReadStep{ .value = try self.parseUninternedAt(t.text, t.pos) },
+            .hash_label_define => ReadStep{ .value = try self.readLabelDefinition(t) },
+            .hash_label_reference => ReadStep{ .value = try self.readLabelReference(t) },
             .eof => self.errAt(t.pos, Error.EndOfInput),
             // Reader-macro kinds without a handler shouldn't reach here —
             // the standard readtable populates them. A null means user code
@@ -402,6 +416,91 @@ pub const Reader = struct {
                 },
             }
         }
+    }
+
+    fn labelNumber(self: *Reader, t: Token) Error!Value {
+        const n = std.fmt.parseInt(i64, t.text, 10) catch return self.errAt(t.pos, Error.BadToken);
+        return Value.fromFixnum(n);
+    }
+
+    fn labelEntry(self: *Reader, number: Value) ?Value {
+        const region = self.labels orelse return null;
+        var rest = region.items()[0];
+        while (rest.isCons()) : (rest = heap_mod.cdr(rest)) {
+            const entry = heap_mod.car(rest);
+            if (heap_mod.car(entry).equalsRaw(number)) return entry;
+        }
+        return null;
+    }
+
+    /// `#n=object`: OBJECT, which `#n#` names for the rest of the read.
+    /// A reference inside OBJECT reads as a placeholder that is replaced
+    /// by OBJECT once it is complete.
+    fn readLabelDefinition(self: *Reader, t: Token) Error!Value {
+        if (self.suppress) return self.readForm();
+        const number = try self.labelNumber(t);
+        const region = self.labels orelse return self.errAt(t.pos, Error.BadToken);
+        if (self.labelEntry(number) != null) return self.errAt(t.pos, Error.BadToken);
+        // The placeholder is reachable through the alist from here on,
+        // and until then nothing allocates.
+        var held = self.heap.protect();
+        defer held.close();
+        try held.push(try self.heap.allocCons(value.NIL, value.NIL));
+        const placeholder = held.items()[0];
+        const entry = try self.heap.allocCons(number, placeholder);
+        region.setItem(0, try self.heap.allocCons(entry, region.items()[0]));
+        const object = try self.readForm();
+        heap_mod.setCdr(self.heap, entry, object);
+        var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        defer seen.deinit(self.heap.allocator);
+        return self.replacePlaceholder(object, placeholder, object, &seen);
+    }
+
+    fn readLabelReference(self: *Reader, t: Token) Error!Value {
+        if (self.suppress) return value.NIL;
+        const entry = self.labelEntry(try self.labelNumber(t)) orelse
+            return self.errAt(t.pos, Error.BadToken);
+        return heap_mod.cdr(entry);
+    }
+
+    /// TREE with every occurrence of PLACEHOLDER in its conses and its
+    /// vectors replaced by OBJECT, in place.
+    fn replacePlaceholder(
+        self: *Reader,
+        tree: Value,
+        placeholder: Value,
+        object: Value,
+        seen: *std.AutoHashMapUnmanaged(u64, void),
+    ) Error!Value {
+        if (tree.equalsRaw(placeholder)) return object;
+        if (tree.isCons()) {
+            if ((try seen.getOrPut(self.heap.allocator, tree.raw)).found_existing) return tree;
+            var rest = tree;
+            while (rest.isCons()) {
+                const head = heap_mod.car(rest);
+                const replaced = try self.replacePlaceholder(head, placeholder, object, seen);
+                if (!replaced.equalsRaw(head)) heap_mod.setCar(self.heap, rest, replaced);
+                const next = heap_mod.cdr(rest);
+                if (next.equalsRaw(placeholder)) {
+                    heap_mod.setCdr(self.heap, rest, object);
+                    break;
+                }
+                if (!next.isCons()) break;
+                if ((try seen.getOrPut(self.heap.allocator, next.raw)).found_existing) break;
+                rest = next;
+            }
+            return tree;
+        }
+        if (heap_mod.isArray(tree)) {
+            if ((try seen.getOrPut(self.heap.allocator, tree.raw)).found_existing) return tree;
+            const a = heap_mod.asArray(tree);
+            if (a.element_type != .t) return tree;
+            for (heap_mod.arrayElements(tree), 0..) |element, index| {
+                const replaced = try self.replacePlaceholder(element, placeholder, object, seen);
+                if (!replaced.equalsRaw(element)) heap_mod.setSlot(self.heap, tree, index, replaced);
+            }
+        }
+        return tree;
     }
 
     /// `#P"..."` reads the following string and wraps it in a pathname.

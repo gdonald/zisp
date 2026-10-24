@@ -249,6 +249,14 @@ pub const Marker = struct {
 
     fn visitFunction(self: *Marker, v: Value) !void {
         const f = function.asFunction(v);
+        if (f.kind == .funcallable) {
+            const instance = &f.payload.funcallable;
+            try self.push(instance.class);
+            try self.push(instance.slots);
+            try self.push(instance.wrapper);
+            try self.push(instance.function);
+            return;
+        }
         if (f.kind != .closure) return;
         try self.push(f.payload.closure.params);
         try self.push(f.payload.closure.body);

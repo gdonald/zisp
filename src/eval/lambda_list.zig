@@ -73,9 +73,9 @@ fn parseInitSupplied(tail: Value) Error!struct { init: Value, supplied: Value } 
     return .{ .init = init, .supplied = supplied };
 }
 
-fn parse(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!Parsed {
+fn parse(ev: *Evaluator, allocator: std.mem.Allocator, params: Value, macro: bool, top: bool) Error!Parsed {
     var p: Parsed = .{};
-    errdefer p.deinit(ev.allocator);
+    errdefer p.deinit(allocator);
 
     var section: Section = .required;
     var rest_filled = false;
@@ -140,16 +140,16 @@ fn parse(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!Parsed {
         switch (section) {
             .required => {
                 if (!isTarget(elem, macro)) return Error.TypeError;
-                try p.required.append(ev.allocator, elem);
+                try p.required.append(allocator, elem);
             },
             .optional => {
                 if (elem.isSymbol()) {
-                    try p.optional.append(ev.allocator, .{ .name = elem, .init = value.NIL, .supplied = value.NIL });
+                    try p.optional.append(allocator, .{ .name = elem, .init = value.NIL, .supplied = value.NIL });
                 } else if (elem.isCons()) {
                     const name = heap.car(elem);
                     if (!isTarget(name, macro)) return Error.TypeError;
                     const is = try parseInitSupplied(heap.cdr(elem));
-                    try p.optional.append(ev.allocator, .{ .name = name, .init = is.init, .supplied = is.supplied });
+                    try p.optional.append(allocator, .{ .name = name, .init = is.init, .supplied = is.supplied });
                 } else return Error.BadArgList;
             },
             .rest => {
@@ -161,7 +161,7 @@ fn parse(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!Parsed {
             },
             .key => {
                 if (elem.isSymbol()) {
-                    try p.keys.append(ev.allocator, .{
+                    try p.keys.append(allocator, .{
                         .kw = try keywordOf(ev, elem),
                         .name = elem,
                         .init = value.NIL,
@@ -184,12 +184,12 @@ fn parse(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!Parsed {
                         if (!heap.cdr(name_tail).equalsRaw(value.NIL)) return Error.BadArgList;
                     } else return Error.BadArgList;
                     const is = try parseInitSupplied(heap.cdr(elem));
-                    try p.keys.append(ev.allocator, .{ .kw = kw, .name = name, .init = is.init, .supplied = is.supplied });
+                    try p.keys.append(allocator, .{ .kw = kw, .name = name, .init = is.init, .supplied = is.supplied });
                 } else return Error.BadArgList;
             },
             .aux => {
                 if (elem.isSymbol()) {
-                    try p.aux.append(ev.allocator, .{ .name = elem, .init = value.NIL });
+                    try p.aux.append(allocator, .{ .name = elem, .init = value.NIL });
                 } else if (elem.isCons()) {
                     const name = heap.car(elem);
                     if (!name.isSymbol()) return Error.TypeError;
@@ -199,7 +199,7 @@ fn parse(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!Parsed {
                         init = heap.car(tail);
                         if (!heap.cdr(tail).equalsRaw(value.NIL)) return Error.BadArgList;
                     } else if (!tail.equalsRaw(value.NIL)) return Error.BadArgList;
-                    try p.aux.append(ev.allocator, .{ .name = name, .init = init });
+                    try p.aux.append(allocator, .{ .name = name, .init = init });
                 } else return Error.BadArgList;
             },
         }
@@ -217,8 +217,13 @@ pub fn validate(ev: *Evaluator, params: Value, macro: bool) Error!void {
 }
 
 fn validateInner(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!void {
-    var p = try parse(ev, params, macro, top);
-    defer p.deinit(ev.allocator);
+    // A lambda list is parsed on every call, so its parts go on the host
+    // stack unless there are too many of them.
+    var buffer: [1024]u8 align(16) = undefined;
+    var buffer_first = std.heap.BufferFirstAllocator.init(&buffer, ev.allocator);
+    const allocator = buffer_first.allocator();
+    var p = try parse(ev, allocator, params, macro, top);
+    defer p.deinit(allocator);
     if (!macro) return;
     if (p.has_whole and p.whole.isCons()) try validateInner(ev, p.whole, true, false);
     for (p.required.items) |r| {
@@ -239,7 +244,7 @@ fn validateInner(ev: *Evaluator, params: Value, macro: bool, top: bool) Error!vo
 /// on the evaluator's shallow-binding stack instead of a frame slot.
 fn bindVar(ev: *Evaluator, frame: *Frame, sym: Value, val: Value) Error!void {
     if (symbol_mod.symbol(sym).special) return ev.bindSpecial(sym, val);
-    return frame.bind(ev.allocator, sym, val);
+    return frame.bind(ev.env.frameAllocator(), sym, val);
 }
 
 /// Whether one of the `declare` forms leading `body` declares `sym`
@@ -268,7 +273,7 @@ pub fn declaresSpecial(ev: *const Evaluator, body: Value, sym: Value) bool {
 pub fn bindScoped(ev: *Evaluator, frame: *Frame, sym: Value, val: Value, body: Value) Error!void {
     if (declaresSpecial(ev, body, sym)) {
         try ev.bindSpecial(sym, val);
-        return frame.bind(ev.allocator, sym, value.SPECIAL_DYNAMIC);
+        return frame.bind(ev.env.frameAllocator(), sym, value.SPECIAL_DYNAMIC);
     }
     return bindVar(ev, frame, sym, val);
 }
@@ -290,7 +295,7 @@ pub fn markFreeSpecials(ev: *Evaluator, frame: *Frame, body: Value) Error!void {
             while (names.isCons()) : (names = heap.cdr(names)) {
                 const name = heap.car(names);
                 if (name.isSymbol() and frame.find(name) == null) {
-                    try frame.bind(ev.allocator, name, value.SPECIAL_DYNAMIC);
+                    try frame.bind(ev.env.frameAllocator(), name, value.SPECIAL_DYNAMIC);
                 }
             }
         }
@@ -298,8 +303,13 @@ pub fn markFreeSpecials(ev: *Evaluator, frame: *Frame, body: Value) Error!void {
 }
 
 pub fn bindInto(ev: *Evaluator, params: Value, args: []const Value, frame: *Frame, body: Value) Error!void {
-    var p = try parse(ev, params, false, true);
-    defer p.deinit(ev.allocator);
+    // A lambda list is parsed on every call, so its parts go on the host
+    // stack unless there are too many of them.
+    var buffer: [1024]u8 align(16) = undefined;
+    var buffer_first = std.heap.BufferFirstAllocator.init(&buffer, ev.allocator);
+    const allocator = buffer_first.allocator();
+    var p = try parse(ev, allocator, params, false, true);
+    defer p.deinit(allocator);
 
     if (args.len < p.required.items.len) return Error.WrongArgCount;
     var pos: usize = 0;
@@ -426,8 +436,13 @@ fn bindTarget(ev: *Evaluator, target: Value, val: Value, frame: *Frame) Error!vo
 }
 
 fn destructure(ev: *Evaluator, params: Value, whole: Value, args: Value, env: Value, top: bool, frame: *Frame) Error!void {
-    var p = try parse(ev, params, true, top);
-    defer p.deinit(ev.allocator);
+    // A lambda list is parsed on every call, so its parts go on the host
+    // stack unless there are too many of them.
+    var buffer: [1024]u8 align(16) = undefined;
+    var buffer_first = std.heap.BufferFirstAllocator.init(&buffer, ev.allocator);
+    const allocator = buffer_first.allocator();
+    var p = try parse(ev, allocator, params, true, top);
+    defer p.deinit(allocator);
 
     if (p.has_whole) try bindTarget(ev, p.whole, whole, frame);
     if (p.has_env) try bindVar(ev, frame, p.env_var, env);

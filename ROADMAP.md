@@ -274,10 +274,10 @@ Macros are what make the rest of Common Lisp implementable *in Lisp*.
   - [x] 3.6.3. `defsetf` short form, then `defsetf` long form. Long form is NOT skippable: a `defsetf` for `(my-getter obj k)` with side-effecting subforms must call each subform exactly once
   - [x] 3.6.4. `define-setf-expander` (long form). Acceptance: `tests/lisp/setf-expander-corpus.lisp` contains 5 expanders covering: side-effect ordering (each subform evaluated once, left-to-right), multiple store-variables (e.g. for `gethash` returning two values), environment capture, getting and setting share computed temporary, and a generic-function-style place
   - [x] 3.6.5. `get-setf-expansion` returns the 5-value protocol (temps, vals, store-vars, store-form, access-form) per CLHS 5.1.1.2
-- [ ] 3.7. ansi-test framework boots
+- [x] 3.7. ansi-test framework boots
   - [x] 3.7.1. `vendor/ansi-test/rt-package.lsp` loads without error
   - [x] 3.7.2. `vendor/ansi-test/rt.lsp` loads — defines `deftest`, `do-tests`, `pending-tests`
-  - [ ] 3.7.3. `vendor/ansi-test/gclload1.lsp` runs end-to-end
+  - [x] 3.7.3. `vendor/ansi-test/gclload1.lsp` runs end-to-end
   - [x] 3.7.4. `(deftest trivial 1 1)` registers, `(do-tests)` reports it as passing
   - [x] 3.7.5. The `:cl-test` package can be entered
 
@@ -539,57 +539,57 @@ Phase 7: CLOS
 The Common Lisp Object System. Large, but mostly implementable in Lisp once the metaobject hooks exist.
 
 - [ ] 7.1. Classes
-  - [ ] 7.1.1. `defclass`
-  - [ ] 7.1.2. Slot specifications (one session per option):
-    - [ ] 7.1.2a. `:initform` — default value evaluated when slot needs initialization
-    - [ ] 7.1.2b. `:initarg` — keyword binding for `make-instance`
-    - [ ] 7.1.2c. `:accessor` — generates both reader and writer generic functions
-    - [ ] 7.1.2d. `:reader` and `:writer` — separate generation
-    - [ ] 7.1.2e. `:allocation :class` — slot shared across all instances of the class
-    - [ ] 7.1.2f. `:type` — slot writes assert type at `(safety > 0)`
-    - [ ] 7.1.2g. `:documentation` — string accessible via `documentation`
-    - [ ] 7.1.2h. Slot inheritance: combined slot definition merges options from each class in the MRO per AMOP. 4 cases
+  - [x] 7.1.1. `defclass`
+  - [x] 7.1.2. Slot specifications (one session per option):
+    - [x] 7.1.2a. `:initform` — default value evaluated when slot needs initialization
+    - [x] 7.1.2b. `:initarg` — keyword binding for `make-instance`
+    - [x] 7.1.2c. `:accessor` — generates both reader and writer generic functions
+    - [x] 7.1.2d. `:reader` and `:writer` — separate generation
+    - [x] 7.1.2e. `:allocation :class` — slot shared across all instances of the class
+    - [x] 7.1.2f. `:type` — slot writes assert type at `(safety > 0)`
+    - [x] 7.1.2g. `:documentation` — string accessible via `documentation`
+    - [x] 7.1.2h. Slot inheritance: combined slot definition merges options from each class in the MRO per AMOP. 4 cases
   - [ ] 7.1.3. `make-instance`, `initialize-instance`, `shared-initialize`, `reinitialize-instance`. Protocol ordering (per AMOP): `make-instance` → `allocate-instance` → `initialize-instance` (which in standard method calls `shared-initialize` with `t` for slot-names). `:before`/`:after` methods on `initialize-instance` and `shared-initialize` interleave correctly across the inheritance chain (most-specific `:before` first, least-specific `:after` last, around the primary chain). Acceptance: `tests/lisp/init-protocol.lisp` has 12 cases — each defines a class hierarchy with `:before`/`:after` methods on both `initialize-instance` and `shared-initialize` that record the call sequence into a list; asserted call sequence is `equal` to SBCL's
-  - [ ] 7.1.4. `slot-value`, `(setf slot-value)`, `slot-boundp`, `slot-makunbound`
-  - [ ] 7.1.5. `with-slots`, `with-accessors`
-  - [ ] 7.1.6. Class redefinition with `update-instance-for-redefined-class`. Split into 4 milestones:
-    - [ ] 7.1.6a. Lazy detection: redefining a class via `defclass` marks existing instances obsolete WITHOUT touching them. Next slot access triggers `update-instance-for-redefined-class`. `tests/lisp/class-redef-lazy.lisp` — redefine, sleep 100ms, access slot, verify protocol fires
-    - [ ] 7.1.6b. Slot migrations — add slot (initform fires), remove slot (value passed to user method), retain slot (value preserved). 3 cases
-    - [ ] 7.1.6c. User method using removed-slot values to populate new slots (migration pattern). 2 cases including a rename
-    - [ ] 7.1.6d. Edge cases: change slot type (existing value violates new type → initform), redefine superclass list, multiple successive redefinitions on the same instance, redefine-then-`change-class` interaction. 4 cases
-  - [ ] 7.1.7. `change-class` and `update-instance-for-different-class` — lazy migration: redefining a class doesn't touch existing instances until next access; `change-class` migrates slots correctly. Acceptance: 10 specific test cases in `tests/lisp/clos-redef.lisp` pass, including: shared-slot retention, slot-type widening, slot deletion
-- [ ] 7.2. Generic functions and methods
-  - [ ] 7.2.1. `defgeneric`
-  - [ ] 7.2.2. `defmethod` with required and `&optional`/`&rest`/`&key` parameters
-  - [ ] 7.2.3. Specialization on classes and on `eql` specializers
-  - [ ] 7.2.4. Method combination — standard (`:before`, `:after`, `:around`, primary). Acceptance: a generic function with 2 `:before`, 2 `:after`, 2 `:around`, and 3 primary methods executes in correct order (test asserts the exact trace)
-  - [ ] 7.2.5. Built-in method combinations: `+`, `and`, `or`, `list`, `append`, `nconc`, `min`, `max`, `progn`, `standard`. Acceptance: each combination has a 3-method test that asserts the combined return value
-  - [ ] 7.2.6. `define-method-combination` short form — `(define-method-combination my-and :identity-with-one-argument t)` works with 4+ methods
-  - [ ] 7.2.7. `define-method-combination` long form. Split into 4 milestones (this is THE bullet historically stopped at — no excuses, no "would you like to work on something else?"):
-    - [ ] 7.2.7a. Parse the long-form syntax `(define-method-combination name lambda-list method-group-spec* options* body)`. `tests/lisp/dmc-parse.lisp` has 5 cases asserting the parsed AST matches expected
-    - [ ] 7.2.7b. Method qualification matching: given a list of methods and a method-group-spec `(group-name pattern* options)`, correctly assign each method to a group OR signal `invalid-method-error`. 5 test cases including: simple qualifier match, predicate match, `*` wildcard, multi-qualifier match, no-match-error
-    - [ ] 7.2.7c. Effective method body synthesis: substitute `call-method`/`make-method` bindings into the body and produce the effective method form. 4 test cases including a method combination that calls each group in non-default order
-    - [ ] 7.2.7d. Full integration: `vendor/ansi-test/objects/define-method-combination*.lsp` ≥ 95% pass rate
-  - [ ] 7.2.8. `call-next-method`, `next-method-p` — including `call-next-method` with new arguments
-- [ ] 7.3. Class precedence
-  - [ ] 7.3.1. Multiple inheritance
-  - [ ] 7.3.2. C3 linearization for class precedence list. Inconsistent hierarchies (no valid linearization exists) MUST signal `error` at `defclass` time — silently producing a wrong order is the failure mode to prevent. Acceptance: 5 cases in `tests/lisp/c3-corpus.lisp` covering: diamond inheritance, multiple-inheritance ordering preservation, the canonical inconsistent hierarchy from the C3 paper (must error), depth-first-but-monotonic edge case, MRO across 5+ levels
-  - [ ] 7.3.3. `class-precedence-list` reflection
+  - [x] 7.1.4. `slot-value`, `(setf slot-value)`, `slot-boundp`, `slot-makunbound`
+  - [x] 7.1.5. `with-slots`, `with-accessors`
+  - [x] 7.1.6. Class redefinition with `update-instance-for-redefined-class`. Split into 4 milestones:
+    - [x] 7.1.6a. Lazy detection: redefining a class via `defclass` marks existing instances obsolete WITHOUT touching them. Next slot access triggers `update-instance-for-redefined-class`. `tests/lisp/class-redef-lazy.lisp` — redefine, sleep 100ms, access slot, verify protocol fires
+    - [x] 7.1.6b. Slot migrations — add slot (initform fires), remove slot (value passed to user method), retain slot (value preserved). 3 cases
+    - [x] 7.1.6c. User method using removed-slot values to populate new slots (migration pattern). 2 cases including a rename
+    - [x] 7.1.6d. Edge cases: change slot type (existing value violates new type → initform), redefine superclass list, multiple successive redefinitions on the same instance, redefine-then-`change-class` interaction. 4 cases
+  - [x] 7.1.7. `change-class` and `update-instance-for-different-class` — lazy migration: redefining a class doesn't touch existing instances until next access; `change-class` migrates slots correctly. Acceptance: 10 specific test cases in `tests/lisp/clos-redef.lisp` pass, including: shared-slot retention, slot-type widening, slot deletion
+- [x] 7.2. Generic functions and methods
+  - [x] 7.2.1. `defgeneric`
+  - [x] 7.2.2. `defmethod` with required and `&optional`/`&rest`/`&key` parameters
+  - [x] 7.2.3. Specialization on classes and on `eql` specializers
+  - [x] 7.2.4. Method combination — standard (`:before`, `:after`, `:around`, primary). Acceptance: a generic function with 2 `:before`, 2 `:after`, 2 `:around`, and 3 primary methods executes in correct order (test asserts the exact trace)
+  - [x] 7.2.5. Built-in method combinations: `+`, `and`, `or`, `list`, `append`, `nconc`, `min`, `max`, `progn`, `standard`. Acceptance: each combination has a 3-method test that asserts the combined return value
+  - [x] 7.2.6. `define-method-combination` short form — `(define-method-combination my-and :identity-with-one-argument t)` works with 4+ methods
+  - [x] 7.2.7. `define-method-combination` long form. Split into 4 milestones (this is THE bullet historically stopped at — no excuses, no "would you like to work on something else?"):
+    - [x] 7.2.7a. Parse the long-form syntax `(define-method-combination name lambda-list method-group-spec* options* body)`. `tests/lisp/dmc-parse.lisp` has 5 cases asserting the parsed AST matches expected
+    - [x] 7.2.7b. Method qualification matching: given a list of methods and a method-group-spec `(group-name pattern* options)`, correctly assign each method to a group OR signal `invalid-method-error`. 5 test cases including: simple qualifier match, predicate match, `*` wildcard, multi-qualifier match, no-match-error
+    - [x] 7.2.7c. Effective method body synthesis: substitute `call-method`/`make-method` bindings into the body and produce the effective method form. 4 test cases including a method combination that calls each group in non-default order
+    - [x] 7.2.7d. Full integration: `vendor/ansi-test/objects/define-method-combination*.lsp` ≥ 95% pass rate
+  - [x] 7.2.8. `call-next-method`, `next-method-p` — including `call-next-method` with new arguments
+- [x] 7.3. Class precedence
+  - [x] 7.3.1. Multiple inheritance
+  - [x] 7.3.2. C3 linearization for class precedence list. Inconsistent hierarchies (no valid linearization exists) MUST signal `error` at `defclass` time — silently producing a wrong order is the failure mode to prevent. Acceptance: 5 cases in `tests/lisp/c3-corpus.lisp` covering: diamond inheritance, multiple-inheritance ordering preservation, the canonical inconsistent hierarchy from the C3 paper (must error), depth-first-but-monotonic edge case, MRO across 5+ levels
+  - [x] 7.3.3. `class-precedence-list` reflection
 - [ ] 7.4. Metaobject Protocol (AMOP subset)
-  - [ ] 7.4.1. `class-of`, `find-class`, `(setf find-class)`
-  - [ ] 7.4.2. `standard-class`, `standard-object`, `standard-generic-function`, `standard-method`
-  - [ ] 7.4.3. `compute-applicable-methods`. Split:
-    - [ ] 7.4.3a. Filter methods whose specializers match the call's argument classes (using class precedence list). 4 cases
-    - [ ] 7.4.3b. Sort applicable methods by specificity per AMOP (left-to-right argument-position priority, then class precedence). 4 cases
-    - [ ] 7.4.3c. `eql` specializers participate in matching and are most-specific. 3 cases
-    - [ ] 7.4.3d. Verified with user-defined `:method-class` returning a custom subclass (proves the mechanism is overridable, not hard-coded). 1 case
-  - [ ] 7.4.4. `compute-effective-method` — verified by a user-defined method combination producing correct effective methods for 3+ method definitions. The `:around` method MUST transform the inner result (e.g. wrap in `(list :around-result ...)`) — a no-op `:around` would pass a sloppy implementation, so the transformation is the assertion
-  - [ ] 7.4.5. `slot-definition` introspection per AMOP. MUST expose: `slot-definition-name`, `slot-definition-type`, `slot-definition-allocation`, `slot-definition-initargs`, `slot-definition-initform`, `slot-definition-initfunction`, `slot-definition-readers`, `slot-definition-writers`. `class-slots` returns effective slot definitions; `class-direct-slots` returns direct (per-class) ones. Acceptance: 6 cases in `tests/lisp/slot-introspection.lisp` defining classes that exercise each accessor with non-default values; introspection results match the source declaration
-  - [ ] 7.4.6. `validate-superclass` controls valid metaclass combinations. Default: `standard-class` permits only `standard-class`/`standard-object` superclasses. Acceptance: 3 cases in `tests/lisp/validate-superclass.lisp`: (a) defining a class with a metaclass-incompatible superclass signals `error` at `defclass` time, (b) a user metaclass with an explicit `validate-superclass` method allows the combination, (c) the error message names which superclass failed validation
+  - [x] 7.4.1. `class-of`, `find-class`, `(setf find-class)`
+  - [x] 7.4.2. `standard-class`, `standard-object`, `standard-generic-function`, `standard-method`
+  - [x] 7.4.3. `compute-applicable-methods`. Split:
+    - [x] 7.4.3a. Filter methods whose specializers match the call's argument classes (using class precedence list). 4 cases
+    - [x] 7.4.3b. Sort applicable methods by specificity per AMOP (left-to-right argument-position priority, then class precedence). 4 cases
+    - [x] 7.4.3c. `eql` specializers participate in matching and are most-specific. 3 cases
+    - [x] 7.4.3d. Verified with user-defined `:method-class` returning a custom subclass (proves the mechanism is overridable, not hard-coded). 1 case
+  - [x] 7.4.4. `compute-effective-method` — verified by a user-defined method combination producing correct effective methods for 3+ method definitions. The `:around` method MUST transform the inner result (e.g. wrap in `(list :around-result ...)`) — a no-op `:around` would pass a sloppy implementation, so the transformation is the assertion
+  - [x] 7.4.5. `slot-definition` introspection per AMOP. MUST expose: `slot-definition-name`, `slot-definition-type`, `slot-definition-allocation`, `slot-definition-initargs`, `slot-definition-initform`, `slot-definition-initfunction`, `slot-definition-readers`, `slot-definition-writers`. `class-slots` returns effective slot definitions; `class-direct-slots` returns direct (per-class) ones. Acceptance: 6 cases in `tests/lisp/slot-introspection.lisp` defining classes that exercise each accessor with non-default values; introspection results match the source declaration
+  - [x] 7.4.6. `validate-superclass` controls valid metaclass combinations. Default: `standard-class` permits only `standard-class`/`standard-object` superclasses. Acceptance: 3 cases in `tests/lisp/validate-superclass.lisp`: (a) defining a class with a metaclass-incompatible superclass signals `error` at `defclass` time, (b) a user metaclass with an explicit `validate-superclass` method allows the combination, (c) the error message names which superclass failed validation
   - [ ] 7.4.7. Phase 6's hand-rolled condition class system is **deleted** here; conditions are real CLOS instances. Acceptance: `grep -r "minimal-condition-class" src/` returns nothing; all `conditions/` ansi-test still passes
-- [ ] 7.5. `print-object`, `describe-object`
-  - [ ] 7.5.1. `print-object` as the universal printer hook. The Phase 1 printer is rewritten to dispatch through `print-object` for ALL recursive printing — top-level, nested in lists, nested in vectors, nested as slot values of other instances, inside `format` `~A`/`~S` directives. Acceptance: defining `(defmethod print-object ((x my-class) stream) (format stream "<MY ~A>" (slot-value x 'name)))` causes that method to fire in all 5 contexts; `tests/lisp/print-object-dispatch.lisp` asserts the literal output for each. NOT bail-able to "top-level dispatch only" — the recursive contexts are the test
-  - [ ] 7.5.2. `describe`, `describe-object`
+- [x] 7.5. `print-object`, `describe-object`
+  - [x] 7.5.1. `print-object` as the universal printer hook. The Phase 1 printer is rewritten to dispatch through `print-object` for ALL recursive printing — top-level, nested in lists, nested in vectors, nested as slot values of other instances, inside `format` `~A`/`~S` directives. Acceptance: defining `(defmethod print-object ((x my-class) stream) (format stream "<MY ~A>" (slot-value x 'name)))` causes that method to fire in all 5 contexts; `tests/lisp/print-object-dispatch.lisp` asserts the literal output for each. NOT bail-able to "top-level dispatch only" — the recursive contexts are the test
+  - [x] 7.5.2. `describe`, `describe-object`
 
 Exit criteria: can load a non-trivial CLOS-using library from Quicklisp (e.g. `alexandria`).
 

@@ -106,13 +106,105 @@ test "get-setf-expansion returns the 5-value protocol for a cons place" {
     );
 }
 
-test "get-setf-expansion rejects a place with no expander" {
+test "a place with no expander stores through its setf function" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
 
-    try testing.expectError(Error.ProgramError, fx.evalStr(
-        "(get-setf-expansion '(no-such-accessor x))",
-    ));
+    try fx.expectT(
+        \\(multiple-value-bind (temps vals stores store-form)
+        \\    (get-setf-expansion '(no-such-accessor x))
+        \\  (equal store-form
+        \\         (list* 'funcall '(function (setf no-such-accessor)) (car stores) temps)))
+    );
+}
+
+test "a place whose head is a macro is expanded before it is stored into" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(progn (defmacro first-of (x) `(car ,x))
+        \\       (defvar *pair* (list 1 2))
+        \\       (setf (first-of *pair*) 9)
+        \\       (equal *pair* '(9 2)))
+    );
+}
+
+test "defun defines a setf function that setf calls with the new value first" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(progn (defun (setf second-of) (new list) (setf (cadr list) new))
+        \\       (defvar *triple* (list 1 2 3))
+        \\       (and (eql (setf (second-of *triple*) 20) 20)
+        \\            (equal *triple* '(1 20 3))))
+    );
+}
+
+test "a setf function is reached through function, fdefinition and fboundp" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(progn (defun (setf named-thing) (new x) (list new x))
+        \\       (and (fboundp '(setf named-thing))
+        \\            (eq #'(setf named-thing) (fdefinition '(setf named-thing)))
+        \\            (equal (funcall #'(setf named-thing) 1 2) '(1 2))))
+    );
+    try fx.expectT("(not (fboundp '(setf never-defined)))");
+}
+
+test "fmakunbound removes a setf function" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(progn (defun (setf gone) (new x) (list new x))
+        \\       (fmakunbound '(setf gone))
+        \\       (not (fboundp '(setf gone))))
+    );
+}
+
+test "setf of fdefinition installs a setf function" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(progn (setf (fdefinition '(setf installed)) (lambda (new x) (cons new x)))
+        \\       (equal (funcall #'(setf installed) 1 2) '(1 . 2)))
+    );
+}
+
+test "flet and labels bind setf functions locally" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try fx.expectT(
+        \\(equal (flet (((setf local-place) (new x) (list :set new x)))
+        \\         (setf (local-place 1) 2))
+        \\       '(:set 2 1))
+    );
+    try fx.expectT(
+        \\(equal (labels (((setf local-place) (new x) (list new x)))
+        \\         (funcall #'(setf local-place) 3 4))
+        \\       '(3 4))
+    );
+}
+
+test "a malformed function name is a type error" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    try testing.expectError(Error.TypeError, fx.evalStr("(fboundp '(setf))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(fboundp '(setf a b))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(fboundp '(setf 1))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(fboundp '(other a))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(fboundp '(1 a))"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(fboundp 5)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(setf (fdefinition 'not-a-function) 5)"));
+    try testing.expectError(Error.UnboundFunction, fx.evalStr("(fdefinition '(setf never-defined))"));
+    try testing.expectError(Error.UnboundFunction, fx.evalStr("#'(setf never-defined)"));
 }
 
 // --- setf ---

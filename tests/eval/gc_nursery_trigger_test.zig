@@ -74,11 +74,15 @@ test "the garbage a long-running form makes does not reach the tenured space" {
     fx.heap.torture = 0;
     fx.heap.objects.quarantine = false;
 
+    // Bringing the runtime up leaves cards dirty, and the first collection
+    // after it scans them all, which would put the next one off. That
+    // first collection is taken here, so the loop is what is measured.
+    try zisp.eval.collect.collect(&fx.ev);
+    const before = fx.heap.objects.stats.region_bytes;
     try zisp.builtins.system.loadPath(&fx.ev, corpus_path);
     // The loop hands out about 3.2 MB of conses. Without a collection
     // while it runs, every byte past the first megabyte would come out
     // of the tenured regions and they would have to grow to hold it.
-    const grown = fx.heap.objects.stats.region_bytes -
-        2 * fx.heap.objects.nursery_capacity;
+    const grown = fx.heap.objects.stats.region_bytes - before;
     try testing.expect(grown < fx.heap.objects.nursery_capacity);
 }

@@ -31,28 +31,6 @@ ansi-test's own `compile-and-load` does through `merge-pathnames`."
   (declare (ignore force))
   (load (concatenate 'string "auxiliary/" path)))
 
-;; `random-aux.lsp` defines one method combination for its randomized
-;; generators. Nothing in this slice calls through it, and zisp has no
-;; `define-method-combination` yet, so the definition is read and
-;; dropped.
-(defmacro define-method-combination (&rest ignored)
-  (declare (ignore ignored))
-  nil)
-
-;; `ansi-aux.lsp` defines one generic function, `is-similar*`, with a
-;; method per type. zisp has no CLOS yet, so the definitions are read and
-;; a call to what they would have defined fails rather than answering
-;; something made up.
-(defmacro defgeneric (name lambda-list &rest options)
-  (declare (ignore lambda-list options))
-  `(defun ,name (&rest arguments)
-     (declare (ignore arguments))
-     (error "~s needs generic functions, which are not defined yet." ',name)))
-
-(defmacro defmethod (&rest ignored)
-  (declare (ignore ignored))
-  nil)
-
 (load "auxiliary/ansi-aux-macros.lsp")
 
 ;; The notes a test can be tagged with. An array zisp is asked to make of
@@ -61,33 +39,8 @@ ansi-test's own `compile-and-load` does through `merge-pathnames`."
 (load "notes.lsp")
 (rt::disable-note :nil-vectors-are-strings)
 
-;; `ansi-aux.lsp` reads `*condition-types*` out of `universe.lsp`, which
-;; builds its object universe with CLOS. The list itself needs none of
-;; that, so it is repeated here rather than pulling that file in.
-(defparameter *condition-types*
-  '(arithmetic-error cell-error condition control-error division-by-zero
-    end-of-file error file-error floating-point-inexact
-    floating-point-invalid-operation floating-point-underflow
-    floating-point-overflow package-error parse-error print-not-readable
-    program-error reader-error serious-condition simple-condition
-    simple-error simple-type-error simple-warning storage-condition
-    stream-error style-warning type-error unbound-slot unbound-variable
-    undefined-function warning))
-
-;; `universe.lsp` builds its object list with CLOS, which zisp has no
-;; part of yet. What the files here want of it is a spread of objects of
-;; different types, so one is put together from the types zisp has. A
-;; test reading it covers those rather than the whole standard set.
-(defparameter *mini-universe*
-  (list nil t 'a :b 0 1 -1 1000000 12345678901234567890 1/2 -3/4
-        1.5 1.5d0 #\a #\Space "" "abc" (list 1) (cons 1 2)
-        (make-array 3 :initial-element 0)
-        (make-hash-table) (find-package "COMMON-LISP")
-        (pathname "foo.txt") *standard-output* *readtable* #'car
-        (make-condition 'simple-error :format-control "x")))
-
-(defparameter *universe* *mini-universe*)
-
+(load "universe.lsp")
+(load "cl-symbol-names.lsp")
 (load "auxiliary/random-aux.lsp")
 (load "auxiliary/ansi-aux.lsp")
 (load "auxiliary/printer-aux.lsp")

@@ -1,185 +1,73 @@
-;;; Conditions as classes.
+;;; Conditions.
 ;;;
-;;; The class objects themselves come from the runtime. What is here is
-;;; `define-condition`, the standard hierarchy it defines, and the
-;;; readers of a condition's slots.
+;;; A condition type is a class whose metaclass is `condition-class`, and
+;;; `define-condition` is `defclass` with that metaclass and a
+;;; `print-object` method for its report. What is here is the standard
+;;; hierarchy, making and signaling conditions, and restarts.
 
 (in-package "COMMON-LISP")
 
-;; A class object is kept on its name's property list, which is where
-;; `find-condition-class` and every type test look for it.
 (defun find-condition-class (name &optional (errorp t))
-  (let ((class (get name '%condition-class)))
-    (if class
-        class
-        (if errorp
-            (error "~S does not name a condition type." name)
-            nil))))
+  "The class NAME names when it is a condition type."
+  (let ((class (find-class name nil)))
+    (cond ((and class (%condition-class-object-p class)) class)
+          (errorp (error "~S does not name a condition type." name))
+          (t nil))))
+
+(defun %condition-class-object-p (class)
+  (and (%class-p class)
+       (%subclassp class (find-class 'condition))))
+
+(defun %condition-p (object)
+  (and (%instance-p object)
+       (%condition-class-object-p (%instance-class object))))
+
+(defun conditionp (object)
+  (%condition-p object))
 
 (defun condition-type-name (condition)
-  (%condition-class-name (%condition-class-of condition)))
-
-(defun condition-class-name-p (name)
-  (and (symbolp name) (get name '%condition-class) t))
-
-;; Every condition class name, which is what `subtypep` walks to find the
-;; classes descending from one.
-(defvar *%condition-class-names* (list 'condition))
+  (class-name (class-of condition)))
 
 ;;; --- define-condition ---
 
-(defun %condition-slot-option (options key)
-  "The value following KEY in a slot's option plist, or nil."
-  (if (null options)
-      nil
-      (if (eq (car options) key)
-          (cadr options)
-          (%condition-slot-option (cddr options) key))))
-
-(defun %condition-slot-option-p (options key)
-  (if (null options)
-      nil
-      (if (eq (car options) key)
-          t
-          (%condition-slot-option-p (cddr options) key))))
-
-(defun %condition-slot-values (options keys)
-  "Every value in a slot's option plist whose key is in KEYS, in order."
-  (if (null options)
-      nil
-      (if (member (car options) keys)
-          (cons (cadr options) (%condition-slot-values (cddr options) keys))
-          (%condition-slot-values (cddr options) keys))))
-
-(defun %condition-check-slot-options (options)
-  (unless (null options)
-    (unless (member (car options)
-                    '(:initarg :initform :reader :writer :accessor
-                      :type :documentation))
-      (error "~S is not a slot option of define-condition." (car options)))
-    (%condition-check-slot-options (cddr options))))
-
-(defun %condition-slot-spec (slot thunk)
-  "One slot description turned into the (name initargs initform) triple
-the runtime stores. THUNK is the initform, already closed over the
-environment the definition appeared in."
-  (if (atom slot)
-      (list slot (list (intern (symbol-name slot) "KEYWORD")) nil)
-      (let ((options (cdr slot)))
-        (%condition-check-slot-options options)
-        (list (car slot)
-              (%condition-slot-values options '(:initarg))
-              thunk))))
-
-(defun %condition-slot-initform-form (slot)
-  "The form the expansion wraps in a thunk for one slot, or nil where the
-slot has no initform."
-  (if (atom slot)
-      nil
-      (if (%condition-slot-option-p (cdr slot) :initform)
-          `(lambda () ,(%condition-slot-option (cdr slot) :initform))
-          nil)))
-
-(defun %condition-slot-readers (slot)
-  (unless (atom slot)
-    (%condition-slot-values (cdr slot) '(:reader :accessor))))
-
-(defun %condition-slot-writers (slot)
-  (unless (atom slot)
-    (%condition-slot-values (cdr slot) '(:writer :accessor))))
-
-(defun %condition-slot-name (slot)
-  (if (atom slot) slot (car slot)))
-
-(defun %condition-report-form (options)
-  "The :report option turned into a function of the condition and a
-stream. A string reports itself, anything else is a function designator."
+(defun %condition-report-method (name options)
+  "The :report option as a `print-object` method that runs the report
+when the condition is printed without escapes. A string reports itself,
+anything else names a function of the condition and a stream."
   (let ((report (assoc :report options)))
-    (if (null report)
-        nil
-        (if (stringp (cadr report))
-            `(lambda (%condition %stream)
-               (declare (ignore %condition))
-               (write-string ,(cadr report) %stream))
-            `(lambda (%condition %stream)
-               (funcall (function ,(cadr report)) %condition %stream))))))
+    (when report
+      `((defmethod print-object ((%condition ,name) %stream)
+          (if *print-escape*
+              (call-next-method)
+              ,(if (stringp (cadr report))
+                   `(write-string ,(cadr report) %stream)
+                   `(funcall (function ,(cadr report)) %condition %stream))))))))
 
-(defun %condition-default-initargs (options)
-  (let ((given (assoc :default-initargs options)))
-    (if given (cdr given) nil)))
+(defun %condition-class-options (options)
+  (let ((result nil))
+    (dolist (option options (nreverse result))
+      (unless (and (consp option) (%memq (car option) '(:report :default-initargs :documentation)))
+        (%program-error "~S is not a define-condition option." option))
+      (unless (eq (car option) :report)
+        (push option result)))))
 
-(defun %condition-writer-name (given)
-  "The symbol a :writer or :accessor option names. `(setf foo)` names the
-same place `foo` reads, so it comes to the symbol."
-  (if (consp given) (cadr given) given))
-
-(defun %condition-slot-reader (name slot-name)
-  "A reader closing over the slot's name rather than its index, so one
-inherited by a subclass finds the slot wherever that subclass moved it."
-  (lambda (condition)
-    (unless (%condition-typep condition (find-condition-class name))
-      (error "~S is not a ~S." condition name))
-    (%condition-ref condition (%condition-slot-index condition slot-name))))
-
-(defun %condition-slot-setter (name slot-name)
-  (lambda (condition new)
-    (unless (%condition-typep condition (find-condition-class name))
-      (error "~S is not a ~S." condition name))
-    (%set-condition-ref condition
-                        (%condition-slot-index condition slot-name)
-                        new)))
-
-(defun %define-condition-accessors (name slot)
-  "The readers and writers one slot description asks for, defined rather
-than expanded into: what a definition costs is then a few closures.
-A writer that names a place is reached through `setf` rather than through
-a function named `(setf ...)`, which zisp has no namespace for yet."
-  (let ((slot-name (%condition-slot-name slot)))
-    (dolist (reader (%condition-slot-readers slot))
-      (setf (symbol-function reader) (%condition-slot-reader name slot-name)))
-    (let ((writers (%condition-slot-writers slot)))
-      (unless (null writers)
-        (let ((setter (gensym "SET-SLOT")))
-          (setf (symbol-function setter) (%condition-slot-setter name slot-name))
-          (dolist (writer writers)
-            (let ((place (%condition-writer-name writer)))
-              (%put place '%setf-expander
-                    (%make-short-setf-expander place setter)))))))))
-
-(defun %define-condition (name supers slots thunks report default-initargs)
-  "What a `define-condition` comes to once its initforms have been closed
-over. Keeping the work here rather than in the expansion is what makes a
-definition cost a few calls instead of a macro walk over every slot."
-  (pushnew name *%condition-class-names*)
-  (%put name '%condition-class
-        (%make-condition-class
-         name
-         (mapcar #'find-condition-class (or supers '(condition)))
-         (%condition-slot-specs slots thunks)
-         report))
-  (%put name '%condition-default-initargs default-initargs)
-  (dolist (slot slots) (%define-condition-accessors name slot))
-  name)
-
-(defun %condition-slot-specs (slots thunks)
-  (if (null slots)
-      nil
-      (cons (%condition-slot-spec (car slots) (car thunks))
-            (%condition-slot-specs (cdr slots) (cdr thunks)))))
-
-(defmacro define-condition (name supers slots &rest options)
-  `(%define-condition ',name ',supers ',slots
-                      (list ,@(mapcar #'%condition-slot-initform-form slots))
-                      ,(%condition-report-form options)
-                      (list ,@(%condition-default-initargs options))))
+(defmacro define-condition (name parent-types slot-specs &rest options)
+  `(progn
+     (defclass ,name ,(or parent-types '(condition)) ,slot-specs
+       (:metaclass condition-class)
+       ,@(%condition-class-options options))
+     ,@(%condition-report-method name options)
+     ',name))
 
 ;;; --- the root, then the standard hierarchy ---
 
-;; `condition` has no supers, so it cannot go through the macro's default
-;; of inheriting from itself.
-(%put 'condition '%condition-class
-      (%make-condition-class 'condition nil nil nil))
-(%put 'condition '%condition-default-initargs nil)
+(defclass condition (t) () (:metaclass condition-class))
+
+(defmethod print-object ((condition condition) stream)
+  (write-string "#<" stream)
+  (prin1 (class-name (class-of condition)) stream)
+  (write-string ">" stream)
+  condition)
 
 (define-condition serious-condition (condition) ())
 (define-condition error (serious-condition) ())
@@ -269,33 +157,26 @@ definition cost a few calls instead of a macro walk over every slot."
 
 ;;; --- making one ---
 
-(defun %condition-fill-slot (condition slot initargs)
-  "One slot of a fresh condition: whichever initarg named it comes
-first, and the initform where none did."
-  (let ((index (%condition-slot-index condition (car slot)))
-        (filled nil))
-    (dolist (initarg (cadr slot))
-      (unless filled
-        (let ((tail (member initarg initargs)))
-          (when tail
-            (%set-condition-ref condition index (cadr tail))
-            (setq filled t)))))
-    (when (and (not filled) (caddr slot))
-      (%set-condition-ref condition index (funcall (caddr slot))))))
-
 (defun make-condition (type &rest initargs)
-  (let* ((class (if (%condition-class-p type) type (find-condition-class type)))
-         (condition (%allocate-condition class))
-         (defaults (if (%condition-class-p type)
-                       nil
-                       (get type '%condition-default-initargs)))
-         (all (append initargs defaults)))
-    (dolist (slot (%condition-class-slots class))
-      (%condition-fill-slot condition slot all))
-    condition))
+  (let ((class (cond ((%class-p type) type)
+                     ((symbolp type) (find-class type nil))
+                     (t (%condition-class-of-type type)))))
+    (unless (and class (%condition-class-object-p class))
+      (error "~S does not name a condition type." type))
+    (apply #'make-instance class initargs)))
 
-(defun conditionp (object)
-  (%condition-p object))
+(defun %condition-class-of-type (type)
+  "A condition class whose instances are of the compound type TYPE, or
+where none is, the first condition class TYPE names."
+  (or (dolist (class (reverse (%class-descendants (find-class 'condition))) nil)
+        (when (subtypep class type) (return class)))
+      (labels ((first-named (spec)
+                 (cond ((and (symbolp spec) (find-condition-class spec nil)))
+                       ((consp spec) (some #'first-named (cdr spec)))
+                       (t nil))))
+        (first-named type))))
+
+(define-condition %simple-program-error (simple-condition program-error) ())
 
 ;;; --- restarts ---
 
@@ -537,7 +418,9 @@ whose raise site recorded its datum and the type it wanted."
         ((subtypep type 'type-error)
          (let ((mismatch (%last-type-mismatch)))
            (list :datum (car mismatch) :expected-type (cadr mismatch))))
-        (t (list :format-control "~A" :format-arguments (list caught)))))
+        ((subtypep type 'simple-condition)
+         (list :format-control "~A" :format-arguments (list caught)))
+        (t nil)))
 
 (defun %coerce-caught (caught)
   "What a catcher hands a handler: the condition an `error` carried, or
@@ -551,7 +434,9 @@ one built to stand for a failure a native raised."
   "CLHS 9.1.2.1: a condition stands for itself, a symbol names a type to
 make one of, and a string or function is a format control."
   (if (%condition-p datum)
-      datum
+      (if arguments
+          (error 'type-error :datum arguments :expected-type 'null)
+          datum)
       (if (and (symbolp datum) (not (null datum)))
           (apply #'make-condition datum arguments)
           (make-condition default-type

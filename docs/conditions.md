@@ -5,8 +5,8 @@ handler is a function that gets offered one. Signaling and handling are
 separate: what signals decides what to say, and what handles decides what
 to do about it.
 
-`docs/condition-bootstrap.md` covers how the class layer underneath is
-built and what CLOS replaces it with.
+A condition type is a CLOS class. `docs/condition-bootstrap.md` covers
+how that is put together, and `docs/clos.md` covers the object system.
 
 ## Defining one
 
@@ -24,9 +24,9 @@ options:
 ```
 
 A slot takes `:initarg`, `:initform`, `:reader`, `:writer`, `:accessor`,
-`:type` and `:documentation`. `:type` is accepted and not enforced, which
-is what `defstruct` does as well. A slot no initarg filled and with no
-initform is unbound rather than nil.
+`:allocation`, `:type` and `:documentation`, as a `defclass` slot does. A
+value written to a slot with a `:type` has to be of that type. A slot no
+initarg filled and with no initform is unbound rather than nil.
 
 `:report` takes a string, which reports itself, or a function of the
 condition and a stream. A type with no report of its own uses the nearest

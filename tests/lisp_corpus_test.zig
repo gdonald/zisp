@@ -27,6 +27,7 @@ const Fixture = struct {
         try symbol_mod.initStandardSymbols(&fx.interner);
         fx.heap = zisp.Heap.init(fx.arena.allocator());
         fx.ev = Evaluator.init(allocator, &fx.heap, &fx.interner);
+        fx.ev.io = testing.io;
         try zisp.eval.registerStandardSpecialForms(&fx.ev);
         try zisp.builtins.registerStandard(&fx.ev);
         return fx;
@@ -106,7 +107,7 @@ test "format directives corpus" {
 
 test "reader syntax corpus" {
     const checked = try runCorpus("reader-syntax", @embedFile("lisp/reader-syntax-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 19), checked);
+    try testing.expectEqual(@as(u32, 26), checked);
 }
 
 test "displaced string corpus" {
@@ -161,5 +162,65 @@ test "subtypep corpus" {
 
 test "unwind-protect corpus" {
     const checked = try runCorpus("unwind-protect", @embedFile("lisp/unwind-protect-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 22), checked);
+}
+
+test "defclass, slot options and slot access corpus" {
+    const checked = try runCorpus("clos-classes", @embedFile("lisp/clos-classes.lisp"));
+    try testing.expectEqual(@as(u32, 44), checked);
+}
+
+test "initialization protocol corpus" {
+    const checked = try runCorpus("init-protocol", @embedFile("lisp/init-protocol.lisp"));
+    try testing.expectEqual(@as(u32, 13), checked);
+}
+
+test "generic functions and method combinations corpus" {
+    const checked = try runCorpus("clos-generic", @embedFile("lisp/clos-generic.lisp"));
+    try testing.expectEqual(@as(u32, 49), checked);
+}
+
+test "define-method-combination long form corpus" {
+    const checked = try runCorpus("dmc-long-form", @embedFile("lisp/dmc-long-form.lisp"));
+    try testing.expectEqual(@as(u32, 15), checked);
+}
+
+test "class redefinition corpus" {
+    const checked = try runCorpus("class-redef", @embedFile("lisp/class-redef.lisp"));
+    try testing.expectEqual(@as(u32, 16), checked);
+}
+
+test "change-class corpus" {
+    const checked = try runCorpus("clos-redef", @embedFile("lisp/clos-redef.lisp"));
+    try testing.expectEqual(@as(u32, 11), checked);
+}
+
+test "class precedence list corpus" {
+    const checked = try runCorpus("c3", @embedFile("lisp/c3-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 11), checked);
+}
+
+test "metaobject protocol corpus" {
+    const checked = try runCorpus("clos-mop", @embedFile("lisp/clos-mop.lisp"));
+    try testing.expectEqual(@as(u32, 33), checked);
+}
+
+test "define-method-combination long form parsing corpus" {
+    const checked = try runCorpus("dmc-parse", @embedFile("lisp/dmc-parse.lisp"));
+    try testing.expectEqual(@as(u32, 5), checked);
+}
+
+test "slot definition introspection corpus" {
+    const checked = try runCorpus("slot-introspection", @embedFile("lisp/slot-introspection.lisp"));
+    try testing.expectEqual(@as(u32, 8), checked);
+}
+
+test "validate-superclass corpus" {
+    const checked = try runCorpus("validate-superclass", @embedFile("lisp/validate-superclass.lisp"));
+    try testing.expectEqual(@as(u32, 4), checked);
+}
+
+test "print-object dispatch corpus" {
+    const checked = try runCorpus("print-object", @embedFile("lisp/print-object-dispatch.lisp"));
     try testing.expectEqual(@as(u32, 22), checked);
 }

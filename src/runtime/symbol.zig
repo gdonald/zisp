@@ -17,6 +17,10 @@ pub const Symbol = struct {
     special: bool = false,
     /// `defconstant` and keywords: the value cell may not be rebound.
     constant: bool = false,
+    /// The handler of the special form this symbol names, kept here so
+    /// evaluating a form finds it without a table lookup. The evaluator
+    /// owns its type.
+    special_form: ?*const anyopaque = null,
 };
 
 pub const CL_PACKAGE_NAME = "COMMON-LISP";

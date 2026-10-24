@@ -271,6 +271,14 @@ pub const Evacuator = struct {
             .weak_pointer => try self.weak.append(self.allocator, v),
             .function, .closure => {
                 const f = function.asFunction(v);
+                if (f.kind == .funcallable) {
+                    const instance = &f.payload.funcallable;
+                    try self.update(&instance.class);
+                    try self.update(&instance.slots);
+                    try self.update(&instance.wrapper);
+                    try self.update(&instance.function);
+                    return;
+                }
                 if (f.kind != .closure) return;
                 try self.update(&f.payload.closure.params);
                 try self.update(&f.payload.closure.body);

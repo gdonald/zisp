@@ -119,19 +119,30 @@ pub const Env = struct {
     /// reachable from `top_value` or `top_function` for as long as the
     /// call lasts, so a root scan reads them from here.
     saved_chains: std.ArrayList(?*Frame) = .empty,
+    /// Frames whose scope ended, linked through `parent`, kept with the
+    /// capacity their binding lists grew to so the next scope reuses them.
+    free_frames: ?*Frame = null,
+    /// Where every frame and its bindings live. A frame is never freed on
+    /// its own: one whose scope ends goes back on `free_frames`, and one a
+    /// closure captured lasts as long as the env.
+    frame_arena: std.heap.ArenaAllocator,
 
     pub fn init(allocator: std.mem.Allocator) Env {
-        return .{ .allocator = allocator };
+        return .{ .allocator = allocator, .frame_arena = std.heap.ArenaAllocator.init(allocator) };
     }
 
     pub fn deinit(self: *Env) void {
-        self.releaseChain(self.top_value);
-        self.releaseChain(self.top_function);
-        for (self.captured_frames.items) |f| self.destroyFrame(f);
         self.captured_frames.deinit(self.allocator);
         self.saved_chains.deinit(self.allocator);
+        self.frame_arena.deinit();
+        self.free_frames = null;
         self.top_value = null;
         self.top_function = null;
+    }
+
+    /// What a frame's bindings are allocated from.
+    pub fn frameAllocator(self: *Env) std.mem.Allocator {
+        return self.frame_arena.allocator();
     }
 
     /// Set a chain aside for the duration of a call, and remember it
@@ -150,27 +161,23 @@ pub const Env = struct {
     }
 
     fn allocFrame(self: *Env, parent: ?*Frame) !*Frame {
-        const f = try self.allocator.create(Frame);
+        if (self.free_frames) |f| {
+            self.free_frames = f.parent;
+            f.parent = parent;
+            return f;
+        }
+        const f = try self.frameAllocator().create(Frame);
         f.* = .{ .parent = parent };
         return f;
     }
 
-    fn destroyFrame(self: *Env, f: *Frame) void {
-        f.deinit(self.allocator);
-        self.allocator.destroy(f);
-    }
-
-    /// Free a frame whose scope has ended, unless a closure captured it.
+    /// Give back a frame whose scope has ended, unless a closure captured
+    /// it.
     pub fn releaseFrame(self: *Env, f: *Frame) void {
-        if (!f.captured) self.destroyFrame(f);
-    }
-
-    fn releaseChain(self: *Env, head: ?*Frame) void {
-        var current = head;
-        while (current) |f| {
-            current = f.parent;
-            self.releaseFrame(f);
-        }
+        if (f.captured) return;
+        f.reset();
+        f.parent = self.free_frames;
+        self.free_frames = f;
     }
 
     /// Mark a chain as captured, stopping at the first frame already
@@ -228,12 +235,12 @@ pub const Env = struct {
 
     pub fn bindValue(self: *Env, sym: Value, val: Value) !void {
         if (self.top_value == null) _ = try self.pushValueFrame();
-        try self.top_value.?.bind(self.allocator, sym, val);
+        try self.top_value.?.bind(self.frameAllocator(), sym, val);
     }
 
     pub fn bindFunction(self: *Env, sym: Value, val: Value) !void {
         if (self.top_function == null) _ = try self.pushFunctionFrame();
-        try self.top_function.?.bind(self.allocator, sym, val);
+        try self.top_function.?.bind(self.frameAllocator(), sym, val);
     }
 
     pub fn lookupValue(self: *const Env, sym: Value) ?Value {

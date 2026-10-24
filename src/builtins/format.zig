@@ -12,7 +12,7 @@ const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
 const circle_mod = @import("../runtime/circle.zig");
 const equality = @import("../runtime/equality.zig");
-const proto_class = @import("../runtime/proto_class.zig");
+const instances = @import("instances.zig");
 const package = @import("../runtime/package.zig");
 const character = @import("../runtime/character.zig");
 const eval_mod = @import("../eval/eval.zig");
@@ -108,10 +108,17 @@ fn printerSettings(ev: *Evaluator, escaping: bool) printer.Settings {
         .length = count(ev, "*PRINT-LENGTH*"),
         .gensym = flag(ev, "*PRINT-GENSYM*", true),
         .current_package = ev.interner.currentPackage(),
+        .hook = instances.objectHook(ev),
     };
 }
 
+/// `prin1` and `~S` escape whatever `*print-escape*` says.
 pub fn prin1Settings(ev: *Evaluator) printer.Settings {
+    return printerSettings(ev, true);
+}
+
+/// `write` and `~W` escape as `*print-escape*` says.
+pub fn writeSettings(ev: *Evaluator) printer.Settings {
     return printerSettings(ev, flag(ev, "*PRINT-ESCAPE*", true));
 }
 
@@ -593,7 +600,7 @@ fn runSimple(r: *Runner, directive: Directive, args: *Args) Error!Flow {
         // Conditional newline and indentation only matter under the pretty
         // printer, which does its own line breaking.
         '_', 'I' => {},
-        'W' => try printPadded(r, directive, args, prin1Settings(r.ev)),
+        'W' => try printPadded(r, directive, args, writeSettings(r.ev)),
         '^' => return try escape(r, directive, args),
         else => return Error.ProgramError,
     }
@@ -862,14 +869,13 @@ fn render(r: *Runner, v: Value, given: printer.Settings) Error![]const u8 {
         if (try reportText(r.ev, r.allocator, v)) |text| return text;
     }
     var rendered = std.Io.Writer.Allocating.init(r.allocator);
-    try printer.write(r.allocator, &rendered.writer, v, settings);
+    printer.write(r.allocator, &rendered.writer, v, settings) catch |e| return r.ev.printFailure(e);
     return rendered.written();
 }
 
-/// What the report of a condition or a restart writes, or null where `v`
-/// is neither or its condition class has no report. The report is handed
-/// `t` for its stream and what it writes there is captured, the way a
-/// `~/name/` call's output is.
+/// What the report of a restart writes, or null where `v` is not one. The
+/// report is handed `t` for its stream and what it writes there is
+/// captured, the way a `~/name/` call's output is.
 pub fn reportText(
     ev: *Evaluator,
     allocator: std.mem.Allocator,
@@ -879,10 +885,7 @@ pub fn reportText(
         const printer_fn = ev.env.lookupFunction(try ev.interner.intern("%PRINT-RESTART-REPORT")) orelse return null;
         return try captureOutput(ev, allocator, printer_fn, &.{ v, value.T });
     }
-    if (!proto_class.isInstance(ev, v)) return null;
-    const report = proto_class.inheritedReport(proto_class.classOf(v));
-    if (report.equalsRaw(value.NIL)) return null;
-    return try captureOutput(ev, allocator, report, &.{ v, value.T });
+    return null;
 }
 
 fn isRestart(ev: *Evaluator, v: Value) Error!bool {

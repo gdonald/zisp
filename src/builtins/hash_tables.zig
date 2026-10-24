@@ -122,7 +122,7 @@ fn hashTablePFn(p: *anyopaque, args: []const Value) Error!Value {
 // --- lookup and update ---
 
 /// Index of the live entry holding `key`, or null.
-fn findEntry(table: *heap.HeapHashTable, key: Value) ?u32 {
+pub fn findEntry(table: *heap.HeapHashTable, key: Value) ?u32 {
     const bucket = table.buckets.get(equality.hash(table.hash_test, key)) orelse return null;
     for (bucket.items) |index| {
         const entry = table.entries.items[index];

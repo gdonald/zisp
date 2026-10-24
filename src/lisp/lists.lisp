@@ -114,6 +114,29 @@
       ((null walk) default)
     (when (eq (car walk) indicator) (return (cadr walk)))))
 
+(defun %putf (plist indicator value)
+  "PLIST with INDICATOR's entry set to VALUE: changed in place where it has
+one, and with the entry added at the front where it does not."
+  (do ((walk plist (cddr walk)))
+      ((null walk) (list* indicator value plist))
+    (when (eq (car walk) indicator)
+      (rplaca (cdr walk) value)
+      (return plist))))
+
+(define-setf-expander getf (place indicator &optional default &environment environment)
+  (multiple-value-bind (temps vals stores store-form access-form)
+      (get-setf-expansion place environment)
+    (let ((indicator-temp (gensym "INDICATOR"))
+          (default-temp (gensym "DEFAULT"))
+          (store (gensym "NEW")))
+      (values (append temps (list indicator-temp default-temp))
+              (append vals (list indicator default))
+              (list store)
+              `(let ((,(car stores) (%putf ,access-form ,indicator-temp ,store)))
+                 ,store-form
+                 ,store)
+              `(getf ,access-form ,indicator-temp ,default-temp)))))
+
 (defun get-properties (plist indicators)
   (do ((walk plist (cddr walk)))
       ((null walk) (values nil nil nil))
