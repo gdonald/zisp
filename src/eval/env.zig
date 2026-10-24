@@ -1,6 +1,7 @@
 const std = @import("std");
 const value = @import("../runtime/value.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
+const function = @import("function.zig");
 
 const Value = value.Value;
 
@@ -288,6 +289,7 @@ pub const Env = struct {
             if (f.assign(sym, val)) return;
         }
         symbol_mod.symbol(sym).function_cell = val;
+        function.invalidateCallCaches();
     }
 
     pub fn defineGlobalValue(self: *const Env, sym: Value, val: Value) void {
@@ -300,5 +302,6 @@ pub const Env = struct {
         _ = self;
         std.debug.assert(sym.isSymbol());
         symbol_mod.symbol(sym).function_cell = val;
+        function.invalidateCallCaches();
     }
 };

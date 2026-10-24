@@ -853,16 +853,30 @@ when the block will not fit before the right margin."
                     `(apply (lambda ,(cadr no-error) ,@(cddr no-error)) (cdr ,outcome))
                     `(values-list (cdr ,outcome))))))))
 
-;; zisp interprets, so what there is to hand back is the function that
-;; was already there. The two flags say the same thing either way: no
-;; warnings, and nothing failed.
+;; The two flags say no warnings were signaled and nothing failed.
 (defun compile (name &optional definition)
-  (let ((fn (cond ((functionp definition) definition)
-                  ((consp definition) (eval (list 'function definition)))
+  (let ((fn (cond ((functionp definition) (%compile-function definition name))
+                  ((consp definition) (%compile-lambda definition name))
                   ((null name) (error "COMPILE needs a name or a definition."))
-                  (t (symbol-function name)))))
+                  (t (%compile-function (symbol-function name) name)))))
     (when name (setf (symbol-function name) fn))
     (values (or name fn) nil nil)))
+
+(defun %disassemble-target (fn)
+  (let ((target (cond ((functionp fn) fn)
+                      ((and (consp fn) (eq (car fn) 'lambda)) (%compile-lambda fn))
+                      (t (fdefinition fn)))))
+    (%compile-function target)))
+
+(defun disassemble (fn)
+  (let ((target (%disassemble-target fn)))
+    (write-string (%disassembly target))
+    (write-line "Constants:")
+    (let ((index 0))
+      (dolist (constant (%function-constants target))
+        (format t "~5d  ~s~%" index constant)
+        (setq index (1+ index))))
+    nil))
 
 ;; A control string in the shape of a function: it writes to the stream
 ;; it is handed and gives back the arguments it did not use.
@@ -914,6 +928,7 @@ when the block will not fit before the right margin."
      ,@body))
 
 (export '(sleep psetf rotatef shiftf multiple-value-setq with-standard-io-syntax formatter assert compile proclaim
+          disassemble
           write write-to-string
           lambda-list-keywords call-arguments-limit lambda-parameters-limit
           multiple-values-limit

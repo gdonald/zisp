@@ -3,12 +3,14 @@ const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const source_pos = @import("../runtime/source_pos.zig");
 const env_mod = @import("env.zig");
+const bytecode = @import("../compiler/bytecode.zig");
 const Value = value.Value;
 
 pub const Kind = enum(u8) {
     native = 0,
     closure = 1,
     funcallable = 2,
+    compiled = 3,
 };
 
 pub const NativeFn = *const fn (
@@ -36,6 +38,7 @@ pub const NativeError = error{
     Quit,
     NoSuchPackage,
     PackageError,
+    StackExhausted,
 } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 pub const Closure = struct {
@@ -49,6 +52,13 @@ pub const Closure = struct {
     // Position of the defining form. Macroexpansion stamps synthesized
     // conses with it when a position table is bound.
     def_pos: ?source_pos.SourcePosition = null,
+};
+
+/// A function the compiler made. The values it closed over follow the
+/// function object in the same block.
+pub const Compiled = struct {
+    code: *const bytecode.Code,
+    env_len: u32,
 };
 
 /// An instance of a funcallable class, such as a generic function. It
@@ -77,8 +87,51 @@ pub const HeapFunction = struct {
         native: NativeFn,
         closure: Closure,
         funcallable: Funcallable,
+        compiled: Compiled,
     },
+
+    /// What a compiled function closed over.
+    pub fn closedOver(self: *HeapFunction) []Value {
+        std.debug.assert(self.kind == .compiled);
+        const after: [*]u8 = @as([*]u8, @ptrCast(self)) + compiled_prefix;
+        const values: [*]Value = @ptrCast(@alignCast(after));
+        return values[0..self.payload.compiled.env_len];
+    }
 };
+
+/// Where a compiled function's closed-over values start.
+pub const compiled_prefix = std.mem.alignForward(usize, @sizeOf(HeapFunction), @alignOf(Value));
+
+/// A compiled function in the collected heap, closing over `env`.
+pub fn allocCompiled(h: *heap.Heap, code: *const bytecode.Code, env: []const Value) !Value {
+    var held = h.protect();
+    defer held.close();
+    for (env) |v| try held.push(v);
+    const total = compiled_prefix + env.len * @sizeOf(Value);
+    const bytes = try h.allocObject(total);
+    const obj: *HeapFunction = @ptrCast(bytes.ptr);
+    obj.* = .{
+        .header = .{ .type_tag = .function, .size = @intCast(total) },
+        .kind = .compiled,
+        .name = code.name,
+        .payload = .{ .compiled = .{ .code = code, .env_len = @intCast(env.len) } },
+    };
+    @memcpy(obj.closedOver(), held.items());
+    return Value.fromHeapAddr(@intFromPtr(obj));
+}
+
+/// Bumped whenever what a global function name refers to may have
+/// changed. A call cache made in an older epoch is empty.
+pub var call_cache_epoch: u32 = 1;
+
+pub fn invalidateCallCaches() void {
+    call_cache_epoch +%= 1;
+    if (call_cache_epoch == 0) call_cache_epoch = 1;
+}
+
+pub fn isCompiled(v: Value) bool {
+    return isFunction(v) and asFunction(v).kind == .compiled;
+}
 
 pub fn allocNative(
     allocator: std.mem.Allocator,

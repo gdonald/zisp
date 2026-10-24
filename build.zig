@@ -38,7 +38,18 @@ pub fn build(b: *std.Build) void {
         "Collect every N allocations (0 = off)",
     ) orelse 0;
 
+    // -Ddispatch picks how the bytecode VM goes from one instruction to
+    // the next: one switch in a loop, a switch that jumps from each
+    // instruction straight to the next one's code, or a handler per
+    // instruction that tail-calls the next.
+    const dispatch = b.option(
+        []const u8,
+        "dispatch",
+        "Bytecode dispatch: loop, threaded or tail",
+    ) orelse "loop";
+
     const build_options = b.addOptions();
+    build_options.addOption([]const u8, "dispatch", dispatch);
     build_options.addOption(u32, "gc_torture", gc_torture);
     build_options.addOption(bool, "ansi_tests", ansi_tests);
     build_options.addOption(bool, "profile", profile);
@@ -171,6 +182,14 @@ pub fn build(b: *std.Build) void {
     });
     const gc_pause_step = b.step("gc-pause", "Measure what share of a run the collector takes");
     gc_pause_step.dependOn(&gc_pause_run.step);
+
+    // `zig build bytecode-bench` times a loop compiled against the same
+    // loop interpreted, and fails when compiling has fallen below the
+    // speedup the benchmark asks for.
+    const bytecode_bench_run = b.addRunArtifact(exe);
+    bytecode_bench_run.addArgs(&.{ "--batch", "--quiet", "--load", "tests/lisp/bytecode-bench.lisp" });
+    const bytecode_bench_step = b.step("bytecode-bench", "Measure the bytecode VM against the interpreter");
+    bytecode_bench_step.dependOn(&bytecode_bench_run.step);
 
     // `zig build boyer` measures cl-bench's Boyer benchmark with the
     // nursery and without it, and fails if the generational collector

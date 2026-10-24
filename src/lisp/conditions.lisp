@@ -408,7 +408,8 @@ or `warn`, the restarts are associated with the condition it signals."
     (:|NoOutputStream| . stream-error)
     (:|NoSuchPackage| . package-error)
     (:|PackageError| . package-error)
-    (:|OutOfMemory| . storage-condition)))
+    (:|OutOfMemory| . storage-condition)
+    (:|StackExhausted| . storage-condition)))
 
 (defun %native-condition-initargs (type caught)
   "The slots a condition standing for a native failure can be given. What

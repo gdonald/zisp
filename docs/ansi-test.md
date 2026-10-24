@@ -32,7 +32,11 @@ tests/run-rt-tests.sh format                # pass rate, non-zero below the floo
 tests/run-rt-tests.sh typep subtypep        # several slices
 tests/run-rt-tests.sh objects               # the CLOS files, in the suite's own order
 FLOOR=95 tests/run-rt-tests.sh typep        # raise the floor
+MODE=compile tests/run-rt-tests.sh loop     # compile every form before running it
 ```
+
+`MODE=compile` sets `ext:*evaluator-mode*` to `:compile` before the
+framework loads, so every test runs as bytecode.
 
 A slice is a driver at `tests/lisp/ansi-<name>.lisp` naming the files it
 wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it,

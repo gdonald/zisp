@@ -25,6 +25,7 @@ pub const registerGc = gc.registerGc;
 const equality = @import("../runtime/equality.zig");
 const instances = @import("instances.zig");
 const frames = @import("frames.zig");
+const compiler = @import("compiler.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -179,6 +180,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try types.registerTypes(ev);
     try instances.registerInstances(ev);
     try frames.registerFrames(ev);
+    try compiler.registerCompiler(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
     try pathnames.registerPathnames(ev);
@@ -284,6 +286,7 @@ fn setSymbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!args[0].isSymbol()) return Error.TypeError;
     if (!function.isFunction(args[1])) return Error.TypeError;
     symbol_mod.symbol(args[0]).function_cell = args[1];
+    function.invalidateCallCaches();
     return args[1];
 }
 
@@ -366,6 +369,7 @@ fn fmakunboundFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
     const name = try ev.functionNameSymbol(args[0]);
     symbol_mod.symbol(name).function_cell = value.SPECIAL_UNBOUND;
+    function.invalidateCallCaches();
     return args[0];
 }
 
@@ -915,7 +919,9 @@ fn funcallFn(p: *anyopaque, args: []const Value) Error!Value {
 fn evalFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    return ev.eval(args[0]);
+    const previous = try ev.enterEnvironment(value.NIL);
+    defer ev.leaveEnvironment(previous);
+    return ev.evalTopLevel(args[0]);
 }
 
 /// `(gensym [prefix-string | nonnegative-fixnum])`. A string names the

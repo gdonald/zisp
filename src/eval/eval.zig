@@ -8,6 +8,9 @@ const collect_mod = @import("collect.zig");
 const source_pos = @import("../runtime/source_pos.zig");
 const function = @import("function.zig");
 const lambda_list = @import("lambda_list.zig");
+const vm_mod = @import("../compiler/vm.zig");
+const compiler_mod = @import("../compiler/compiler.zig");
+const bytecode = @import("../compiler/bytecode.zig");
 
 const Value = value.Value;
 const Heap = heap_mod.Heap;
@@ -90,6 +93,8 @@ pub const Evaluator = struct {
     sym_funcall: Value = .{ .raw = 0 },
     sym_environment: Value = .{ .raw = 0 },
     sym_return_from: Value = .{ .raw = 0 },
+    sym_evaluator_mode: Value = .{ .raw = 0 },
+    keyword_compile: Value = .{ .raw = 0 },
     sym_progn: Value = undefined,
     sym_declare: Value = undefined,
     sym_special: Value = undefined,
@@ -203,6 +208,12 @@ pub const Evaluator = struct {
     /// `load` runs its own read-eval loop, so a nested one sees a depth
     /// the outer forms put there.
     eval_depth: usize = 0,
+    /// Where compiled functions run, made the first time one is called.
+    vm: ?*vm_mod.VM = null,
+    /// Every compiled body there is. Their constants are roots: a
+    /// compiled function the tenured space holds is not reached by a
+    /// collection of the nursery, and neither is what its code refers to.
+    codes: std.ArrayListUnmanaged(*const bytecode.Code) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -223,6 +234,8 @@ pub const Evaluator = struct {
     pub const Finalizer = struct { object: Value, action: Value };
 
     pub fn deinit(self: *Evaluator) void {
+        if (self.vm) |machine_state| machine_state.deinit();
+        self.codes.deinit(self.allocator);
         self.finalizers.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.env.deinit();
@@ -244,6 +257,18 @@ pub const Evaluator = struct {
         var hosts = self.logical_hosts.keyIterator();
         while (hosts.next()) |name| self.allocator.free(name.*);
         self.logical_hosts.deinit(self.allocator);
+    }
+
+    /// The machine compiled functions run on.
+    pub fn machine(self: *Evaluator) Error!*vm_mod.VM {
+        if (self.vm) |made| return made;
+        const made = try vm_mod.VM.init(self);
+        self.vm = made;
+        return made;
+    }
+
+    pub fn registerCode(self: *Evaluator, code: *const bytecode.Code) Error!void {
+        try self.codes.append(self.allocator, code);
     }
 
     /// Hold values on the Lisp stack for as long as the caller needs
@@ -527,6 +552,21 @@ pub const Evaluator = struct {
         return fromOpaque(context).eval(form);
     }
 
+    /// Evaluate a form the way `eval` and the top level do: compiled
+    /// first when `ext:*evaluator-mode*` is `:compile`.
+    pub fn evalTopLevel(self: *Evaluator, form: Value) Error!Value {
+        if (!self.compiling()) return self.eval(form);
+        return compiler_mod.evalCompiled(self, form) catch |err| return self.signalFailure(err);
+    }
+
+    fn compiling(self: *Evaluator) bool {
+        if (self.sym_evaluator_mode.raw == 0) {
+            self.sym_evaluator_mode = self.interner.internExtension("*EVALUATOR-MODE*") catch return false;
+            self.keyword_compile = self.interner.internKeyword("COMPILE") catch return false;
+        }
+        return symbol_mod.symbol(self.sym_evaluator_mode).value_cell.equalsRaw(self.keyword_compile);
+    }
+
     pub fn eval(self: *Evaluator, form: Value) Error!Value {
         return self.evalForm(form) catch |err| return self.signalFailure(err);
     }
@@ -536,7 +576,7 @@ pub const Evaluator = struct {
     /// then to the debugger when the REPL is reading from a person. A
     /// failure that has already been offered, an `error` call among them,
     /// carries its condition in `error_condition` and is passed on as is.
-    fn signalFailure(self: *Evaluator, err: Error) Error {
+    pub fn signalFailure(self: *Evaluator, err: Error) Error {
         switch (err) {
             Error.BlockReturn, Error.Go, Error.Throw, Error.Quit, Error.OutOfMemory => return err,
             else => {},
@@ -603,7 +643,7 @@ pub const Evaluator = struct {
 
     /// Signal the unbound-variable error through the condition system,
     /// where a `use-value` or `store-value` restart can supply the value.
-    fn recoverUnboundVariable(self: *Evaluator, sym: Value) Error!Value {
+    pub fn recoverUnboundVariable(self: *Evaluator, sym: Value) Error!Value {
         self.error_symbol = sym;
         const name = try self.interner.intern("%UNBOUND-VARIABLE");
         const handler = symbol_mod.symbol(name).function_cell;
@@ -839,6 +879,7 @@ pub const Evaluator = struct {
             },
             .closure => return self.applyClosure(fn_v, args),
             .funcallable => return self.callFunction(f.payload.funcallable.function, args),
+            .compiled => return vm_mod.call(self, fn_v, args),
         }
     }
 

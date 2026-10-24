@@ -479,6 +479,13 @@ pub const Heap = struct {
         return self.objects.alloc(total);
     }
 
+    /// A block for a headed object the caller fills in. A collection may
+    /// run first, so anything the caller is about to store has to be
+    /// rooted.
+    pub fn allocObject(self: *Heap, total: usize) ![]align(gc.ALIGNMENT) u8 {
+        return self.createSized(total);
+    }
+
     pub fn allocCons(self: *Heap, car_v: Value, cdr_v: Value) !Value {
         // The values going in are held for the allocation, which is a
         // point a collection can happen at.

@@ -42,10 +42,22 @@ const Fixture = struct {
 };
 
 /// Evaluate every form in `text`, requiring T from each, and return how
-/// many were checked.
+/// many were checked. The corpus runs twice: interpreted, then with every
+/// top-level form compiled first.
 fn runCorpus(name: []const u8, text: []const u8) !u32 {
+    const interpreted = try runCorpusIn(name, text, false);
+    const compiled = try runCorpusIn(name, text, true);
+    try testing.expectEqual(interpreted, compiled);
+    return interpreted;
+}
+
+fn runCorpusIn(name: []const u8, text: []const u8, compile: bool) !u32 {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
+    if (compile) {
+        const mode = try fx.interner.internExtension("*EVALUATOR-MODE*");
+        symbol_mod.symbol(mode).value_cell = try fx.interner.internKeyword("COMPILE");
+    }
 
     var tk = zisp.reader.Tokenizer.init(text);
     var rd = zisp.reader.Reader.init(&tk, &fx.heap, &fx.interner);
@@ -53,16 +65,40 @@ fn runCorpus(name: []const u8, text: []const u8) !u32 {
     var checked: u32 = 0;
     while (try rd.read()) |form| {
         checked += 1;
-        const got = fx.ev.eval(form) catch |e| {
-            std.debug.print("{s} form {d}: eval error {s}\n", .{ name, checked, @errorName(e) });
+        const got = fx.ev.evalTopLevel(form) catch |e| {
+            std.debug.print("{s} form {d}{s}: eval error {s}\n", .{ name, checked, modeLabel(compile), @errorName(e) });
             return e;
         };
         if (!got.equalsRaw(value.T)) {
-            std.debug.print("{s} form {d}: expected T\n", .{ name, checked });
+            std.debug.print("{s} form {d}{s}: expected T\n", .{ name, checked, modeLabel(compile) });
             return error.TestUnexpectedResult;
         }
     }
     return checked;
+}
+
+fn modeLabel(compile: bool) []const u8 {
+    return if (compile) " compiled" else "";
+}
+
+test "compile corpus" {
+    const checked = try runCorpus("compile", @embedFile("lisp/compile-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 104), checked);
+}
+
+test "constant pools" {
+    const checked = try runCorpus("const-pool", @embedFile("lisp/const-pool.lisp"));
+    try testing.expectEqual(@as(u32, 7), checked);
+}
+
+test "compiled closures share their bindings" {
+    const checked = try runCorpus("compiled-closures", @embedFile("lisp/compiled-closures.lisp"));
+    try testing.expectEqual(@as(u32, 6), checked);
+}
+
+test "call site caches" {
+    const checked = try runCorpus("inline-cache", @embedFile("lisp/inline-cache.lisp"));
+    try testing.expectEqual(@as(u32, 5), checked);
 }
 
 test "loop corpus" {

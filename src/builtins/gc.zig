@@ -22,6 +22,7 @@ pub fn registerGc(ev: *Evaluator) !void {
     _ = try ev.defineNative("GC", &gcFn);
     _ = try ev.defineNative("ROOM", &roomFn);
     _ = try ev.defineNative("GET-INTERNAL-REAL-TIME", &internalRealTimeFn);
+    _ = try ev.defineNative("GET-INTERNAL-RUN-TIME", &internalRunTimeFn);
     _ = try ev.defineNative("%SLEEP-NANOSECONDS", &sleepNanosecondsFn);
     try defineExtension(ev, "MAKE-WEAK-POINTER", &makeWeakPointerFn);
     try defineExtension(ev, "WEAK-POINTER-VALUE", &weakPointerValueFn);
@@ -141,6 +142,15 @@ fn internalRealTimeFn(p: *anyopaque, args: []const Value) Error!Value {
     const io = ev.io orelse return Error.ProgramError;
     const now = std.Io.Timestamp.now(io, .awake).nanoseconds;
     return Value.fromFixnum(@intCast(@divFloor(now, std.time.ns_per_us)));
+}
+
+/// Processor time this process has used, in the same units.
+fn internalRunTimeFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    const io = ev.io orelse return Error.ProgramError;
+    const used = std.Io.Timestamp.now(io, .cpu_process).nanoseconds;
+    return Value.fromFixnum(@intCast(@divFloor(used, std.time.ns_per_us)));
 }
 
 /// `(%sleep-nanoseconds n)` waits that long, which is what `sleep` comes to.

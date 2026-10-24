@@ -279,6 +279,10 @@ pub const Evacuator = struct {
                     try self.update(&instance.function);
                     return;
                 }
+                if (f.kind == .compiled) {
+                    for (f.closedOver()) |*slot| try self.update(slot);
+                    return;
+                }
                 if (f.kind != .closure) return;
                 try self.update(&f.payload.closure.params);
                 try self.update(&f.payload.closure.body);

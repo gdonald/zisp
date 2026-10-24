@@ -360,3 +360,29 @@ test "a fasl of shared subforms reads back in full" {
     _ = try fx.evalStr(load_form);
     try testing.expect((try fx.evalStr("(equal shared-marker '(3 3))")).equalsRaw(value.T));
 }
+
+test "a compiled file's closures share a binding they all assign" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "closures.lisp",
+        .data =
+        \\(let ((x 0))
+        \\  (defun file-get-x () x)
+        \\  (defun file-inc-x () (incf x)))
+        ,
+    });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/closures.lisp", .{tmp.sub_path});
+    defer testing.allocator.free(path);
+    const form = try std.fmt.allocPrint(testing.allocator, "(load (compile-file \"{s}\"))", .{path});
+    defer testing.allocator.free(form);
+    _ = try fx.evalStr(form);
+
+    _ = try fx.evalStr("(file-inc-x)");
+    _ = try fx.evalStr("(file-inc-x)");
+    try testing.expectEqual(@as(i64, 2), (try fx.evalStr("(file-get-x)")).toFixnum());
+    try testing.expect((try fx.evalStr("(listp (%function-constants #'file-get-x))")).equalsRaw(value.T));
+}

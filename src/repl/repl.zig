@@ -175,7 +175,7 @@ pub const Repl = struct {
             const form = rd.read() catch return Error.ProgramError;
             const f = form orelse break;
             self.rotateInput(f);
-            const result = try self.ev.eval(f);
+            const result = try self.ev.evalTopLevel(f);
             self.rotateOutput(result);
             if (print) try self.printResult(result);
         }
@@ -190,7 +190,7 @@ pub const Repl = struct {
     /// was invoked.
     fn evalWithAbort(self: *Repl, form: Value) Error!?Value {
         const runner = self.ev.env.lookupFunction(try self.interner.intern("%EVAL-WITH-ABORT")) orelse
-            return try self.ev.eval(form);
+            return try self.ev.evalTopLevel(form);
         const completed = try self.ev.callFunction(runner, &.{form});
         if (completed.equalsRaw(value.NIL)) return null;
         return self.ev.values.items[1];

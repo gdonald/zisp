@@ -641,31 +641,31 @@ Phase 9: Compilation
 
 Move beyond tree-walking. This is where Zig's strengths really show.
 
-- [ ] 9.1. Bytecode VM (intermediate step)
-  - [ ] 9.1.1. Instruction set design (`docs/bytecode.md`)
-  - [ ] 9.1.2. Compiler from Lisp AST to bytecode — one session per form type:
-    - [ ] 9.1.2a. Self-evaluating forms (constants pushed via `LOAD_CONST`)
-    - [ ] 9.1.2b. Variable references (`LOAD_LOCAL` for lexical, `LOAD_GLOBAL` for special)
-    - [ ] 9.1.2c. Function calls (`CALL` with arity)
-    - [ ] 9.1.2d. `if`, `progn`
-    - [ ] 9.1.2e. `setq` (`STORE_LOCAL`/`STORE_GLOBAL`)
-    - [ ] 9.1.2f. `let`, `let*` (frame allocation + binding emit)
-    - [ ] 9.1.2g. `lambda` (emit child function, `MAKE_CLOSURE` op capturing locals)
-    - [ ] 9.1.2h. `block`/`return-from` (emit catch-tag and matching unwind)
-    - [ ] 9.1.2i. `tagbody`/`go` (emit jump targets and indirect jump table)
-    - [ ] 9.1.2j. `catch`/`throw` (dynamic catch frames)
-    - [ ] 9.1.2k. `unwind-protect` (cleanup-frame emit)
-    - [ ] 9.1.2l. Multiple values (`VALUES`/`MV_BIND` ops)
-  - [ ] 9.1.3. Stack-based VM in Zig — one session per concern:
-    - [ ] 9.1.3a. Operand stack as growable array of `Value`; basic push/pop ops work
-    - [ ] 9.1.3b. Frame stack: each call frame holds locals + return PC + parent frame
-    - [ ] 9.1.3c. Main dispatch loop with all ops from 9.1.2 implemented
-    - [ ] 9.1.3d. Exception unwinding integrated with `throw`/`return-from`/`go`
-    - [ ] 9.1.3e. Interpreter benchmark vs. Phase 2 tree-walker: ≥ 3× faster on `(loop for i from 0 to 1000000 sum i)`
-  - [ ] 9.1.4. Constant pool PER COMPILED FUNCTION (not shared across functions or across files — enables function-level unloading). Constants deduplicated WITHIN a function (`'(1 2 3)` appearing twice in one function references one pool entry); NOT deduplicated across functions. Acceptance: `(disassemble #'fn)` output includes a `Constants:` section listing pool entries; `tests/lisp/const-pool.lisp` defines two functions both using `'(1 2 3)`, verifies via the `disassemble` output that each function carries its own pool entry (not a shared reference) — comparing object identity of the listed constants
-  - [ ] 9.1.5. Closure representation in bytecode. Closed-over bindings are MUTABLE (`(setq x ...)` inside a closure modifies the captured cell, visible to other closures over the same binding). Captured bindings outlive their lexical scope (heap-allocated when captured). Acceptance: `(let ((x 0)) (defun get-x () x) (defun inc-x () (incf x)))` then `(inc-x) (inc-x) (get-x)` returns `2`; same test re-run after `compile-file` still returns `2`; nested closures sharing a binding all see updates
-  - [ ] 9.1.6. Inline caches for global function lookup with three states: monomorphic (single target), polymorphic (up to 4 targets), megamorphic (fall back to global hash table). Cache invalidated on `(setf (symbol-function ...))` and on `fmakunbound`. Acceptance: (a) monomorphic counter — 1M-call hot loop with one target shows ≥99% mono-hit rate; (b) polymorphic counter — `tests/lisp/inline-cache.lisp` exercises a 3-target call site, the polymorphic-dispatch counter increments exactly N times for an N-iteration loop (proves each call took the polymorphic path, not megamorphic fallback); (c) megamorphic transition — a 5-target call site causes the cache to transition into megamorphic state on the 5th distinct target (verified by state-transition counter); (d) `(redefine-fn-then-call)` invalidates correctly. NOT bail-able to "monomorphic only" — the polymorphic AND megamorphic counters are explicit gates
-  - [ ] 9.1.7. Dispatch loop. First implement plain `switch`. Then: benchmark switch vs. inline-threaded vs. tail-call-threaded on `cl-bench` interpreter loops. Acceptance: chosen technique documented in `docs/bytecode.md` with measured numbers; if switch wins under `ReleaseFast`, this bullet's "computed-goto" framing is removed (don't pretend Zig has GCC-style labels-as-values when it doesn't)
+- [x] 9.1. Bytecode VM (intermediate step)
+  - [x] 9.1.1. Instruction set design (`docs/bytecode.md`)
+  - [x] 9.1.2. Compiler from Lisp AST to bytecode — one session per form type:
+    - [x] 9.1.2a. Self-evaluating forms (constants pushed via `LOAD_CONST`)
+    - [x] 9.1.2b. Variable references (`LOAD_LOCAL` for lexical, `LOAD_GLOBAL` for special)
+    - [x] 9.1.2c. Function calls (`CALL` with arity)
+    - [x] 9.1.2d. `if`, `progn`
+    - [x] 9.1.2e. `setq` (`STORE_LOCAL`/`STORE_GLOBAL`)
+    - [x] 9.1.2f. `let`, `let*` (frame allocation + binding emit)
+    - [x] 9.1.2g. `lambda` (emit child function, `MAKE_CLOSURE` op capturing locals)
+    - [x] 9.1.2h. `block`/`return-from` (emit catch-tag and matching unwind)
+    - [x] 9.1.2i. `tagbody`/`go` (emit jump targets and indirect jump table)
+    - [x] 9.1.2j. `catch`/`throw` (dynamic catch frames)
+    - [x] 9.1.2k. `unwind-protect` (cleanup-frame emit)
+    - [x] 9.1.2l. Multiple values (`VALUES`/`MV_BIND` ops)
+  - [x] 9.1.3. Stack-based VM in Zig — one session per concern:
+    - [x] 9.1.3a. Operand stack as growable array of `Value`; basic push/pop ops work
+    - [x] 9.1.3b. Frame stack: each call frame holds locals + return PC + parent frame
+    - [x] 9.1.3c. Main dispatch loop with all ops from 9.1.2 implemented
+    - [x] 9.1.3d. Exception unwinding integrated with `throw`/`return-from`/`go`
+    - [x] 9.1.3e. Interpreter benchmark vs. Phase 2 tree-walker: ≥ 3× faster on `(loop for i from 0 to 1000000 sum i)`
+  - [x] 9.1.4. Constant pool PER COMPILED FUNCTION (not shared across functions or across files — enables function-level unloading). Constants deduplicated WITHIN a function (`'(1 2 3)` appearing twice in one function references one pool entry); NOT deduplicated across functions. Acceptance: `(disassemble #'fn)` output includes a `Constants:` section listing pool entries; `tests/lisp/const-pool.lisp` defines two functions both using `'(1 2 3)`, verifies via the `disassemble` output that each function carries its own pool entry (not a shared reference) — comparing object identity of the listed constants
+  - [x] 9.1.5. Closure representation in bytecode. Closed-over bindings are MUTABLE (`(setq x ...)` inside a closure modifies the captured cell, visible to other closures over the same binding). Captured bindings outlive their lexical scope (heap-allocated when captured). Acceptance: `(let ((x 0)) (defun get-x () x) (defun inc-x () (incf x)))` then `(inc-x) (inc-x) (get-x)` returns `2`; same test re-run after `compile-file` still returns `2`; nested closures sharing a binding all see updates
+  - [x] 9.1.6. Inline caches for global function lookup with three states: monomorphic (single target), polymorphic (up to 4 targets), megamorphic (fall back to global hash table). Cache invalidated on `(setf (symbol-function ...))` and on `fmakunbound`. Acceptance: (a) monomorphic counter — 1M-call hot loop with one target shows ≥99% mono-hit rate; (b) polymorphic counter — `tests/lisp/inline-cache.lisp` exercises a 3-target call site, the polymorphic-dispatch counter increments exactly N times for an N-iteration loop (proves each call took the polymorphic path, not megamorphic fallback); (c) megamorphic transition — a 5-target call site causes the cache to transition into megamorphic state on the 5th distinct target (verified by state-transition counter); (d) `(redefine-fn-then-call)` invalidates correctly. NOT bail-able to "monomorphic only" — the polymorphic AND megamorphic counters are explicit gates
+  - [x] 9.1.7. Dispatch loop. First implement plain `switch`. Then: benchmark switch vs. inline-threaded vs. tail-call-threaded on `cl-bench` interpreter loops. Acceptance: chosen technique documented in `docs/bytecode.md` with measured numbers
 - [ ] 9.2. Native codegen
   - [ ] 9.2.1. Backend decision: `docs/codegen-backend.md` written BEFORE any code. Doc compares LLVM-via-`zig cc` / Cranelift / hand-rolled on five axes (implementation effort, output quality on cl-bench arithmetic, dependency cost, debug-info support, build-time impact). Recommendation made with explicit tradeoffs. User signs off (initial-here checkbox in the doc). NOT bail-able: "let the user decide" without first producing the comparison is the historic stall here
   - [ ] 9.2.2. IR design — SSA over Lisp values, documented in `docs/codegen-ir.md`. Doc MUST cover: every IR op listed with operand/result types; value representation (boxed vs unboxed, when types are tracked); control-flow representation (basic blocks, phi nodes); the IR-to-bytecode lowering pass with one section per IR op showing target bytecode; one example function compiled end-to-end from Lisp source through IR through bytecode through native code. NOT bail-able to "high-level overview"

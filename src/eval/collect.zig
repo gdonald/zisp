@@ -18,6 +18,7 @@ const evacuate_mod = @import("../runtime/evacuate.zig");
 const gc_mod = @import("../runtime/gc.zig");
 const heap_mod = @import("../runtime/heap.zig");
 const env_mod = @import("env.zig");
+const function = @import("function.zig");
 const eval_mod = @import("eval.zig");
 
 const Value = value.Value;
@@ -304,6 +305,20 @@ fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
         try e.update(&frame.form);
     }
     try e.update(&ev.call_form);
+    evacuate_mod.Evacuator.root_source = "compiled code";
+    if (ev.vm) |machine| {
+        for (machine.live()) |*v| try e.update(v);
+        for (machine.frames.items) |*frame| try e.update(&frame.function);
+    }
+    for (ev.codes.items) |code| {
+        for (code.constants) |*v| try e.update(v);
+        for (code.caches) |*cache| {
+            for (cache.live(function.call_cache_epoch)) |*v| try e.update(v);
+        }
+    }
+    // The shared table is keyed on addresses, which a copy changes.
+    if (ev.vm) |machine| machine.forgetMegamorphic();
+    evacuate_mod.Evacuator.root_source = "the evaluator";
     for (ev.dynamic_stack.items) |*entry| {
         try e.update(&entry.sym);
         try e.update(&entry.saved);
@@ -533,6 +548,22 @@ fn pushEvaluatorState(marker: *mark_mod.Marker, ev: *Evaluator) !void {
         try marker.push(frame.form);
     }
     try marker.push(ev.call_form);
+    mark_mod.Marker.source = "compiled code";
+    if (ev.vm) |machine| {
+        for (machine.live()) |v| try marker.push(v);
+        for (machine.frames.items) |frame| try marker.push(frame.function);
+    }
+    for (ev.codes.items) |code| {
+        for (code.constants) |v| try marker.push(v);
+        for (code.caches) |*cache| {
+            for (cache.live(function.call_cache_epoch)) |v| try marker.push(v);
+        }
+    }
+    if (ev.vm) |machine| {
+        var keys = machine.megamorphic.keyIterator();
+        while (keys.next()) |key| try marker.push(.{ .raw = key.* });
+    }
+    mark_mod.Marker.source = "the evaluator";
     for (ev.dynamic_stack.items) |entry| {
         try marker.push(entry.sym);
         try marker.push(entry.saved);

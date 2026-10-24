@@ -496,3 +496,24 @@ test "format encodes literal control-string characters back to utf-8" {
     _ = try fx.evalStr("(format t \"h\xc3\xa9y\")");
     try testing.expectEqualStrings("h\xc3\xa9y", fx.console());
 }
+
+test "get-internal-run-time counts processor time that never runs backward" {
+    const fx = try Fixture.init(testing.allocator);
+    defer fx.deinit(testing.allocator);
+    const got = try fx.evalStr(
+        \\(let ((before (get-internal-run-time)))
+        \\  (dotimes (i 20000) (cons i i))
+        \\  (let ((after (get-internal-run-time)))
+        \\    (and (integerp before) (<= 0 before after))))
+    );
+    try testing.expect(got.equalsRaw(value.T));
+}
+
+test "format t writes to the stream *standard-output* is bound to" {
+    const fx = try Fixture.init(testing.allocator);
+    defer fx.deinit(testing.allocator);
+    const got = try fx.evalStr(
+        \\(equal (with-output-to-string (*standard-output*) (format t "~a-~a" 1 2)) "1-2")
+    );
+    try testing.expect(got.equalsRaw(value.T));
+}

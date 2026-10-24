@@ -7,6 +7,7 @@
 #   tests/run-rt-tests.sh typep subtypep      # several slices
 #   ZISP=/path/to/zisp tests/run-rt-tests.sh format
 #   FLOOR=95 tests/run-rt-tests.sh typep      # the rate each slice has to clear
+#   MODE=compile tests/run-rt-tests.sh loop   # compile every form before running it
 #
 # A slice is a driver at tests/lisp/ansi-<name>.lisp naming the files it
 # wants. `tests/lisp/ansi-rt.lisp` brings the framework up first.
@@ -18,6 +19,7 @@ ZISP="${ZISP:-$ROOT/zig-out/bin/zisp}"
 SUITE="$ROOT/vendor/ansi-test"
 PRELUDE="$ROOT/tests/lisp/ansi-rt.lisp"
 FLOOR="${FLOOR:-90}"
+MODE="${MODE:-interpret}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -34,7 +36,8 @@ for slice in "$@"; do
   driver="$ROOT/tests/lisp/ansi-$slice.lisp"
   [[ -f "$driver" ]] || die "no driver at $driver"
 
-  output="$(cd "$SUITE" && "$ZISP" --batch --load "$PRELUDE" --load "$driver" 2>&1)" || true
+  output="$(cd "$SUITE" && "$ZISP" --batch --eval "(setf ext:*evaluator-mode* :$MODE)" \
+    --load "$PRELUDE" --load "$driver" 2>&1)" || true
 
   tally="$(grep -E "^ANSI-RT $slice [0-9]+ [0-9]+ [0-9]+ [0-9]+$" <<<"$output" | tail -n1 || true)"
   if [[ -z "$tally" ]]; then

@@ -106,7 +106,9 @@ fn formatFn(p: *anyopaque, args: []const Value) Error!Value {
         return ev.heap.allocString(aw.written());
     }
 
-    const stream = try streams.streamOf(ev, dest, .output);
+    // A destination of T is `*standard-output*`, where as a stream
+    // designator T would be `*terminal-io*`.
+    const stream = try streams.streamOf(ev, if (dest.equalsRaw(value.T)) value.NIL else dest, .output);
     if (stream.kind == .console) {
         const out = ev.out orelse return Error.NoOutputStream;
         _ = try format.run(ev, .{ .writer = out, .column = &ev.output_column }, ctrl, fmt_args);
@@ -314,8 +316,18 @@ pub fn loadPath(ev: *Evaluator, path: []const u8) Error!void {
     const saved_package = ev.interner.currentPackage();
     defer ev.interner.setCurrentPackage(saved_package);
 
+    // What `compile-file` wrote is compiled as it is loaded.
+    const mark = ev.dynamicMark();
+    defer ev.unwindSpecials(mark);
+    if (std.mem.startsWith(u8, source, FASL_HEADER)) {
+        try ev.bindSpecial(try ev.interner.internExtension("*EVALUATOR-MODE*"), try ev.interner.internKeyword("COMPILE"));
+    }
+
     try evalSourceRecorded(ev, source, try ev.keepSourceName(truename));
 }
+
+/// The first line of every fasl.
+const FASL_HEADER = ";; zisp fasl (readable load-time forms)\n";
 
 fn readFileAlloc(ev: *Evaluator, io: std.Io, path: []const u8) Error![]u8 {
     const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return Error.FileError;
@@ -442,7 +454,7 @@ fn evalForms(ev: *Evaluator, rd: *reader_mod.Reader) Error!void {
         var held = ev.heap.protect();
         defer held.close();
         try held.push(f);
-        _ = try ev.eval(f);
+        _ = try ev.evalTopLevel(f);
     }
 }
 
@@ -608,7 +620,7 @@ fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value)
     var write_buf: [4096]u8 = undefined;
     var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
     const w = &file_writer.interface;
-    w.print(";; zisp fasl (readable load-time forms)\n", .{}) catch return Error.FileError;
+    w.writeAll(FASL_HEADER) catch return Error.FileError;
     var held = ev.heap.protect();
     defer held.close();
     for (try externalizedForms(ev, forms, &held)) |f| {

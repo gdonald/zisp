@@ -257,6 +257,10 @@ pub const Marker = struct {
             try self.push(instance.function);
             return;
         }
+        if (f.kind == .compiled) {
+            for (f.closedOver()) |held| try self.push(held);
+            return;
+        }
         if (f.kind != .closure) return;
         try self.push(f.payload.closure.params);
         try self.push(f.payload.closure.body);
