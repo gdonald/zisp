@@ -99,6 +99,16 @@ pub const Op = enum(u8) {
     car,
     cdr,
     not,
+    add_fixnums,
+    sub_fixnums,
+    less_fixnums,
+    greater_fixnums,
+    less_equal_fixnums,
+    greater_equal_fixnums,
+    num_equal_fixnums,
+    inc_fixnum,
+    dec_fixnum,
+    check_type,
 
     interpret,
 
@@ -213,6 +223,10 @@ pub const CacheState = enum(u8) { empty, monomorphic, polymorphic, megamorphic }
 
 pub const POLYMORPHIC_TARGETS = 4;
 
+/// The line and column the form an instruction was compiled from begins
+/// at.
+pub const Position = struct { pc: u32, line: u32, column: u32 };
+
 /// One compiled function body: the instructions, the constants they
 /// refer to, and what a call to it binds.
 pub const Code = struct {
@@ -237,6 +251,13 @@ pub const Code = struct {
     /// One cache for each `call` and `call_global`, numbered by the
     /// instruction's last operand.
     caches: []CallCache,
+    /// Whether a call checks how many arguments it was passed. Compiled
+    /// with `(safety 0)`, it does not.
+    check_args: bool = true,
+    /// Where the source of each call instruction was written, kept when
+    /// compiled with `(debug 3)`.
+    positions: []const Position = &.{},
+    source_file: ?[]const u8 = null,
 
     pub fn positional(self: *const Code) u32 {
         return self.required + self.optional;

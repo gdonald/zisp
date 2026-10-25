@@ -3,6 +3,8 @@ const zisp = @import("zisp");
 const cli = @import("cli");
 
 pub fn main(init: std.process.Init) !u8 {
+    if (init.environ_map.get("ZISP_LOG")) |list| zisp.log.enableNamed(list);
+
     var iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
     defer iter.deinit();
 
@@ -48,7 +50,10 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
     var stdout_writer = std.Io.File.Writer.init(std.Io.File.stdout(), io, &out_buf);
     const out = &stdout_writer.interface;
 
-    var repl = try zisp.repl.Repl.init(gpa, out, io);
+    var repl = zisp.repl.Repl.initFrom(gpa, out, io, plan.image) catch |e| {
+        cli.write("zisp: cannot start from {s}: {s}\n", .{ plan.image orelse "the boot sources", @errorName(e) });
+        return @backingInt(cli.ExitCode.user_error);
+    };
     defer repl.deinit();
 
     var stderr_writer = std.Io.File.Writer.init(std.Io.File.stderr(), io, &.{});

@@ -59,6 +59,15 @@ pub const CallFrame = struct {
 };
 pub const GoTarget = struct { id: u64, pos: Value };
 
+/// The optimize qualities, each from 0 to 3, that compiled code is made
+/// with. `docs/optimize-levels.md` says what each level does.
+pub const Policy = struct {
+    speed: u2 = 1,
+    safety: u2 = 1,
+    debug: u2 = 1,
+    space: u2 = 1,
+};
+
 pub const Evaluator = struct {
     allocator: std.mem.Allocator,
     heap: *Heap,
@@ -214,6 +223,15 @@ pub const Evaluator = struct {
     /// compiled function the tenured space holds is not reached by a
     /// collection of the nursery, and neither is what its code refers to.
     codes: std.ArrayListUnmanaged(*const bytecode.Code) = .empty,
+    /// While `compile-file` is writing a binary fasl, the code of each
+    /// load-time form, compiled as the form is processed.
+    fasl_codes: ?*std.ArrayListUnmanaged(*const bytecode.Code) = null,
+    /// What `(declaim (optimize ...))` has proclaimed.
+    policy: Policy = .{},
+    /// Every native, in the order it was defined. A saved image names a
+    /// native by its place here, which is the same in every process of
+    /// one binary.
+    natives: std.ArrayListUnmanaged(Value) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, heap_ref: *Heap, interner: *Interner) Evaluator {
         return .{
@@ -236,6 +254,7 @@ pub const Evaluator = struct {
     pub fn deinit(self: *Evaluator) void {
         if (self.vm) |machine_state| machine_state.deinit();
         self.codes.deinit(self.allocator);
+        self.natives.deinit(self.allocator);
         self.finalizers.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.env.deinit();
@@ -530,8 +549,14 @@ pub const Evaluator = struct {
 
     pub fn defineNative(self: *Evaluator, name: []const u8, native: NativeFn) !Value {
         const sym = try self.interner.intern(name);
-        const fn_v = try function.allocNative(self.heap.allocator, name, native);
+        const fn_v = try self.makeNative(name, native);
         symbol_mod.symbol(sym).function_cell = fn_v;
+        return fn_v;
+    }
+
+    pub fn makeNative(self: *Evaluator, name: []const u8, native: NativeFn) !Value {
+        const fn_v = try function.allocNative(self.heap.allocator, name, native);
+        try self.natives.append(self.allocator, fn_v);
         return fn_v;
     }
 

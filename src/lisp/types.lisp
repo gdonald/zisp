@@ -42,7 +42,7 @@
   '(:file-stream :string-stream :synonym-stream :broadcast-stream
     :concatenated-stream :two-way-stream :echo-stream :stream))
 
-(defparameter *%function-kinds* '(:function))
+(defparameter *%function-kinds* '(:compiled-function :interpreted-function))
 
 (defun %discrete-kind-p (kind)
   (member kind '(:integer :base-char :extended-char)))
@@ -619,7 +619,7 @@ excludes."
         ((arrayp object) (%array-kind-of object))
         ((%structure-p object) (%structure-name object))
         ((hash-table-p object) :hash-table)
-        ((functionp object) :function)
+        ((functionp object) (if (compiled-function-p object) :compiled-function :interpreted-function))
         ((packagep object) :package)
         ((typep object 'logical-pathname) :logical-pathname)
         ((pathnamep object) :pathname)
@@ -762,7 +762,8 @@ one this file knows. Each is built once."
     (simple-bit-vector (%ct-vectors (%array-kinds-of 'bit :simple)))
     (sequence (%ct-or (%ct-named 'list) (%ct-vectors *%array-kinds*)))
     (hash-table (%ct-full-kinds '(:hash-table)))
-    ((function compiled-function) (%ct-full-kinds *%function-kinds*))
+    (function (%ct-full-kinds *%function-kinds*))
+    (compiled-function (%ct-full-kinds '(:compiled-function)))
     (package (%ct-full-kinds '(:package)))
     (pathname (%ct-full-kinds '(:pathname :logical-pathname)))
     (logical-pathname (%ct-full-kinds '(:logical-pathname)))

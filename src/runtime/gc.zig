@@ -158,7 +158,7 @@ pub const CARD_BYTES: usize = 512;
 pub const PAUSE_BUCKETS: usize = 8;
 
 pub fn pauseBucket(nanoseconds: u64) usize {
-    var edge: u64 = std.time.ns_per_us;
+    var edge: u64 = 1000;
     for (0..PAUSE_BUCKETS - 1) |bucket| {
         if (nanoseconds < edge) return bucket;
         edge *= 10;

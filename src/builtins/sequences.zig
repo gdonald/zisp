@@ -84,6 +84,28 @@ fn collectElements(ev: *Evaluator, seq: Value, out: *std.ArrayList(Value)) Error
     }
 }
 
+/// A sequence of `elements` like `source`: a bit vector or a byte vector
+/// for one, and of `source`'s kind otherwise.
+fn buildLike(ev: *Evaluator, source: Value, elements: []const Value) Error!Value {
+    return buildTyped(ev, try kindOf(source), elementTypeOf(source), elements);
+}
+
+fn elementTypeOf(v: Value) heap.ElementType {
+    if (v.tag() == .heap and heap.heapType(v) == .vector) return heap.asArray(v).element_type;
+    return .t;
+}
+
+fn buildTyped(ev: *Evaluator, kind: Kind, element_type: heap.ElementType, elements: []const Value) Error!Value {
+    if (kind != .vector or element_type == .t or element_type == .character) return build(ev, kind, elements);
+    const limit: i64 = if (element_type == .bit) 1 else 255;
+    for (elements) |e| {
+        if (!e.isFixnum() or e.toFixnum() < 0 or e.toFixnum() > limit) return ev.typeMismatch(e, if (element_type == .bit) "BIT" else "(UNSIGNED-BYTE 8)");
+    }
+    const made = try ev.heap.allocArray(&.{elements.len}, element_type);
+    @memcpy(heap.asArray(made).storage[0..elements.len], elements);
+    return made;
+}
+
 fn build(ev: *Evaluator, kind: Kind, elements: []const Value) Error!Value {
     return switch (kind) {
         .list => listOf(ev, elements),
@@ -142,7 +164,7 @@ fn copySeqFn(p: *anyopaque, args: []const Value) Error!Value {
     var elements: std.ArrayList(Value) = .empty;
     defer elements.deinit(ev.allocator);
     try collectElements(ev, args[0], &elements);
-    return build(ev, try kindOf(args[0]), elements.items);
+    return buildLike(ev, args[0], elements.items);
 }
 
 /// A bounding index: nil means "leave the default", anything else must be
@@ -168,7 +190,7 @@ fn subseqFn(p: *anyopaque, args: []const Value) Error!Value {
     else
         elements.items.len;
     if (start > end) return Error.TypeError;
-    return build(ev, try kindOf(args[0]), elements.items[start..end]);
+    return buildLike(ev, args[0], elements.items[start..end]);
 }
 
 /// `reverse` copies and `nreverse` is free to destroy, so both land here.
@@ -179,7 +201,7 @@ fn reverseFn(p: *anyopaque, args: []const Value) Error!Value {
     defer elements.deinit(ev.allocator);
     try collectElements(ev, args[0], &elements);
     std.mem.reverse(Value, elements.items);
-    return build(ev, try kindOf(args[0]), elements.items);
+    return buildLike(ev, args[0], elements.items);
 }
 
 // --- keyword options ---
@@ -334,9 +356,10 @@ fn predicateHolds(ev: *Evaluator, options: Options, pred: Value, element: Value,
 const Elements = struct {
     items: std.ArrayList(Value) = .empty,
     kind: Kind = .list,
+    element_type: heap.ElementType = .t,
 
     fn of(ev: *Evaluator, seq: Value) Error!Elements {
-        var self = Elements{ .kind = try kindOf(seq) };
+        var self = Elements{ .kind = try kindOf(seq), .element_type = elementTypeOf(seq) };
         try collectElements(ev, seq, &self.items);
         return self;
     }
@@ -638,7 +661,7 @@ fn removeMarked(ev: *Evaluator, elements: Elements, marks: []const bool) Error!V
     for (elements.items.items, marks) |element, marked| {
         if (!marked) try kept.append(ev.allocator, element);
     }
-    return build(ev, elements.kind, kept.items);
+    return buildTyped(ev, elements.kind, elements.element_type, kept.items);
 }
 
 fn removeWith(ev: *Evaluator, args: []const Value, spec: SearchSpec) Error!Value {
@@ -701,7 +724,7 @@ fn substituteFn(p: *anyopaque, args: []const Value) Error!Value {
     for (elements.items.items, marks) |*element, marked| {
         if (marked) element.* = args[0];
     }
-    return build(ev, elements.kind, elements.items.items);
+    return buildTyped(ev, elements.kind, elements.element_type, elements.items.items);
 }
 
 // --- sorting ---
@@ -775,7 +798,7 @@ fn sortFn(p: *anyopaque, args: []const Value) Error!Value {
     const scratch = try ev.allocator.alloc(Value, elements.items.items.len);
     defer ev.allocator.free(scratch);
     try mergeSort(ev, options, pred, elements.items.items, scratch);
-    return build(ev, elements.kind, elements.items.items);
+    return buildTyped(ev, elements.kind, elements.element_type, elements.items.items);
 }
 
 fn mergeFn(p: *anyopaque, args: []const Value) Error!Value {

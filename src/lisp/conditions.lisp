@@ -149,6 +149,10 @@ anything else names a function of the condition and a stream."
 (define-condition file-error (error)
   ((pathname :initarg :pathname :reader file-error-pathname)))
 
+;; A fasl written by a zisp whose format or instruction set this one
+;; does not read.
+(define-condition ext:fasl-version-error (file-error) ())
+
 (define-condition parse-error (error) ())
 (define-condition reader-error (parse-error stream-error) ())
 
@@ -409,7 +413,8 @@ or `warn`, the restarts are associated with the condition it signals."
     (:|NoSuchPackage| . package-error)
     (:|PackageError| . package-error)
     (:|OutOfMemory| . storage-condition)
-    (:|StackExhausted| . storage-condition)))
+    (:|StackExhausted| . storage-condition)
+    (:|FaslVersion| . ext:fasl-version-error)))
 
 (defun %native-condition-initargs (type caught)
   "The slots a condition standing for a native failure can be given. What

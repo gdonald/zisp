@@ -52,6 +52,12 @@ pub const Repl = struct {
     star3: Value,
 
     pub fn init(gpa: std.mem.Allocator, out: *std.Io.Writer, io: ?std.Io) !*Repl {
+        return initFrom(gpa, out, io, null);
+    }
+
+    /// A REPL whose session starts from the image at `image_path`, or
+    /// from the boot sources when there is none.
+    pub fn initFrom(gpa: std.mem.Allocator, out: *std.Io.Writer, io: ?std.Io, image_path: ?[]const u8) !*Repl {
         const self = try gpa.create(Repl);
         errdefer gpa.destroy(self);
         self.* = .{
@@ -75,8 +81,14 @@ pub const Repl = struct {
         self.ev.out = out;
         self.ev.io = io;
         try eval_pkg.registerStandardSpecialForms(&self.ev);
-        try builtins.registerStandard(&self.ev);
-        try builtins.registerSystem(&self.ev);
+        if (image_path) |path| {
+            try builtins.registerNatives(&self.ev);
+            try builtins.registerSystem(&self.ev);
+            try builtins.image.loadPath(&self.ev, path);
+        } else {
+            try builtins.registerStandard(&self.ev);
+            try builtins.registerSystem(&self.ev);
+        }
 
         self.minus = try self.interner.intern("-");
         self.plus = try self.interner.intern("+");

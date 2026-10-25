@@ -65,8 +65,7 @@ fn gcFn(p: *anyopaque, args: []const Value) Error!Value {
 /// standard rather than one the standard names.
 fn defineExtension(ev: *Evaluator, name: []const u8, native: function.NativeFn) !void {
     const sym = try ev.interner.internExtension(name);
-    symbol_mod.symbol(sym).function_cell =
-        try function.allocNative(ev.heap.allocator, name, native);
+    symbol_mod.symbol(sym).function_cell = try ev.makeNative(name, native);
 }
 
 /// A reference that does not keep what it refers to alive.

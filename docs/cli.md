@@ -18,6 +18,7 @@ zisp [OPTIONS] [FILE [ARGS...]]
 | `--quiet`, `-q` | Suppress startup banner. |
 | `--script FILE` | Treat FILE as a script; remaining args bound to `*command-line-arguments*`. |
 | `--read-only FILE` | Parse FILE without evaluating; report parse-rate. |
+| `--image FILE` | Start from an image `ext:save-image` wrote, instead of the boot sources. |
 | `--` | End of options |
 
 Options and positional arguments are processed left to right. `--eval` and

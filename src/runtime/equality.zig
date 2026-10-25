@@ -89,7 +89,22 @@ pub fn equal(a: Value, b: Value) bool {
         return std.mem.eql(u32, heap.asString(a).constSlice(), heap.asString(b).constSlice());
     }
     if (heap.isPathname(a) and heap.isPathname(b)) return pathnamesEqual(a, b);
+    if (bitVectorBits(a)) |x| {
+        const y = bitVectorBits(b) orelse return false;
+        if (x.len != y.len) return false;
+        for (x, y) |p, q| if (!p.equalsRaw(q)) return false;
+        return true;
+    }
     return false;
+}
+
+/// The active elements of a bit vector, which `equal` compares one by
+/// one, or null for anything else.
+fn bitVectorBits(v: Value) ?[]const Value {
+    if (v.tag() != .heap or heap.heapType(v) != .vector) return null;
+    const a = heap.asArray(v);
+    if (a.rank != 1 or a.element_type != .bit) return null;
+    return a.storage[0..a.activeLen()];
 }
 
 pub fn charLower(c: u21) u21 {
@@ -211,6 +226,11 @@ fn equalHash(v: Value, depth: u32) u64 {
     if (v.isCons()) {
         if (depth >= MAX_HASH_DEPTH) return 4;
         return mix(equalHash(heap.car(v), depth + 1), equalHash(heap.cdr(v), depth + 1));
+    }
+    if (bitVectorBits(v)) |bits| {
+        var h: u64 = 11;
+        for (bits) |bit| h = mix(h, bit.raw);
+        return h;
     }
     return eqlHash(v);
 }

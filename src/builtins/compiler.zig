@@ -7,6 +7,7 @@ const symbol_mod = @import("../runtime/symbol.zig");
 const function = @import("../eval/function.zig");
 const eval_mod = @import("../eval/eval.zig");
 const compiler = @import("../compiler/compiler.zig");
+const special_forms = @import("../eval/special_forms.zig");
 const bytecode = compiler.bytecode;
 const Op = bytecode.Op;
 
@@ -21,6 +22,9 @@ fn evaluator(p: *anyopaque) *Evaluator {
 pub fn registerCompiler(ev: *Evaluator) !void {
     _ = try ev.defineNative("%COMPILE-LAMBDA", &compileLambdaFn);
     _ = try ev.defineNative("%COMPILE-FUNCTION", &compileFunctionFn);
+    _ = try ev.defineNative("COMPILED-FUNCTION-P", &compiledFunctionPFn);
+    _ = try ev.defineNative("%PROCLAIM", &proclaimFn);
+    _ = try ev.defineNative("%PUT-INLINE-EXPANSION", &putInlineExpansionFn);
     function.asFunction(try ev.defineNative("%MACROEXPAND-1", &macroexpand1Fn)).preserves_values = true;
     function.asFunction(try ev.defineNative("%MACROEXPAND", &macroexpandFn)).preserves_values = true;
     _ = try ev.defineNative("%DISASSEMBLY", &disassemblyFn);
@@ -29,6 +33,13 @@ pub fn registerCompiler(ev: *Evaluator) !void {
     _ = try ev.defineNative("%RESET-CALL-CACHE-COUNTERS", &resetCallCacheCountersFn);
     _ = try ev.defineNative("%CALL-SITE-COUNTERS", &callSiteCountersFn);
 
+    _ = try ev.interner.internExtension("FASL-VERSION-ERROR");
+    _ = try ev.interner.internExtension("*TCO-FRAME-COUNTER*");
+    // Set to write fasls big-endian, which is what tests the loader's
+    // byte swapping.
+    const big = try ev.interner.intern("*%FASL-BIG-ENDIAN*");
+    symbol_mod.symbol(big).special = true;
+    if (symbol_mod.symbol(big).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) symbol_mod.symbol(big).value_cell = value.NIL;
     const mode = try ev.interner.internExtension("*EVALUATOR-MODE*");
     symbol_mod.symbol(mode).special = true;
     if (symbol_mod.symbol(mode).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
@@ -116,7 +127,7 @@ const Operand = enum { plain, constant, slot, target, closed };
 
 fn operandKinds(op: Op) []const Operand {
     return switch (op) {
-        .load_const, .load_global, .store_global, .bind_special, .load_function, .store_function, .interpret => &.{.constant},
+        .load_const, .load_global, .store_global, .bind_special, .load_function, .store_function, .interpret, .check_type => &.{.constant},
         .load_local, .store_local, .make_cell, .load_cell, .store_cell, .save_dynamic, .restore_dynamic, .save_state, .mv_spread, .rest_arg, .pop_list, .check_end => &.{.slot},
         .load_closed, .load_closed_cell, .store_closed_cell => &.{.closed},
         .jump, .jump_if_nil, .jump_if_true => &.{.target},
@@ -165,6 +176,10 @@ fn disassemblyFn(p: *anyopaque, args: []const Value) Error!Value {
         if (code.takes_extra) ", more accepted" else "",
         code.locals,
     });
+    if (code.source_file) |file| {
+        const base = if (std.mem.lastIndexOfScalar(u8, file, '/')) |i| file[i + 1 ..] else file;
+        try w.print("Source: {s}\n", .{base});
+    }
     var pc: usize = 0;
     while (pc < code.words.len) {
         const word = code.words[pc];
@@ -210,6 +225,10 @@ fn disassemblyFn(p: *anyopaque, args: []const Value) Error!Value {
                 try w.print("{s}{s}", .{ if (noted) ", " else "  ; ", text });
                 noted = true;
             }
+        }
+        for (code.positions) |pos| {
+            if (pos.pc != pc) continue;
+            try w.print("{s}line {d}", .{ if (noted) ", " else "  ; ", pos.line });
         }
         try w.writeByte('\n');
         pc += 1 + extra;
@@ -267,4 +286,27 @@ fn resetCallCacheCountersFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 0) return Error.WrongArgCount;
     (try ev.machine()).counters = .{};
     return value.NIL;
+}
+
+fn compiledFunctionPFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    return if (function.isCompiledFunction(args[0])) value.T else value.NIL;
+}
+
+fn proclaimFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    try special_forms.proclaim(ev, args[0]);
+    return value.NIL;
+}
+
+/// `(%put-inline-expansion name expansion)`: what calls to the function
+/// `name` are expanded into where it is declared inline.
+fn putInlineExpansionFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return ev.typeMismatch(args[0], "SYMBOL");
+    try symbol_mod.plistPut(ev.heap, args[0], try ev.interner.intern("%INLINE-EXPANSION"), args[1]);
+    return args[1];
 }

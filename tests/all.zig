@@ -84,6 +84,7 @@ comptime {
     _ = @import("builtins/ansi_rt_test.zig");
     _ = @import("builtins/ansi_cl_test_package_test.zig");
     _ = @import("builtins/ansi_do_tests_test.zig");
+    _ = @import("builtins/image_test.zig");
     _ = @import("builtins/compile_file_test.zig");
     _ = @import("repl/repl_test.zig");
     _ = @import("repl/debugger_test.zig");

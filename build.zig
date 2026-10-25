@@ -191,6 +191,29 @@ pub fn build(b: *std.Build) void {
     const bytecode_bench_step = b.step("bytecode-bench", "Measure the bytecode VM against the interpreter");
     bytecode_bench_step.dependOn(&bytecode_bench_run.step);
 
+    // `zig build optimize-bench` times a loop compiled with (speed 3)
+    // against the same loop compiled with (speed 0).
+    const optimize_bench_run = b.addRunArtifact(exe);
+    optimize_bench_run.addArgs(&.{ "--batch", "--quiet", "--load", "tests/lisp/optimize-bench.lisp" });
+    const optimize_bench_step = b.step("optimize-bench", "Measure (speed 3) against (speed 0)");
+    optimize_bench_step.dependOn(&optimize_bench_run.step);
+
+    // `zig build tco-soak` runs tail-recursive loops for a minute each
+    // and fails when one grew the frames in progress.
+    const tco_soak_run = b.addRunArtifact(exe);
+    tco_soak_run.addArgs(&.{ "--batch", "--quiet", "--load", "tests/lisp/tco-soak.lisp" });
+    const tco_soak_step = b.step("tco-soak", "Run tail-recursive loops for a minute each");
+    tco_soak_step.dependOn(&tco_soak_run.step);
+
+    // `zig build image-cold-start` saves a small session as an image and
+    // fails when starting from it takes longer than the gate allows.
+    const image_run = b.addSystemCommand(&.{"env"});
+    image_run.addPrefixedFileArg("ZISP=", exe.getEmittedBin());
+    image_run.addArgs(&.{ "bash", "tests/run-image-cold-start.sh" });
+    image_run.step.dependOn(b.getInstallStep());
+    const image_step = b.step("image-cold-start", "Time starting from a saved image");
+    image_step.dependOn(&image_run.step);
+
     // `zig build boyer` measures cl-bench's Boyer benchmark with the
     // nursery and without it, and fails if the generational collector
     // has fallen behind the mark and sweep baseline.

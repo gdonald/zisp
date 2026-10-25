@@ -1,6 +1,11 @@
 ;; Every form here must evaluate to T. Each one compiles a function and
 ;; checks what calling it does.
 
+;; compiled functions
+(compiled-function-p (compile nil '(lambda () 1)))
+(eq (compiled-function-p (lambda ())) (eq ext:*evaluator-mode* :compile))
+(compiled-function-p #'car)
+
 ;; constants
 (eql (funcall (compile nil '(lambda () 42))) 42)
 (eql (funcall (compile nil '(lambda () 12345678901))) 12345678901)

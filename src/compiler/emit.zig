@@ -75,6 +75,8 @@ pub const Emitter = struct {
     max_depth: u32 = 0,
     level: u32 = 0,
     call_sites: u32 = 0,
+    positions: std.ArrayListUnmanaged(bytecode.Position) = .empty,
+    source_file: ?[]const u8 = null,
 
     // --- low-level emission ---
 
@@ -233,6 +235,13 @@ pub const Emitter = struct {
         self.grow(1);
     }
 
+    /// Check the value on top of the stack is of the type `v` was
+    /// declared with, where the policy asks for that.
+    fn checkVar(self: *Emitter, v: *const Var) Error!void {
+        if (!v.check) return;
+        try self.emit(.check_type, try self.constant(v.declared));
+    }
+
     /// Bind `target` to the value in `slot`. A lexical variable takes the
     /// slot over. Returns whether a dynamic binding was made.
     fn bindFromSlot(self: *Emitter, target: Target, slot: u32) Error!bool {
@@ -240,6 +249,13 @@ pub const Emitter = struct {
             .lexical => |v| {
                 v.slot = slot;
                 self.slot_names.items[slot] = v.sym;
+                if (v.check) {
+                    try self.emit(.load_local, slot);
+                    self.grow(1);
+                    try self.checkVar(v);
+                    try self.emit(.pop, 0);
+                    self.shrink(1);
+                }
                 if (v.boxed()) try self.emit(.make_cell, slot);
                 return false;
             },
@@ -255,6 +271,7 @@ pub const Emitter = struct {
     fn bindTop(self: *Emitter, target: Target) Error!bool {
         switch (target) {
             .lexical => |v| {
+                try self.checkVar(v);
                 v.slot = try self.allocSlot(v.sym);
                 try self.emit(.store_local, v.slot);
                 self.shrink(1);
@@ -290,8 +307,15 @@ pub const Emitter = struct {
                 try self.loadVar(v);
                 try self.finishSingle(ctx);
             },
+            .the_ => |t| {
+                if (!t.check) return self.compile(t.form, ctx);
+                try self.compile(t.form, .single);
+                try self.emit(.check_type, try self.constant(t.spec));
+                try self.finishSingle(ctx);
+            },
             .local_set => |set| {
                 try self.compile(set.value, .single);
+                try self.checkVar(set.v);
                 if (ctx != .effect) {
                     try self.emit(.dup, 0);
                     self.grow(1);
@@ -321,12 +345,14 @@ pub const Emitter = struct {
             },
             .call_global => |call| {
                 for (call.args) |arg| try self.compile(arg, .single);
+                try self.notePosition(call.form);
                 try self.emit(.call_global, try self.constant(call.sym));
                 try self.callTail(@intCast(call.args.len), 0, ctx, .call_global);
             },
             .call => |call| {
                 try self.compile(call.callee, .single);
                 for (call.args) |arg| try self.compile(arg, .single);
+                try self.notePosition(call.form);
                 try self.callTail(@intCast(call.args.len), 1, ctx, .call);
             },
             .apply => |call| {
@@ -466,7 +492,7 @@ pub const Emitter = struct {
                     try self.emit(.mv_spread, counter);
                 }
                 _ = self.scopes.pop();
-                try self.emit(.call_counted, bytecode.callOperand(counter, modeFor(ctx)));
+                try self.emit(.call_counted, bytecode.callOperand(counter, self.modeFor(ctx)));
                 self.shrink(1);
                 try self.afterCall(ctx);
             },
@@ -525,6 +551,12 @@ pub const Emitter = struct {
                 try self.makeClosure(d.lambda);
                 try self.emit(.store_function, try self.constant(d.sym));
                 self.shrink(1);
+                if (d.expansion.raw != 0) {
+                    try self.loadConstant(d.sym);
+                    try self.loadConstant(d.expansion);
+                    try self.emit(.call_global, try self.constant(try self.ev.interner.intern("%PUT-INLINE-EXPANSION")));
+                    try self.callTail(2, 0, .effect, .call_global);
+                }
                 var result: Node = .{ .constant = d.result };
                 try self.compile(&result, ctx);
             },
@@ -556,19 +588,36 @@ pub const Emitter = struct {
         }
     }
 
-    fn modeFor(ctx: Ctx) bytecode.Mode {
+    /// What a call in `ctx` does with its result. With `(debug 3)` a
+    /// call in tail position still keeps its caller's frame, so a
+    /// backtrace shows every call.
+    fn modeFor(self: *const Emitter, ctx: Ctx) bytecode.Mode {
         return switch (ctx) {
             .effect, .single => .single,
             .multiple => .multiple,
-            .tail => .tail,
+            .tail => if (self.lambda.policy.debug == 3) .multiple else .tail,
         };
+    }
+
+    /// Note where the call about to be emitted was written, under
+    /// `(debug 3)`.
+    fn notePosition(self: *Emitter, form: Value) Error!void {
+        if (self.lambda.policy.debug < 3 or form.raw == 0) return;
+        const table = self.ev.positions orelse return;
+        const pos = table.userPosition(form) orelse return;
+        if (self.source_file == null) self.source_file = pos.file;
+        try self.positions.append(self.arena, .{
+            .pc = @intCast(self.words.items.len),
+            .line = @intCast(pos.line),
+            .column = @intCast(pos.column),
+        });
     }
 
     /// Emit the operand of the call just started and account for its
     /// result. `callee_slots` is 1 when the function sits on the stack
     /// below its arguments.
     fn callTail(self: *Emitter, argc: u32, callee_slots: u32, ctx: Ctx, op: Op) Error!void {
-        const operand = bytecode.callOperand(argc, modeFor(ctx));
+        const operand = bytecode.callOperand(argc, self.modeFor(ctx));
         if (op == .call_global) {
             try self.word(operand);
         } else {
@@ -1090,7 +1139,13 @@ pub const Emitter = struct {
             .max_stack = self.max_depth + 2,
             .slot_names = try allocator.dupe(Value, self.slot_names.items),
             .caches = caches,
+            .check_args = l.policy.safety >= 1,
+            .positions = try allocator.dupe(bytecode.Position, self.positions.items),
+            .source_file = if (self.source_file) |file| try allocator.dupe(u8, file) else null,
         };
+        // Variable names are kept for a listing or a debugger unless the
+        // policy says debugging does not matter.
+        if (l.policy.debug == 0) @memset(@constCast(code.slot_names), .{ .raw = 0 });
         try self.ev.registerCode(code);
         return code;
     }

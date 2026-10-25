@@ -1,0 +1,47 @@
+Disassembly of GOLDEN-SAMPLE
+2 required, 0 optional, 2 locals
+Source: sample.lisp
+    0  LOAD_FIXNUM 0
+    1  LOAD_NIL
+    2  STORE_LOCAL 2  ; KEPT
+    3  STORE_LOCAL 3  ; TOTAL
+    4  LOAD_LOCAL 1  ; LIMIT
+    5  LOAD_FIXNUM 0
+    6  GREATER
+    7  JUMP_IF_NIL 15
+    8  LOAD_FUNCTION 0  ; constant 0
+    9  LOAD_LOCAL 0  ; ITEMS
+   10  CALL_GLOBAL 1 2 single 0  ; constant 1, line 6
+   13  STORE_LOCAL 2  ; KEPT
+   14  JUMP 15
+   15  LOAD_FUNCTION 2  ; constant 2
+   16  LOAD_LOCAL 2  ; KEPT
+   17  CALL_GLOBAL 3 2 single 1  ; constant 3, line 7
+   20  STORE_LOCAL 3  ; TOTAL
+   21  LOAD_LOCAL 3  ; TOTAL
+   22  LOAD_LOCAL 1  ; LIMIT
+   23  GREATER
+   24  JUMP_IF_NIL 32
+   25  LOAD_NIL
+   26  LOAD_CONST 4  ; constant 4
+   27  LOAD_LOCAL 3  ; TOTAL
+   28  CALL_GLOBAL 5 3 multiple 2  ; constant 5, line 9
+   31  RETURN_MV
+   32  LOAD_CONST 6  ; constant 6
+   33  LOAD_LOCAL 3  ; TOTAL
+   34  LOAD_CONST 7  ; constant 7
+   35  LOAD_LOCAL 2  ; KEPT
+   36  CALL_GLOBAL 8 1 single 3  ; constant 8, line 10
+   39  CALL_GLOBAL 9 4 multiple 4  ; constant 9, line 10
+   42  RETURN_MV
+Constants:
+    0  NUMBERP
+    1  REMOVE-IF-NOT
+    2  +
+    3  REDUCE
+    4  "~a over"
+    5  FORMAT
+    6  :TOTAL
+    7  :KEPT
+    8  LENGTH
+    9  LIST

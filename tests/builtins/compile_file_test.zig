@@ -386,3 +386,230 @@ test "a compiled file's closures share a binding they all assign" {
     try testing.expectEqual(@as(i64, 2), (try fx.evalStr("(file-get-x)")).toFixnum());
     try testing.expect((try fx.evalStr("(listp (%function-constants #'file-get-x))")).equalsRaw(value.T));
 }
+
+// --- binary fasls ---
+
+const cross_source = @embedFile("../fasl/cross.lisp");
+const cross_fixtures = [_][]const u8{
+    @embedFile("../fasl/cross-aarch64.zfasl"),
+    @embedFile("../fasl/cross-x86_64.zfasl"),
+};
+
+/// The results `tests/fasl/cross.lisp` gives once loaded, as one form
+/// that is T when every one is right.
+const cross_checks =
+    \\(and (equalp (cross-literals)
+    \\             '(1 -7 123456789012345678901234567890 -98765432109876543210 3/4 #c(1 2)
+    \\               1.5 2.25d0 #\a #\λ "strings with λ" :keyword cross-symbol
+    \\               (nested (list . dotted)) #(1 "two" three) #*1011 #(1 2 255)))
+    \\     (equal (subseq (cross-literals) 0 14)
+    \\            '(1 -7 123456789012345678901234567890 -98765432109876543210 3/4 #c(1 2)
+    \\              1.5 2.25d0 #\a #\λ "strings with λ" :keyword cross-symbol
+    \\              (nested (list . dotted))))
+    \\     (equal (cross-arguments 1) '(1 10 nil 2))
+    \\     (equal (cross-arguments 1 2 :c 5 :d 6) '(1 2 (:c 5 :d 6) 5))
+    \\     (progn (cross-bump) (cross-bump) (eql (cross-count) 2))
+    \\     (eql (cross-exits '(1 -2 3)) -2)
+    \\     (eq (cross-exits '(1 2)) :thrown)
+    \\     (eql *cross-loaded* 101)
+    \\     (compiled-function-p #'cross-literals))
+;
+
+/// Write `bytes` to `name` in `tmp` and give back the path `load` reads
+/// it by.
+fn writeTemp(tmp: *std.testing.TmpDir, name: []const u8, bytes: []const u8) ![]u8 {
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = bytes });
+    return std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, name });
+}
+
+fn loadForm(path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(testing.allocator, "(load \"{s}\")", .{path});
+}
+
+test "a binary fasl gives back what its source defines" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "cross.lisp", cross_source);
+    defer testing.allocator.free(path);
+    const form = try std.fmt.allocPrint(testing.allocator, "(compile-file \"{s}\")", .{path});
+    defer testing.allocator.free(form);
+    const fasl_path = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr(form));
+    defer testing.allocator.free(fasl_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, fasl_path, testing.allocator, .unlimited);
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.startsWith(u8, bytes, "ZISPFASL"));
+
+    const load = try loadForm(fasl_path);
+    defer testing.allocator.free(load);
+    _ = try fx.evalStr(load);
+    try testing.expect((try fx.evalStr(cross_checks)).equalsRaw(value.T));
+}
+
+test "the same source compiles to the bytes the aarch64 and x86_64 fixtures hold" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "cross.lisp", cross_source);
+    defer testing.allocator.free(path);
+    const form = try std.fmt.allocPrint(testing.allocator, "(compile-file \"{s}\")", .{path});
+    defer testing.allocator.free(form);
+    const fasl_path = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr(form));
+    defer testing.allocator.free(fasl_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, fasl_path, testing.allocator, .unlimited);
+    defer testing.allocator.free(bytes);
+    for (cross_fixtures) |fixture| try testing.expectEqualSlices(u8, fixture, bytes);
+}
+
+test "a fasl written on aarch64 and one written on x86_64 both load here" {
+    for (cross_fixtures, 0..) |fixture, i| {
+        const fx = try newFx();
+        defer fx.deinit(testing.allocator);
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const path = try writeTemp(&tmp, if (i == 0) "aarch64.zfasl" else "x86_64.zfasl", fixture);
+        defer testing.allocator.free(path);
+        const load = try loadForm(path);
+        defer testing.allocator.free(load);
+        _ = try fx.evalStr(load);
+        try testing.expect((try fx.evalStr(cross_checks)).equalsRaw(value.T));
+    }
+}
+
+fn expectVersionError(bytes: []const u8) !void {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "future.zfasl", bytes);
+    defer testing.allocator.free(path);
+    const form = try std.fmt.allocPrint(
+        testing.allocator,
+        "(handler-case (progn (load \"{s}\") :loaded) (ext:fasl-version-error () :refused))",
+        .{path},
+    );
+    defer testing.allocator.free(form);
+    const got = try fx.evalStr(form);
+    try testing.expectEqualStrings("REFUSED", symbol_mod.symbol(got).name);
+    try testing.expect((try fx.evalStr("(boundp '*cross-loaded*)")).equalsRaw(value.NIL));
+}
+
+test "a fasl of a later major version signals fasl-version-error before anything runs" {
+    var bytes = try testing.allocator.dupe(u8, cross_fixtures[0]);
+    defer testing.allocator.free(bytes);
+    std.mem.writeInt(u16, bytes[12..14], std.mem.readInt(u16, bytes[12..14], .little) + 1, .little);
+    try expectVersionError(bytes);
+}
+
+test "a fasl of another instruction set signals fasl-version-error" {
+    var bytes = try testing.allocator.dupe(u8, cross_fixtures[0]);
+    defer testing.allocator.free(bytes);
+    std.mem.writeInt(u32, bytes[16..20], std.mem.readInt(u32, bytes[16..20], .little) ^ 1, .little);
+    try expectVersionError(bytes);
+}
+
+test "a fasl of a later minor version loads" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var bytes = try testing.allocator.dupe(u8, cross_fixtures[0]);
+    defer testing.allocator.free(bytes);
+    std.mem.writeInt(u16, bytes[14..16], std.mem.readInt(u16, bytes[14..16], .little) + 1, .little);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "minor.zfasl", bytes);
+    defer testing.allocator.free(path);
+    const load = try loadForm(path);
+    defer testing.allocator.free(load);
+    _ = try fx.evalStr(load);
+    try testing.expect((try fx.evalStr(cross_checks)).equalsRaw(value.T));
+}
+
+test "a big-endian fasl is read with its bytes swapped" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "cross.lisp", cross_source);
+    defer testing.allocator.free(path);
+    const form = try std.fmt.allocPrint(
+        testing.allocator,
+        "(let ((*%fasl-big-endian* t)) (compile-file \"{s}\"))",
+        .{path},
+    );
+    defer testing.allocator.free(form);
+    const fasl_path = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr(form));
+    defer testing.allocator.free(fasl_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, fasl_path, testing.allocator, .unlimited);
+    defer testing.allocator.free(bytes);
+    try testing.expectEqual(@as(u8, 2), bytes[8]);
+    const load = try loadForm(fasl_path);
+    defer testing.allocator.free(load);
+    _ = try fx.evalStr(load);
+    try testing.expect((try fx.evalStr(cross_checks)).equalsRaw(value.T));
+}
+
+test "a literal the binary format has no tag for makes a text fasl" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "table.lisp",
+        \\(defun table-literal () #.(let ((h (make-hash-table))) (setf (gethash 1 h) :one) h))
+    );
+    defer testing.allocator.free(path);
+    const form = try std.fmt.allocPrint(testing.allocator, "(compile-file \"{s}\")", .{path});
+    defer testing.allocator.free(form);
+    const fasl_path = try heap_mod.stringUtf8Alloc(testing.allocator, try fx.evalStr(form));
+    defer testing.allocator.free(fasl_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, fasl_path, testing.allocator, .unlimited);
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.startsWith(u8, bytes, ";; zisp fasl"));
+}
+
+test "loading a name with no type compiles the source when it is newer than its fasl" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source = try writeTemp(&tmp, "versioned.lisp", "(defparameter *versioned* 1)");
+    defer testing.allocator.free(source);
+    const stem = source[0 .. source.len - ".lisp".len];
+    const load = try loadForm(stem);
+    defer testing.allocator.free(load);
+
+    // No fasl yet: one is written, and it is what gets loaded.
+    _ = try fx.evalStr(load);
+    try testing.expectEqual(@as(i64, 1), (try fx.evalStr("*versioned*")).toFixnum());
+    const fasl = try tmp.dir.readFileAlloc(std.testing.io, "versioned.zfasl", testing.allocator, .unlimited);
+    defer testing.allocator.free(fasl);
+    try testing.expect(std.mem.startsWith(u8, fasl, "ZISPFASL"));
+
+    // A fasl newer than its source is loaded as it is.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "versioned.lisp", .data = "(defparameter *versioned* 2)" });
+    const fasl_stat = try tmp.dir.statFile(std.testing.io, "versioned.zfasl", .{});
+    try tmp.dir.setTimestamps(std.testing.io, "versioned.lisp", .{
+        .modify_timestamp = .{ .new = .{ .nanoseconds = fasl_stat.mtime.nanoseconds - std.time.ns_per_s } },
+    });
+    _ = try fx.evalStr(load);
+    try testing.expectEqual(@as(i64, 1), (try fx.evalStr("*versioned*")).toFixnum());
+
+    // A source newer than its fasl is compiled again first.
+    try tmp.dir.setTimestamps(std.testing.io, "versioned.lisp", .{
+        .modify_timestamp = .{ .new = .{ .nanoseconds = fasl_stat.mtime.nanoseconds + std.time.ns_per_s } },
+    });
+    _ = try fx.evalStr(load);
+    try testing.expectEqual(@as(i64, 2), (try fx.evalStr("*versioned*")).toFixnum());
+}
+
+// --- disassemble ---
+
+test "disassemble lists a function compiled with debug 3 as the golden file does" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try zisp.builtins.system.loadPath(&fx.ev, "tests/disassemble-golden/sample.lisp");
+    fx.aw.clearRetainingCapacity();
+    _ = try fx.evalStr("(disassemble 'golden-sample)");
+    try testing.expectEqualStrings(@embedFile("../disassemble-golden/sample.expected"), fx.aw.written());
+}

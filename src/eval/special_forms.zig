@@ -104,24 +104,62 @@ fn defconstant(ev: *Evaluator, args: Value) Error!Value {
     return ev.set1(result);
 }
 
-/// `(declaim decl...)`. Only `special` changes anything; the rest are
-/// accepted and ignored, matching `declare`.
+/// `(declaim decl...)`: each declaration proclaimed, as `proclaim` does.
 fn declaim(ev: *Evaluator, args: Value) Error!Value {
     var rest = args;
-    while (rest.isCons()) : (rest = heap.cdr(rest)) {
-        const decl = heap.car(rest);
-        if (!decl.isCons()) continue;
-        const head = heap.car(decl);
-        if (!head.isSymbol()) continue;
-        if (!std.mem.eql(u8, symbol_mod.symbol(head).name, "SPECIAL")) continue;
-        var names = heap.cdr(decl);
+    while (rest.isCons()) : (rest = heap.cdr(rest)) try proclaim(ev, heap.car(rest));
+    return ev.set1(value.NIL);
+}
+
+/// Proclaim one declaration. `special` makes variables special,
+/// `optimize` sets the qualities compiled code is made with from here on,
+/// and `inline` and `notinline` say whether calls to the functions named
+/// are expanded in place. The rest say nothing this implementation acts
+/// on.
+pub fn proclaim(ev: *Evaluator, decl: Value) Error!void {
+    if (!decl.isCons()) return;
+    const head = heap.car(decl);
+    if (!head.isSymbol()) return;
+    const kind = symbol_mod.symbol(head).name;
+    var names = heap.cdr(decl);
+    if (std.mem.eql(u8, kind, "SPECIAL")) {
         while (names.isCons()) : (names = heap.cdr(names)) {
             const n = heap.car(names);
             if (!n.isSymbol()) return Error.TypeError;
             symbol_mod.symbol(n).special = true;
         }
+    } else if (std.mem.eql(u8, kind, "OPTIMIZE")) {
+        while (names.isCons()) : (names = heap.cdr(names)) {
+            try applyOptimize(&ev.policy, heap.car(names));
+        }
+    } else if (std.mem.eql(u8, kind, "INLINE") or std.mem.eql(u8, kind, "NOTINLINE")) {
+        const status = try ev.interner.internKeyword(kind);
+        const key = try ev.interner.intern("%INLINE");
+        while (names.isCons()) : (names = heap.cdr(names)) {
+            const sym = try ev.functionNameSymbol(heap.car(names));
+            try symbol_mod.plistPut(ev.heap, sym, key, status);
+        }
     }
-    return ev.set1(value.NIL);
+}
+
+/// Set the quality one `optimize` entry names: `(speed 3)`, or `speed`
+/// alone, which means 3.
+pub fn applyOptimize(policy: *eval_mod.Policy, entry: Value) Error!void {
+    var name = entry;
+    var level: i64 = 3;
+    if (entry.isCons()) {
+        name = heap.car(entry);
+        const rest = heap.cdr(entry);
+        if (!rest.isCons() or !heap.car(rest).isFixnum()) return Error.TypeError;
+        level = heap.car(rest).toFixnum();
+    }
+    if (!name.isSymbol() or level < 0 or level > 3) return Error.TypeError;
+    const n: u2 = @intCast(level);
+    const quality = symbol_mod.symbol(name).name;
+    if (std.mem.eql(u8, quality, "SPEED")) policy.speed = n;
+    if (std.mem.eql(u8, quality, "SAFETY")) policy.safety = n;
+    if (std.mem.eql(u8, quality, "DEBUG")) policy.debug = n;
+    if (std.mem.eql(u8, quality, "SPACE")) policy.space = n;
 }
 
 /// `(in-package name)` — name is a string, symbol, or keyword designator.
@@ -370,6 +408,19 @@ fn defun(ev: *Evaluator, args: Value) Error!Value {
         ev.env.top_function,
     );
     ev.env.defineGlobalFunction(name, closure);
+    // A function proclaimed inline keeps what its calls are expanded
+    // into, as a compiled `defun` does.
+    if (ev.env.top_value == null and ev.env.top_function == null) {
+        if (symbol_mod.plistGet(name, try ev.interner.intern("%INLINE"))) |status| {
+            if (status.isSymbol() and std.mem.eql(u8, symbol_mod.symbol(status).name, "INLINE")) {
+                var held = ev.heap.protect();
+                defer held.close();
+                try held.push(try ev.heap.allocCons(params, body));
+                try held.push(try ev.heap.allocCons(try ev.interner.intern("LAMBDA"), held.items()[0]));
+                try symbol_mod.plistPut(ev.heap, name, try ev.interner.intern("%INLINE-EXPANSION"), held.items()[1]);
+            }
+        }
+    }
     return ev.set1(given);
 }
 

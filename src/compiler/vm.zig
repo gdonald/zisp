@@ -100,6 +100,8 @@ pub const VM = struct {
     /// the reserve is open to the handlers.
     in_reserve: bool = false,
     fallbacks: [fallback_names.len]Value = undefined,
+    fixnum_symbol: Value = undefined,
+    typep_symbol: Value = undefined,
     /// The callees megamorphic call sites have looked up, with the epoch
     /// the table was filled in.
     megamorphic: std.AutoHashMapUnmanaged(u64, void) = .empty,
@@ -113,6 +115,8 @@ pub const VM = struct {
         const stack = try ev.allocator.alloc(Value, STACK_SLOTS);
         vm.* = .{ .allocator = ev.allocator, .stack = stack };
         for (fallback_names, 0..) |name, i| vm.fallbacks[i] = try ev.interner.intern(name);
+        vm.fixnum_symbol = try ev.interner.intern("FIXNUM");
+        vm.typep_symbol = try ev.interner.intern("TYPEP");
         return vm;
     }
 
@@ -131,12 +135,20 @@ pub const VM = struct {
 
     fn pushFrame(self: *VM, ev: *Evaluator, fn_v: Value, base: usize, argc: usize, want: Want, form: Value) Error!void {
         const code = function.asFunction(fn_v).payload.compiled.code;
-        if (argc < code.required) return Error.WrongArgCount;
+        if (argc < code.required and code.check_args) return Error.WrongArgCount;
         const positional = code.positional();
         var extra: usize = 0;
+        var passed = argc;
         if (argc > positional) {
-            if (!code.takes_extra) return Error.WrongArgCount;
-            extra = argc - positional;
+            if (code.takes_extra) {
+                extra = argc - positional;
+            } else if (code.check_args) {
+                return Error.WrongArgCount;
+            } else {
+                // Compiled with no safety, the arguments past the last
+                // parameter are dropped.
+                passed = positional;
+            }
         }
         const locals_end = base + positional + code.locals;
         const reserve_slots: usize = if (self.in_reserve) 0 else RESERVE_SLOTS;
@@ -145,8 +157,8 @@ pub const VM = struct {
         if (self.frames.items.len + reserve_frames >= MAX_FRAMES) return Error.StackExhausted;
         if (extra > 0) {
             std.mem.copyBackwards(Value, self.stack[locals_end .. locals_end + extra], self.stack[base + positional .. base + argc]);
-        } else if (argc < positional) {
-            @memset(self.stack[base + argc .. base + positional], value.NIL);
+        } else if (passed < positional) {
+            @memset(self.stack[base + passed .. base + positional], value.NIL);
         }
         @memset(self.stack[base + positional .. locals_end], value.NIL);
         self.sp = locals_end + extra;
@@ -154,7 +166,7 @@ pub const VM = struct {
         const call_frame = ev.call_frames.items.len;
         try ev.call_frames.append(ev.allocator, .{
             .function = fn_v,
-            .args = self.stack[base .. base + @min(argc, positional)],
+            .args = self.stack[base .. base + @min(passed, positional)],
             .form = form,
             .chain_mark = self.chain_mark,
         });
@@ -164,7 +176,7 @@ pub const VM = struct {
             .code = code,
             .pc = 0,
             .base = @intCast(base),
-            .argc = @intCast(argc),
+            .argc = @intCast(passed),
             .extra_start = @intCast(locals_end),
             .extra_count = @intCast(extra),
             .dyn_mark = @intCast(ev.dynamicMark()),
@@ -639,6 +651,10 @@ pub const VM = struct {
             .cdr => opCar(run, w),
             .not => opNot(run, w),
             .interpret => opInterpret(run, w),
+            .add_fixnums, .sub_fixnums => opAddFixnums(run, w),
+            .less_fixnums, .greater_fixnums, .less_equal_fixnums, .greater_equal_fixnums, .num_equal_fixnums => opCompareFixnums(run, w),
+            .inc_fixnum, .dec_fixnum => opIncFixnum(run, w),
+            .check_type => opCheckType(run, w),
         };
     }
 
@@ -1413,6 +1429,60 @@ pub const VM = struct {
     inline fn opNot(run: *Run, _: u32) Error!Flow {
         run.stack[run.sp - 1] = boolean(run.stack[run.sp - 1].equalsRaw(value.NIL));
         return .next;
+    }
+
+    /// `+` and `-` of two values the compiler knows are fixnums. The
+    /// result can still be too big for one.
+    inline fn opAddFixnums(run: *Run, w: u32) Error!Flow {
+        const x = run.stack[run.sp - 2].toFixnum();
+        const y = run.stack[run.sp - 1].toFixnum();
+        const is_add = bytecode.opOf(w) == .add_fixnums;
+        const n = if (is_add) x + y else x - y;
+        if (n >= value.FIXNUM_MIN and n <= value.FIXNUM_MAX) {
+            run.stack[run.sp - 2] = Value.fromFixnum(n);
+        } else {
+            run.stack[run.sp - 2] = try run.vm.fallback(run.ev, if (is_add) .add else .sub, run.stack[run.sp - 2 .. run.sp]);
+        }
+        run.sp -= 1;
+        return .next;
+    }
+
+    inline fn opCompareFixnums(run: *Run, w: u32) Error!Flow {
+        const p = run.stack[run.sp - 2].toFixnum();
+        const q = run.stack[run.sp - 1].toFixnum();
+        run.stack[run.sp - 2] = boolean(switch (bytecode.opOf(w)) {
+            .less_fixnums => p < q,
+            .greater_fixnums => p > q,
+            .less_equal_fixnums => p <= q,
+            .greater_equal_fixnums => p >= q,
+            else => p == q,
+        });
+        run.sp -= 1;
+        return .next;
+    }
+
+    inline fn opIncFixnum(run: *Run, w: u32) Error!Flow {
+        const is_inc = bytecode.opOf(w) == .inc_fixnum;
+        const n = run.stack[run.sp - 1].toFixnum() + @as(i64, if (is_inc) 1 else -1);
+        if (n >= value.FIXNUM_MIN and n <= value.FIXNUM_MAX) {
+            run.stack[run.sp - 1] = Value.fromFixnum(n);
+        } else {
+            run.stack[run.sp - 1] = try run.vm.fallback(run.ev, if (is_inc) .inc else .dec, run.stack[run.sp - 1 .. run.sp]);
+        }
+        return .next;
+    }
+
+    /// Signal `type-error` unless the value on top of the stack is of the
+    /// type in constant A. The value stays where it is.
+    inline fn opCheckType(run: *Run, w: u32) Error!Flow {
+        const spec = run.r.consts[w >> 8];
+        const v = run.stack[run.sp - 1];
+        if (spec.equalsRaw(run.vm.fixnum_symbol) and v.isFixnum()) return .next;
+        const typep = symbol_mod.symbol(run.vm.typep_symbol).function_cell;
+        if (!(try run.ev.callFunction(typep, &.{ v, spec })).equalsRaw(value.NIL)) return .next;
+        run.ev.error_datum = v;
+        run.ev.error_expected = spec;
+        return Error.TypeError;
     }
 
     inline fn opInterpret(run: *Run, w: u32) Error!Flow {

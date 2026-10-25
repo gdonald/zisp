@@ -103,6 +103,32 @@ pub const Frame = struct {
         return false;
     }
 
+    pub const BindingEntry = struct { sym: Value, value: Value };
+
+    /// Every binding, ordered by symbol name and then by package name.
+    pub fn sortedBindings(self: *const Frame, allocator: std.mem.Allocator) ![]BindingEntry {
+        const entries = try allocator.alloc(BindingEntry, self.count());
+        if (self.map) |m| {
+            var it = m.iterator();
+            var i: usize = 0;
+            while (it.next()) |kv| : (i += 1) entries[i] = .{ .sym = .{ .raw = kv.key_ptr.* }, .value = kv.value_ptr.* };
+        } else {
+            for (self.symbols.items, self.values.items, 0..) |sym, v, i| entries[i] = .{ .sym = sym, .value = v };
+        }
+        std.mem.sort(BindingEntry, entries, {}, lessByName);
+        return entries;
+    }
+
+    fn lessByName(_: void, a: BindingEntry, b: BindingEntry) bool {
+        const sa = symbol_mod.symbol(a.sym);
+        const sb = symbol_mod.symbol(b.sym);
+        const order = std.mem.order(u8, sa.name, sb.name);
+        if (order != .eq) return order == .lt;
+        const pa = if (sa.home) |p| p.name else "";
+        const pb = if (sb.home) |p| p.name else "";
+        return std.mem.order(u8, pa, pb) == .lt;
+    }
+
     pub fn isHashed(self: *const Frame) bool {
         return self.map != null;
     }

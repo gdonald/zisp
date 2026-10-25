@@ -66,6 +66,7 @@ const Class = enum {
     simple_string,
     base_string,
     string,
+    simple_bit_vector,
     bit_vector,
     simple_vector,
     vector,
@@ -111,6 +112,7 @@ fn nameOf(class: Class) []const u8 {
         .simple_string => "SIMPLE-STRING",
         .base_string => "BASE-STRING",
         .string => "STRING",
+        .simple_bit_vector => "SIMPLE-BIT-VECTOR",
         .bit_vector => "BIT-VECTOR",
         .simple_vector => "SIMPLE-VECTOR",
         .vector => "VECTOR",
@@ -132,11 +134,14 @@ fn nameOf(class: Class) []const u8 {
 }
 
 fn classNamed(name: []const u8) ?Class {
+    // An array of base characters upgrades to one of characters, so the
+    // base string types are the string types.
+    if (std.mem.eql(u8, name, "BASE-STRING")) return .string;
+    if (std.mem.eql(u8, name, "SIMPLE-BASE-STRING")) return .simple_string;
     for (std.enums.values(Class)) |class| {
         if (std.mem.eql(u8, nameOf(class), name)) return class;
     }
     // Names the standard treats as the same type as one above.
-    if (std.mem.eql(u8, name, "SIMPLE-BASE-STRING")) return .base_string;
     if (std.mem.eql(u8, name, "SHORT-FLOAT")) return .single_float;
     if (std.mem.eql(u8, name, "LONG-FLOAT")) return .double_float;
     if (std.mem.eql(u8, name, "BIT")) return null;
@@ -171,6 +176,7 @@ fn parentsOf(class: Class) []const Class {
         .simple_string => &.{.string},
         .base_string => &.{.string},
         .string => &.{.vector},
+        .simple_bit_vector => &.{.bit_vector},
         .bit_vector => &.{.vector},
         .simple_vector => &.{ .vector, .simple_array },
         .vector => &.{ .array, .sequence },
@@ -260,7 +266,7 @@ fn stringClassOf(v: Value) Class {
 
 fn vectorClassOf(v: Value) Class {
     const a = heap.asArray(v);
-    if (a.element_type == .bit) return .bit_vector;
+    if (a.element_type == .bit) return if (isSimple(v)) .simple_bit_vector else .bit_vector;
     const simple = a.element_type == .t and !a.adjustable and !a.has_fill_pointer and
         a.displaced_to.equalsRaw(value.NIL);
     return if (simple) .simple_vector else .vector;
@@ -354,8 +360,21 @@ pub fn typep(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     return typepCompound(ev, v, spec);
 }
 
+/// An array with no fill pointer, not adjustable and not displaced.
+fn isSimple(v: Value) bool {
+    if (heap.isString(v)) {
+        const s = heap.asString(v);
+        return !s.has_fill_pointer and !s.adjustable and !s.isDisplaced();
+    }
+    if (!heap.isArray(v)) return false;
+    const a = heap.asArray(v);
+    const displaced = !(a.displaced_to.raw == 0 or a.displaced_to.equalsRaw(value.NIL));
+    return !a.adjustable and !a.has_fill_pointer and !displaced;
+}
+
 fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     const name = symbol_mod.symbol(spec).name;
+    if (std.mem.eql(u8, name, "SIMPLE-ARRAY")) return (heap.isString(v) or heap.isArray(v)) and isSimple(v);
     if (std.mem.eql(u8, name, "BIT")) {
         return v.isFixnum() and (v.toFixnum() == 0 or v.toFixnum() == 1);
     }
@@ -365,7 +384,7 @@ fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     if (std.mem.eql(u8, name, "STRING-STREAM")) {
         return heap.isStream(v) and heap.asStream(v).kind == .string;
     }
-    if (std.mem.eql(u8, name, "COMPILED-FUNCTION")) return contains(.function_type, classOf(ev, v));
+    if (std.mem.eql(u8, name, "COMPILED-FUNCTION")) return function.isCompiledFunction(v);
     if (classNamed(name)) |class| {
         if (class == .nil_type) return false;
         return contains(class, classOf(ev, v));
@@ -492,8 +511,12 @@ fn byteType(ev: *Evaluator, v: Value, spec: Value, unsigned: bool) Error!bool {
 }
 
 fn arrayType(ev: *Evaluator, v: Value, spec: Value, name: []const u8) Error!bool {
-    const base = classNamed(name).?;
-    if (!contains(base, classOf(ev, v))) return false;
+    if (std.mem.eql(u8, name, "SIMPLE-ARRAY")) {
+        if (!(heap.isString(v) or heap.isArray(v)) or !isSimple(v)) return false;
+    } else {
+        const base = classNamed(name).?;
+        if (!contains(base, classOf(ev, v))) return false;
+    }
     if (std.mem.eql(u8, name, "STRING")) {
         const size = nthArg(spec, 0);
         if (!size.isFixnum()) return true;
@@ -518,7 +541,11 @@ fn isWildcard(v: Value) bool {
     return v.isSymbol() and std.mem.eql(u8, symbol_mod.symbol(v).name, "*");
 }
 
-fn elementTypeMatches(ev: *Evaluator, v: Value, spec: Value) Error!bool {
+/// Whether `v`'s element type is what `spec` upgrades to, which is what
+/// an array type specifier with an element type means to `typep`.
+fn elementTypeMatches(ev: *Evaluator, v: Value, given: Value) Error!bool {
+    const upgrade = ev.env.lookupFunction(try ev.interner.intern("UPGRADED-ARRAY-ELEMENT-TYPE"));
+    const spec = if (upgrade) |f| try ev.callFunction(f, &.{given}) else given;
     const actual = if (heap.isString(v))
         try ev.interner.intern("CHARACTER")
     else switch (heap.asArray(v).element_type) {

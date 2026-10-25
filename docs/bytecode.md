@@ -63,7 +63,10 @@ and the values it closed over. Its code holds:
 
 `disassemble` lists a compiled function's instructions, one to a line
 with its offset and operands, and then its pool under `Constants:`. A
-function it is handed that is not compiled yet is compiled first.
+function it is handed that is not compiled yet is compiled first. For a
+function compiled with `(debug 3)` from source read out of a file, the
+listing names the file and gives the line each call was written on.
+`tests/disassemble-golden/` holds a listing the tests compare against.
 
 A function inside another is kept as a compiled function in the outer
 one's constants, closing over nothing. `make_closure` copies its code
@@ -289,6 +292,18 @@ anything else, so the result is the one the function gives:
 | `inc`, `dec` | `1+`, `1-` |
 | `car`, `cdr` | `car`, `cdr` |
 | `eq`, `cons`, `not` | `eq`, `cons`, `not` and `null` |
+
+Where the compiler knows every argument is a fixnum, from a type
+declaration, a `the` or a constant, it uses an instruction that does not
+check them: `add_fixnums`, `sub_fixnums`, `less_fixnums`,
+`greater_fixnums`, `less_equal_fixnums`, `greater_equal_fixnums`,
+`num_equal_fixnums`, `inc_fixnum` and `dec_fixnum`. A sum or difference
+too large for a fixnum still comes out as a bignum.
+
+`check_type` k signals `type-error` unless the value on top of the stack
+is of the type in constant k, leaving the value where it is. It is what
+`the` and a declared variable type are compiled to where safety is above
+0. `docs/optimize-levels.md` says what each optimize quality changes.
 
 `interpret` k evaluates the form in constant k with the interpreter, in
 the null lexical environment. It is what `defmacro`, `in-package`,

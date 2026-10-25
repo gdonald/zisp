@@ -83,7 +83,7 @@ fn modeLabel(compile: bool) []const u8 {
 
 test "compile corpus" {
     const checked = try runCorpus("compile", @embedFile("lisp/compile-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 104), checked);
+    try testing.expectEqual(@as(u32, 107), checked);
 }
 
 test "constant pools" {
@@ -99,6 +99,41 @@ test "compiled closures share their bindings" {
 test "call site caches" {
     const checked = try runCorpus("inline-cache", @embedFile("lisp/inline-cache.lisp"));
     try testing.expectEqual(@as(u32, 5), checked);
+}
+
+test "optimize levels" {
+    const checked = try runCorpus("optimize-levels", @embedFile("lisp/optimize-levels.lisp"));
+    try testing.expectEqual(@as(u32, 13), checked);
+}
+
+test "inline expansion" {
+    const checked = try runCorpus("inline", @embedFile("lisp/inline.lisp"));
+    try testing.expectEqual(@as(u32, 7), checked);
+}
+
+test "type declarations in compiled code" {
+    const checked = try runCorpus("type-declarations", @embedFile("lisp/type-declarations.lisp"));
+    try testing.expectEqual(@as(u32, 6), checked);
+}
+
+test "tail calls keep the frame count" {
+    const checked = try runCorpus("tco-frame-count", @embedFile("lisp/tco-frame-count.lisp"));
+    try testing.expectEqual(@as(u32, 9), checked);
+}
+
+test "the heap walker visits each reachable object once" {
+    const checked = try runCorpus("image-walk", @embedFile("lisp/image-walk.lisp"));
+    try testing.expectEqual(@as(u32, 4), checked);
+}
+
+test "an image round trip keeps shared structure and cycles" {
+    const checked = try runCorpus("image-roundtrip", @embedFile("lisp/image-roundtrip.lisp"));
+    try testing.expectEqual(@as(u32, 4), checked);
+}
+
+test "every kind of object survives an image round trip" {
+    const checked = try runCorpus("image-serializers", @embedFile("lisp/image-serializers.lisp"));
+    try testing.expectEqual(@as(u32, 9), checked);
 }
 
 test "loop corpus" {
@@ -118,12 +153,12 @@ test "do and do* corpus" {
 
 test "list and plist corpus" {
     const checked = try runCorpus("list", @embedFile("lisp/list-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 79), checked);
+    try testing.expectEqual(@as(u32, 81), checked);
 }
 
 test "sequence corpus" {
     const checked = try runCorpus("sequence", @embedFile("lisp/sequence-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 30), checked);
+    try testing.expectEqual(@as(u32, 36), checked);
 }
 
 test "handler-case corpus" {
@@ -193,7 +228,7 @@ test "function body corpus" {
 
 test "subtypep corpus" {
     const checked = try runCorpus("subtypep", @embedFile("lisp/subtypep-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 155), checked);
+    try testing.expectEqual(@as(u32, 157), checked);
 }
 
 test "unwind-protect corpus" {

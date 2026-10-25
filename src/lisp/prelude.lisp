@@ -253,6 +253,17 @@ call to the function named `(setf accessor)`, given the new value first."
 (defsetf car (cell) (new) `(progn (rplaca ,cell ,new) ,new))
 (defsetf cdr (cell) (new) `(progn (rplacd ,cell ,new) ,new))
 (defsetf nth (n list) (new) `(progn (rplaca (nthcdr ,n ,list) ,new) ,new))
+(defsetf first (list) (new) `(progn (rplaca ,list ,new) ,new))
+(defsetf rest (list) (new) `(progn (rplacd ,list ,new) ,new))
+(defsetf second (list) (new) `(progn (rplaca (nthcdr 1 ,list) ,new) ,new))
+(defsetf third (list) (new) `(progn (rplaca (nthcdr 2 ,list) ,new) ,new))
+(defsetf fourth (list) (new) `(progn (rplaca (nthcdr 3 ,list) ,new) ,new))
+(defsetf fifth (list) (new) `(progn (rplaca (nthcdr 4 ,list) ,new) ,new))
+(defsetf sixth (list) (new) `(progn (rplaca (nthcdr 5 ,list) ,new) ,new))
+(defsetf seventh (list) (new) `(progn (rplaca (nthcdr 6 ,list) ,new) ,new))
+(defsetf eighth (list) (new) `(progn (rplaca (nthcdr 7 ,list) ,new) ,new))
+(defsetf ninth (list) (new) `(progn (rplaca (nthcdr 8 ,list) ,new) ,new))
+(defsetf tenth (list) (new) `(progn (rplaca (nthcdr 9 ,list) ,new) ,new))
 
 ;; setf on the compound accessors: the first letter picks which half
 ;; of the innermost cons to replace, and the rest is the path to it.
@@ -646,10 +657,8 @@ there is one keyword constructor named make-NAME."
   (%with-print-options options (%write object (getf options :stream nil)))
   object)
 
-;; A declaration says nothing zisp acts on yet, so proclaiming one records
-;; nothing. `declaim` is the special form beside it.
 (defun proclaim (declaration)
-  (declare (ignore declaration))
+  (%proclaim declaration)
   nil)
 
 (defmacro pprint-logical-block ((stream-var object &key prefix per-line-prefix suffix)
@@ -862,6 +871,14 @@ when the block will not fit before the right margin."
     (when name (setf (symbol-function name) fn))
     (values (or name fn) nil nil)))
 
+(defmacro define-symbol-macro (symbol expansion)
+  `(progn (%define-symbol-macro ',symbol ',expansion) ',symbol))
+
+;; How many calls are in progress, interpreted and compiled. A call in
+;; tail position replaces its caller's frame, so a tail-recursive loop
+;; keeps this where it started.
+(define-symbol-macro ext::*tco-frame-counter* (%frame-count))
+
 (defun %disassemble-target (fn)
   (let ((target (cond ((functionp fn) fn)
                       ((and (consp fn) (eq (car fn) 'lambda)) (%compile-lambda fn))
@@ -928,7 +945,7 @@ when the block will not fit before the right margin."
      ,@body))
 
 (export '(sleep psetf rotatef shiftf multiple-value-setq with-standard-io-syntax formatter assert compile proclaim
-          disassemble
+          disassemble define-symbol-macro
           write write-to-string
           lambda-list-keywords call-arguments-limit lambda-parameters-limit
           multiple-values-limit

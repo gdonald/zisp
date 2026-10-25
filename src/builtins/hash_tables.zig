@@ -145,22 +145,28 @@ fn gethashFn(p: *anyopaque, args: []const Value) Error!Value {
 fn puthashFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 3) return Error.WrongArgCount;
-    const table = try expectTable(args[1]);
-    if (findEntry(table, args[0])) |index| {
-        heap.setSlot(ev.heap, args[1], index, args[2]);
-        return args[2];
+    _ = try expectTable(args[1]);
+    try put(ev, args[1], args[0], args[2]);
+    return args[2];
+}
+
+/// Set what `key` maps to in the hash table `table_value`.
+pub fn put(ev: *Evaluator, table_value: Value, key: Value, val: Value) Error!void {
+    const table = heap.asHashTable(table_value);
+    if (findEntry(table, key)) |index| {
+        heap.setSlot(ev.heap, table_value, index, val);
+        return;
     }
 
     const allocator = ev.heap.allocator;
     const index: u32 = @intCast(table.entries.items.len);
-    try table.entries.append(allocator, .{ .key = args[0], .value = args[2], .live = true });
-    heap.writeBarrier(ev.heap, args[1], args[0]);
-    heap.writeBarrier(ev.heap, args[1], args[2]);
-    const slot = try table.buckets.getOrPut(allocator, equality.hash(table.hash_test, args[0]));
+    try table.entries.append(allocator, .{ .key = key, .value = val, .live = true });
+    heap.writeBarrier(ev.heap, table_value, key);
+    heap.writeBarrier(ev.heap, table_value, val);
+    const slot = try table.buckets.getOrPut(allocator, equality.hash(table.hash_test, key));
     if (!slot.found_existing) slot.value_ptr.* = .empty;
     try slot.value_ptr.append(allocator, index);
     table.live_count += 1;
-    return args[2];
 }
 
 fn remhashFn(p: *anyopaque, args: []const Value) Error!Value {

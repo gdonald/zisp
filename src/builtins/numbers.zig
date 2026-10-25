@@ -1146,9 +1146,13 @@ fn logFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
     const format = try resultFormat(args);
     if (args.len == 2) {
-        const numerator = try logOf(ev, format, args[0]);
-        const denominator = try logOf(ev, format, args[1]);
-        return divideExactFn(ev.asOpaque(), &.{ numerator, denominator });
+        // The numerator is a fresh number nothing else holds while the
+        // denominator is made.
+        var held = ev.protect();
+        defer held.close();
+        try held.push(try logOf(ev, format, args[0]));
+        try held.push(try logOf(ev, format, args[1]));
+        return divideExactFn(ev.asOpaque(), held.items());
     }
     return logOf(ev, format, args[0]);
 }

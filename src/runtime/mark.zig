@@ -52,6 +52,21 @@ pub const Marker = struct {
     /// Weak pointers the walk reached. What they refer to is not marked
     /// through them, so each is looked at again once the walk is done.
     weak: std.ArrayListUnmanaged(Value) = .empty,
+    /// Told of each object, symbol and frame the first time the walk
+    /// reaches it, for a walk made to enumerate the heap rather than to
+    /// collect it.
+    visitor: ?Visitor = null,
+
+    pub const Visitor = struct {
+        context: *anyopaque,
+        object: *const fn (context: *anyopaque, v: Value) std.mem.Allocator.Error!void,
+        frame: *const fn (context: *anyopaque, f: *env_mod.Frame) std.mem.Allocator.Error!void,
+        /// Whether a symbol's cells are followed.
+        descend_symbols: bool,
+        /// Whether a compiled function's constants are followed, which a
+        /// collection reaches through the evaluator's list of code.
+        follow_code: bool,
+    };
 
     pub fn init(allocator: std.mem.Allocator, h: *Heap) Marker {
         return .{ .allocator = allocator, .heap = h };
@@ -103,11 +118,23 @@ pub const Marker = struct {
     fn visitFrame(self: *Marker, frame: *env_mod.Frame) !void {
         const slot = try self.visited_frames.getOrPut(self.allocator, @intFromPtr(frame));
         if (slot.found_existing) return;
+        if (self.visitor) |visitor| try visitor.frame(visitor.context, frame);
         for (frame.symbols.items) |sym| try self.push(sym);
         for (frame.values.items) |v| try self.push(v);
         if (frame.map) |map| {
-            var it = map.valueIterator();
-            while (it.next()) |v| try self.push(v.*);
+            if (self.visitor != null) {
+                // A walk that enumerates goes in an order that does not
+                // depend on where the symbols happen to be in memory.
+                const entries = try frame.sortedBindings(self.allocator);
+                defer self.allocator.free(entries);
+                for (entries) |entry| {
+                    try self.push(entry.sym);
+                    try self.push(entry.value);
+                }
+            } else {
+                var it = map.valueIterator();
+                while (it.next()) |v| try self.push(v.*);
+            }
         }
         try self.pushFrame(frame.parent);
     }
@@ -135,6 +162,7 @@ pub const Marker = struct {
             return;
         }
 
+        if (self.visitor) |visitor| try visitor.object(visitor.context, v);
         if (v.isCons()) {
             try self.push(heap.car(v));
             try self.push(heap.cdr(v));
@@ -166,6 +194,10 @@ pub const Marker = struct {
     fn visitSymbol(self: *Marker, v: Value) !void {
         const slot = try self.visited_symbols.getOrPut(self.allocator, v.raw);
         if (slot.found_existing) return;
+        if (self.visitor) |visitor| {
+            try visitor.object(visitor.context, v);
+            if (!visitor.descend_symbols) return;
+        }
         const sym = symbol_mod.symbol(v);
         try self.push(sym.value_cell);
         try self.push(sym.function_cell);
@@ -259,6 +291,15 @@ pub const Marker = struct {
         }
         if (f.kind == .compiled) {
             for (f.closedOver()) |held| try self.push(held);
+            if (self.visitor) |visitor| {
+                if (visitor.follow_code) {
+                    const code = f.payload.compiled.code;
+                    for (code.constants) |constant| try self.push(constant);
+                    for (code.slot_names) |name| {
+                        if (name.raw != 0) try self.push(name);
+                    }
+                }
+            }
             return;
         }
         if (f.kind != .closure) return;

@@ -4,6 +4,7 @@
 const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
+const symbol_mod = @import("../runtime/symbol.zig");
 const function = @import("../eval/function.zig");
 const eval_mod = @import("../eval/eval.zig");
 
@@ -24,6 +25,21 @@ pub fn registerFrames(ev: *Evaluator) !void {
     _ = try ev.defineNative("%FRAME-POSITION", &framePositionFn);
     function.asFunction(try ev.defineNative("%FRAME-EVAL", &frameEvalFn)).preserves_values = true;
     _ = try ev.defineNative("%KEEP-CALLER-FRAME", &keepCallerFrameFn);
+    _ = try ev.defineNative("%DEFINE-SYMBOL-MACRO", &defineSymbolMacroFn);
+}
+
+/// `(%define-symbol-macro name expansion)`: make `name` stand for
+/// `expansion` wherever no binding of it is in scope.
+fn defineSymbolMacroFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    const name = args[0];
+    if (!name.isSymbol()) return ev.typeMismatch(name, "SYMBOL");
+    const sym = symbol_mod.symbol(name);
+    if (sym.special or sym.constant) return Error.ProgramError;
+    const marker = try ev.heap.allocStructure(try ev.interner.intern(Evaluator.SYMBOL_MACRO_NAME), &.{args[1]});
+    sym.value_cell = marker;
+    return name;
 }
 
 /// `(%keep-caller-frame function)`: calls to `function` keep the frame

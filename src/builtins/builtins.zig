@@ -25,6 +25,7 @@ pub const registerGc = gc.registerGc;
 const equality = @import("../runtime/equality.zig");
 const instances = @import("instances.zig");
 const frames = @import("frames.zig");
+pub const image = @import("image.zig");
 const compiler = @import("compiler.zig");
 
 const Value = value.Value;
@@ -67,7 +68,16 @@ const ordinals = [_][]const u8{
     "SIXTH", "SEVENTH", "EIGHTH", "NINTH",  "TENTH",
 };
 
+/// Every native and the state the boot sources start from, and then the
+/// boot sources.
 pub fn registerStandard(ev: *Evaluator) !void {
+    try registerNatives(ev);
+    try loadBootSources(ev);
+}
+
+/// Every native and the state the boot sources start from, which is
+/// what a saved image is loaded on top of.
+pub fn registerNatives(ev: *Evaluator) !void {
     _ = try ev.defineNative("CONS", &consFn);
     _ = try ev.defineNative("CAR", &carFn);
     _ = try ev.defineNative("CDR", &cdrFn);
@@ -181,6 +191,7 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try instances.registerInstances(ev);
     try frames.registerFrames(ev);
     try compiler.registerCompiler(ev);
+    try image.register(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
     try pathnames.registerPathnames(ev);
@@ -189,7 +200,9 @@ pub fn registerStandard(ev: *Evaluator) !void {
     // its native exists would shadow the later definition.
     try readtables.registerReadtables(ev);
     try system.registerSystem(ev);
+}
 
+pub fn loadBootSources(ev: *Evaluator) !void {
     try system.evalSource(ev, prelude_source);
     try system.evalSource(ev, iteration_source);
     try system.evalSource(ev, lists_source);

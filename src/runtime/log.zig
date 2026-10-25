@@ -39,18 +39,15 @@ var enabled: [N_CATEGORIES]std.atomic.Value(bool) = blk: {
     break :blk arr;
 };
 
-/// Read ZISP_LOG and turn on the named categories. Format: comma-separated
-/// names, or `all` to enable everything. Unknown names are silently ignored.
+/// Turn on the categories `list` names, which is what ZISP_LOG holds:
+/// comma-separated names, or `all` to enable everything. Unknown names
+/// are ignored.
 ///
-/// Calling this in Debug or ReleaseFast is harmless but redundant — those
-/// modes don't consult the flags.
-pub fn initFromEnv(allocator: std.mem.Allocator) void {
-    if (builtin.mode != .ReleaseSafe) return;
-
-    const raw = std.process.getEnvVarOwned(allocator, "ZISP_LOG") catch return;
-    defer allocator.free(raw);
-
-    var it = std.mem.splitScalar(u8, raw, ',');
+/// In Debug and ReleaseFast it does nothing, since those modes do not
+/// consult the flags.
+pub fn enableNamed(list: []const u8) void {
+    if (builtin.mode != .safe) return;
+    var it = std.mem.splitScalar(u8, list, ',');
     while (it.next()) |name| {
         const trimmed = std.mem.trim(u8, name, " \t");
         if (trimmed.len == 0) continue;
@@ -64,7 +61,7 @@ pub fn initFromEnv(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Force a category on/off. Tests use this; production uses initFromEnv.
+/// Force a category on/off. Tests use this; production uses enableNamed.
 pub fn setEnabled(cat: Category, on: bool) void {
     enabled[@backingInt(cat)].store(on, .monotonic);
 }

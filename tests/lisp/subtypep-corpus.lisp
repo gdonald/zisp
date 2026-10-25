@@ -119,6 +119,7 @@
 (equal (answer 'standard-generic-function 'standard-object) '(t t))
 (equal (answer '(and function standard-object) 'generic-function) '(t t))
 (equal (answer 'compiled-function 'function) '(t t))
+(equal (answer 'function 'compiled-function) '(nil t))
 
 ;; --- predicates ---
 
@@ -216,5 +217,6 @@
 (not (typep #'car 'generic-function))
 (not (typep 'a 'standard-object))
 (typep #'car 'compiled-function)
-(typep (lambda (x) x) 'compiled-function)
+(typep (compile nil '(lambda (x) x)) 'compiled-function)
+(eq (typep (lambda (x) x) 'compiled-function) (eq ext:*evaluator-mode* :compile))
 (not (typep 'a 'compiled-function))

@@ -28,6 +28,13 @@ pub const Var = struct {
     captured: bool = false,
     assigned: bool = false,
     slot: u32 = 0,
+    /// The type it was declared with, or raw 0.
+    declared: Value = .{ .raw = 0 },
+    /// Whether what is bound or assigned to it is checked against the
+    /// declared type.
+    check: bool = false,
+    /// Whether the declared type holds only fixnums.
+    fixnum: bool = false,
 
     /// A variable a closure captures and that is assigned lives in a
     /// cell, so every closure over the binding sees one value.
@@ -56,6 +63,7 @@ pub const Lambda = struct {
     allow_other_keys: bool = false,
     aux: []Binding = &.{},
     body: *Node = undefined,
+    policy: eval_mod.Policy = .{},
     /// The variables of enclosing functions this one reads, directly or
     /// through a function inside it, in the order its closure holds them.
     captures: std.ArrayListUnmanaged(*Var) = .empty,
@@ -129,8 +137,10 @@ pub const Node = union(enum) {
     global_ref: Value,
     global_set: struct { sym: Value, value: *Node },
     function_ref: Value,
-    call_global: struct { sym: Value, args: []*Node },
-    call: struct { callee: *Node, args: []*Node },
+    /// `form` is the call as it was written, where a source position
+    /// can be found for it, or raw 0.
+    call_global: struct { sym: Value, args: []*Node, form: Value = .{ .raw = 0 } },
+    call: struct { callee: *Node, args: []*Node, form: Value = .{ .raw = 0 } },
     apply: struct { callee: *Node, args: []*Node },
     primitive: struct { op: Op, args: []*Node },
     if_: struct { test_form: *Node, then: *Node, otherwise: *Node },
@@ -155,11 +165,59 @@ pub const Node = union(enum) {
     progv: struct { symbols: *Node, values: *Node, body: *Node },
     destructure: struct { pattern: *Pattern, value: *Node, body: *Node },
     interpret: Value,
-    define_function: struct { sym: Value, lambda: *Lambda, result: Value },
+    the_: struct { spec: Value, form: *Node, check: bool },
+    /// `expansion` is what calls to the function can be expanded into
+    /// where it is declared inline, or raw 0.
+    define_function: struct { sym: Value, lambda: *Lambda, result: Value, expansion: Value },
     define_variable: struct { kind: DefineKind, sym: Value, init: ?*Node },
 };
 
 pub const DefineKind = enum(u32) { defvar = 0, defparameter = 1, defconstant = 2 };
+
+pub const TypeDecl = struct { sym: Value, spec: Value };
+const InlineDecl = struct { sym: Value, inline_: bool };
+
+/// What the `declare` forms at the head of a body say.
+pub const Decls = struct {
+    specials: []const Value = &.{},
+    types: []const TypeDecl = &.{},
+    optimize: []const Value = &.{},
+    inlines: []const InlineDecl = &.{},
+
+    fn isSpecial(self: *const Decls, sym: Value) bool {
+        for (self.specials) |s| if (s.equalsRaw(sym)) return true;
+        return false;
+    }
+
+    fn typeOf(self: *const Decls, sym: Value) ?Value {
+        for (self.types) |t| if (t.sym.equalsRaw(sym)) return t.spec;
+        return null;
+    }
+};
+
+/// Whether every object of type `spec` is a fixnum.
+pub fn fixnumType(spec: Value) bool {
+    if (spec.isSymbol()) {
+        const name = symbol_mod.symbol(spec).name;
+        return std.mem.eql(u8, name, "FIXNUM") or std.mem.eql(u8, name, "BIT");
+    }
+    if (!spec.isCons() or !heap.car(spec).isSymbol()) return false;
+    const head = symbol_mod.symbol(heap.car(spec)).name;
+    const args = heap.cdr(spec);
+    if (!args.isCons()) return false;
+    const first = heap.car(args);
+    if (std.mem.eql(u8, head, "INTEGER")) {
+        const after = heap.cdr(args);
+        if (!after.isCons()) return false;
+        return first.isFixnum() and heap.car(after).isFixnum();
+    }
+    if (!first.isFixnum()) return false;
+    const n = first.toFixnum();
+    if (std.mem.eql(u8, head, "SIGNED-BYTE")) return n >= 1 and n <= 61;
+    if (std.mem.eql(u8, head, "UNSIGNED-BYTE")) return n >= 1 and n <= 60;
+    if (std.mem.eql(u8, head, "MOD")) return n >= 1 and n - 1 <= value.FIXNUM_MAX;
+    return false;
+}
 
 const VarEntry = struct {
     sym: Value,
@@ -212,6 +270,12 @@ pub const Converter = struct {
     blocks: std.ArrayListUnmanaged(BlockEntry) = .empty,
     tags: std.ArrayListUnmanaged(TagEntry) = .empty,
     control: std.ArrayListUnmanaged(Control) = .empty,
+    /// What `optimize` declarations in scope say, over what is proclaimed.
+    policy: eval_mod.Policy = .{},
+    inline_decls: std.ArrayListUnmanaged(InlineDecl) = .empty,
+    /// How deep the expansion of each inline function in progress goes,
+    /// which is what ends a recursive one.
+    inline_depth: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     primitive_syms: [primitives.len]Value = undefined,
     sym_lambda: Value = undefined,
     sym_function: Value = undefined,
@@ -225,7 +289,7 @@ pub const Converter = struct {
     sym_macroexpand: Value = undefined,
 
     pub fn init(ev: *Evaluator, arena: std.mem.Allocator) !Converter {
-        var self: Converter = .{ .ev = ev, .arena = arena };
+        var self: Converter = .{ .ev = ev, .arena = arena, .policy = ev.policy };
         for (primitives, 0..) |p, i| self.primitive_syms[i] = try ev.interner.intern(p.name);
         self.sym_lambda = try ev.interner.intern("LAMBDA");
         self.sym_function = try ev.interner.intern("FUNCTION");
@@ -288,6 +352,9 @@ pub const Converter = struct {
         defer _ = self.control.pop();
 
         const split = try self.splitBody(body, true);
+        const saved_decls = try self.enterDecls(&split.decls);
+        defer self.leaveDecls(saved_decls);
+        l.policy = self.policy;
         const var_mark = self.vars.items.len;
         defer self.vars.shrinkRetainingCapacity(var_mark);
         _ = try self.ev.env.pushValueFrame();
@@ -323,15 +390,15 @@ pub const Converter = struct {
                 }
             }
             switch (section) {
-                .required => try required.append(self.arena, try self.bindTarget(item, split.specials)),
+                .required => try required.append(self.arena, try self.bindTarget(item, &split.decls)),
                 .optional => {
                     const spec = try parseInitSpec(item);
                     const init_node = try self.convert(spec.init);
-                    const target = try self.bindTarget(spec.name, split.specials);
-                    const supplied = if (spec.supplied.equalsRaw(value.NIL)) null else try self.bindTarget(spec.supplied, split.specials);
+                    const target = try self.bindTarget(spec.name, &split.decls);
+                    const supplied = if (spec.supplied.equalsRaw(value.NIL)) null else try self.bindTarget(spec.supplied, &split.decls);
                     try optional.append(self.arena, .{ .target = target, .init = init_node, .supplied = supplied });
                 },
-                .rest => l.rest = try self.bindTarget(item, split.specials),
+                .rest => l.rest = try self.bindTarget(item, &split.decls),
                 .key => {
                     var keyword: Value = undefined;
                     var var_name: Value = undefined;
@@ -353,14 +420,14 @@ pub const Converter = struct {
                     const init_form = if (tail.isCons()) heap.car(tail) else value.NIL;
                     const supplied_name = if (tail.isCons() and heap.cdr(tail).isCons()) heap.car(heap.cdr(tail)) else value.NIL;
                     const init_node = try self.convert(init_form);
-                    const target = try self.bindTarget(var_name, split.specials);
-                    const supplied = if (supplied_name.equalsRaw(value.NIL)) null else try self.bindTarget(supplied_name, split.specials);
+                    const target = try self.bindTarget(var_name, &split.decls);
+                    const supplied = if (supplied_name.equalsRaw(value.NIL)) null else try self.bindTarget(supplied_name, &split.decls);
                     try keys.append(self.arena, .{ .keyword = keyword, .target = target, .init = init_node, .supplied = supplied });
                 },
                 .aux => {
                     const spec = try parseInitSpec(item);
                     const init_node = try self.convert(spec.init);
-                    try aux.append(self.arena, .{ .target = try self.bindTarget(spec.name, split.specials), .init = init_node });
+                    try aux.append(self.arena, .{ .target = try self.bindTarget(spec.name, &split.decls), .init = init_node });
                 },
             }
         }
@@ -368,7 +435,7 @@ pub const Converter = struct {
         l.optional = optional.items;
         l.keys = keys.items;
         l.aux = aux.items;
-        try self.declareFreeSpecials(split.specials);
+        try self.declareFreeSpecials(&split.decls);
 
         if (block_name) |b| {
             l.body = try self.convertBlockBody(b, split.forms);
@@ -393,12 +460,15 @@ pub const Converter = struct {
 
     // --- bodies and declarations ---
 
-    const Split = struct { forms: Value, specials: []const Value };
+    const Split = struct { forms: Value, decls: Decls };
 
     /// Take the docstring and `declare` forms off the front of a body,
-    /// and collect the names they declare special.
+    /// and collect what they declare.
     fn splitBody(self: *Converter, body: Value, allow_doc: bool) Error!Split {
         var specials: std.ArrayListUnmanaged(Value) = .empty;
+        var types: std.ArrayListUnmanaged(TypeDecl) = .empty;
+        var optimize: std.ArrayListUnmanaged(Value) = .empty;
+        var inlines: std.ArrayListUnmanaged(InlineDecl) = .empty;
         var rest = body;
         while (rest.isCons()) : (rest = heap.cdr(rest)) {
             const form = heap.car(rest);
@@ -407,41 +477,88 @@ pub const Converter = struct {
             var specs = heap.cdr(form);
             while (specs.isCons()) : (specs = heap.cdr(specs)) {
                 const spec = heap.car(specs);
-                if (!spec.isCons() or !heap.car(spec).equalsRaw(self.ev.sym_special)) continue;
+                if (!spec.isCons() or !heap.car(spec).isSymbol()) continue;
+                const kind = symbol_mod.symbol(heap.car(spec)).name;
                 var names = heap.cdr(spec);
-                while (names.isCons()) : (names = heap.cdr(names)) {
-                    if (heap.car(names).isSymbol()) try specials.append(self.arena, heap.car(names));
+                if (std.mem.eql(u8, kind, "SPECIAL")) {
+                    while (names.isCons()) : (names = heap.cdr(names)) {
+                        if (heap.car(names).isSymbol()) try specials.append(self.arena, heap.car(names));
+                    }
+                } else if (std.mem.eql(u8, kind, "OPTIMIZE")) {
+                    while (names.isCons()) : (names = heap.cdr(names)) try optimize.append(self.arena, heap.car(names));
+                } else if (std.mem.eql(u8, kind, "INLINE") or std.mem.eql(u8, kind, "NOTINLINE")) {
+                    while (names.isCons()) : (names = heap.cdr(names)) {
+                        const sym = self.ev.functionNameSymbol(heap.car(names)) catch continue;
+                        try inlines.append(self.arena, .{ .sym = sym, .inline_ = kind[0] == 'I' });
+                    }
+                } else if (std.mem.eql(u8, kind, "TYPE")) {
+                    if (!names.isCons()) continue;
+                    const type_spec = heap.car(names);
+                    names = heap.cdr(names);
+                    while (names.isCons()) : (names = heap.cdr(names)) {
+                        if (heap.car(names).isSymbol()) try types.append(self.arena, .{ .sym = heap.car(names), .spec = type_spec });
+                    }
+                } else if (std.mem.eql(u8, kind, "FIXNUM")) {
+                    while (names.isCons()) : (names = heap.cdr(names)) {
+                        if (heap.car(names).isSymbol()) try types.append(self.arena, .{ .sym = heap.car(names), .spec = heap.car(spec) });
+                    }
                 }
             }
         }
-        return .{ .forms = rest, .specials = specials.items };
+        return .{ .forms = rest, .decls = .{
+            .specials = specials.items,
+            .types = types.items,
+            .optimize = optimize.items,
+            .inlines = inlines.items,
+        } };
     }
 
-    fn declaredSpecial(specials: []const Value, sym: Value) bool {
-        for (specials) |s| if (s.equalsRaw(sym)) return true;
-        return false;
+    const SavedDecls = struct { policy: eval_mod.Policy, inlines: usize };
+
+    /// Put the optimize and inline declarations of a body in effect.
+    fn enterDecls(self: *Converter, decls: *const Decls) Error!SavedDecls {
+        const saved: SavedDecls = .{ .policy = self.policy, .inlines = self.inline_decls.items.len };
+        for (decls.optimize) |entry| special_forms.applyOptimize(&self.policy, entry) catch {};
+        try self.inline_decls.appendSlice(self.arena, decls.inlines);
+        return saved;
+    }
+
+    fn leaveDecls(self: *Converter, saved: SavedDecls) void {
+        self.policy = saved.policy;
+        self.inline_decls.shrinkRetainingCapacity(saved.inlines);
+    }
+
+    fn convertDeclaredBody(self: *Converter, split: *const Split) Error!*Node {
+        const saved = try self.enterDecls(&split.decls);
+        defer self.leaveDecls(saved);
+        return self.convertBody(split.forms);
     }
 
     /// Bind `sym` in the scope being built: dynamically when it is
     /// special, and as a fresh variable of the current function
     /// otherwise.
-    fn bindTarget(self: *Converter, sym: Value, specials: []const Value) Error!Target {
+    fn bindTarget(self: *Converter, sym: Value, decls: *const Decls) Error!Target {
         if (!sym.isSymbol()) return Error.TypeError;
         try self.ev.env.top_value.?.bind(self.ev.env.frameAllocator(), sym, value.NIL);
-        if (symbol_mod.symbol(sym).special or declaredSpecial(specials, sym)) {
+        if (symbol_mod.symbol(sym).special or decls.isSpecial(sym)) {
             try self.vars.append(self.arena, .{ .sym = sym, .kind = .special });
             return .{ .special = sym };
         }
         const v = try self.newVar(sym);
+        if (decls.typeOf(sym)) |spec| {
+            v.declared = try self.keep(spec);
+            v.fixnum = fixnumType(spec);
+            v.check = self.policy.safety >= 1;
+        }
         try self.vars.append(self.arena, .{ .sym = sym, .kind = .{ .lexical = v } });
         return .{ .lexical = v };
     }
 
     /// The names declared special that the binding form did not bind,
     /// which the body reads as special variables.
-    fn declareFreeSpecials(self: *Converter, specials: []const Value) Error!void {
+    fn declareFreeSpecials(self: *Converter, decls: *const Decls) Error!void {
         const frame = self.ev.env.top_value.?;
-        for (specials) |sym| {
+        for (decls.specials) |sym| {
             var bound = false;
             var i = self.vars.items.len;
             while (i > 0) {
@@ -489,12 +606,12 @@ pub const Converter = struct {
         if (head.isSymbol()) {
             if (self.ev.lookupSpecialForm(head) != null) return self.convertSpecial(form, head, args);
             if (self.localFunction(head)) |entry| {
-                if (entry.v) |v| return self.convertLocalCall(v, args);
+                if (entry.v) |v| return self.convertLocalCall(v, args, form);
             }
             if (try self.ev.macro_expander(self.ev, form)) |expansion| {
                 return self.convert(try self.keep(expansion));
             }
-            return self.convertGlobalCall(head, args);
+            return self.convertGlobalCall(head, args, form);
         }
         if (head.isCons() and heap.car(head).equalsRaw(self.sym_lambda)) {
             const callee = try self.convertFunctionLambda(heap.cdr(head), null);
@@ -558,26 +675,211 @@ pub const Converter = struct {
         return nodes.items;
     }
 
-    fn convertLocalCall(self: *Converter, v: *Var, args: Value) Error!*Node {
+    fn convertLocalCall(self: *Converter, v: *Var, args: Value, form: Value) Error!*Node {
         try self.noteReference(v);
         const callee = try self.node(.{ .local_ref = v });
-        return self.node(.{ .call = .{ .callee = callee, .args = try self.convertArgs(args) } });
+        return self.node(.{ .call = .{ .callee = callee, .args = try self.convertArgs(args), .form = form } });
     }
 
-    fn convertGlobalCall(self: *Converter, head: Value, args: Value) Error!*Node {
+    fn convertGlobalCall(self: *Converter, head: Value, args: Value, form: Value) Error!*Node {
+        if (self.inlineAllowed(head)) {
+            if (symbol_mod.plistGet(head, try self.ev.interner.intern("%INLINE-EXPANSION"))) |expansion| {
+                if (try self.inlineCall(head, expansion, args)) |expanded| return expanded;
+            }
+        }
         const nodes = try self.convertArgs(args);
-        for (primitives, 0..) |p, i| {
-            if (head.equalsRaw(self.primitive_syms[i]) and nodes.len == p.arity) {
-                return self.node(.{ .primitive = .{ .op = p.op, .args = nodes } });
+        if (self.policy.speed >= 1) {
+            for (primitives, 0..) |p, i| {
+                if (head.equalsRaw(self.primitive_syms[i]) and nodes.len == p.arity) {
+                    return self.node(.{ .primitive = .{ .op = typedOp(p.op, nodes), .args = nodes } });
+                }
             }
         }
         if (head.equalsRaw(self.sym_funcall) and nodes.len >= 1) {
-            return self.node(.{ .call = .{ .callee = nodes[0], .args = nodes[1..] } });
+            return self.node(.{ .call = .{ .callee = nodes[0], .args = nodes[1..], .form = form } });
         }
         if (head.equalsRaw(self.sym_apply) and nodes.len >= 2) {
             return self.node(.{ .apply = .{ .callee = nodes[0], .args = nodes[1..] } });
         }
-        return self.node(.{ .call_global = .{ .sym = head, .args = nodes } });
+        return self.node(.{ .call_global = .{ .sym = head, .args = nodes, .form = form } });
+    }
+
+    /// Whether `n`'s value is known to be a fixnum.
+    fn isFixnumNode(n: *const Node) bool {
+        return switch (n.*) {
+            .constant => |v| v.isFixnum(),
+            .local_ref => |v| v.fixnum,
+            .the_ => |t| fixnumType(t.spec),
+            else => false,
+        };
+    }
+
+    /// The instruction for a primitive whose arguments are all known to
+    /// be fixnums, which needs no check on them.
+    fn typedOp(op: Op, args: []*Node) Op {
+        for (args) |arg| if (!isFixnumNode(arg)) return op;
+        return switch (op) {
+            .add => .add_fixnums,
+            .sub => .sub_fixnums,
+            .less => .less_fixnums,
+            .greater => .greater_fixnums,
+            .less_equal => .less_equal_fixnums,
+            .greater_equal => .greater_equal_fixnums,
+            .num_equal => .num_equal_fixnums,
+            .inc => .inc_fixnum,
+            .dec => .dec_fixnum,
+            else => op,
+        };
+    }
+
+    /// Whether a call to the global function `sym` is expanded in place:
+    /// it is declared inline, and the policy puts speed ahead of space.
+    fn inlineAllowed(self: *Converter, sym: Value) bool {
+        if (self.policy.speed == 0) return false;
+        if (self.policy.space > self.policy.speed and self.policy.speed < 3) return false;
+        var i = self.inline_decls.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.inline_decls.items[i].sym.equalsRaw(sym)) return self.inline_decls.items[i].inline_;
+        }
+        const key = self.ev.interner.intern("%INLINE") catch return false;
+        const status = symbol_mod.plistGet(sym, key) orelse return false;
+        return status.isSymbol() and std.mem.eql(u8, symbol_mod.symbol(status).name, "INLINE");
+    }
+
+    /// The calls an inline function's expansion is expanded within one
+    /// another before a call is made instead.
+    const INLINE_DEPTH = 3;
+
+    /// `(sym . args)` with `sym`'s inline expansion in place of the call:
+    /// a binding of its parameters to the arguments around its body,
+    /// which sees the global environment and nothing of the caller's.
+    /// Null when the lambda list or the argument count is one this does
+    /// not expand.
+    fn inlineCall(self: *Converter, sym: Value, expansion: Value, args: Value) Error!?*Node {
+        const depth = self.inline_depth.get(sym.raw) orelse 0;
+        if (depth >= INLINE_DEPTH) return null;
+        if (!expansion.isCons() or !heap.cdr(expansion).isCons()) return null;
+        const params = heap.car(heap.cdr(expansion));
+        const body = heap.cdr(heap.cdr(expansion));
+
+        var required: std.ArrayListUnmanaged(Value) = .empty;
+        var optional: std.ArrayListUnmanaged(InitSpec) = .empty;
+        var rest_name: ?Value = null;
+        var section: enum { required, optional, rest, done } = .required;
+        var cursor = params;
+        while (cursor.isCons()) : (cursor = heap.cdr(cursor)) {
+            const item = heap.car(cursor);
+            if (item.isSymbol() and symbol_mod.symbol(item).name.len > 0 and symbol_mod.symbol(item).name[0] == '&') {
+                const n = symbol_mod.symbol(item).name;
+                if (std.mem.eql(u8, n, "&OPTIONAL") and section == .required) {
+                    section = .optional;
+                } else if (std.mem.eql(u8, n, "&REST") and section != .rest and section != .done) {
+                    section = .rest;
+                } else return null;
+                continue;
+            }
+            switch (section) {
+                .required => {
+                    if (!item.isSymbol()) return null;
+                    try required.append(self.arena, item);
+                },
+                .optional => {
+                    const spec = try parseInitSpec(item);
+                    if (!spec.name.isSymbol() or !spec.supplied.equalsRaw(value.NIL)) return null;
+                    try optional.append(self.arena, spec);
+                },
+                .rest => {
+                    if (!item.isSymbol()) return null;
+                    rest_name = item;
+                    section = .done;
+                },
+                .done => return null,
+            }
+        }
+        if (!cursor.equalsRaw(value.NIL) or section == .rest) return null;
+
+        var count: usize = 0;
+        var walk = args;
+        while (walk.isCons()) : (walk = heap.cdr(walk)) count += 1;
+        if (count < required.items.len) return null;
+        if (rest_name == null and count > required.items.len + optional.items.len) return null;
+        const arg_nodes = try self.convertArgs(args);
+
+        // The expansion is converted where only the global environment
+        // is visible.
+        const saved_vars = self.vars;
+        const saved_functions = self.functions;
+        const saved_blocks = self.blocks;
+        const saved_tags = self.tags;
+        const saved_inlines = self.inline_decls;
+        self.vars = .empty;
+        self.functions = .empty;
+        self.blocks = .empty;
+        self.tags = .empty;
+        self.inline_decls = .empty;
+        defer {
+            self.vars = saved_vars;
+            self.functions = saved_functions;
+            self.blocks = saved_blocks;
+            self.tags = saved_tags;
+            self.inline_decls = saved_inlines;
+        }
+        const chains = try self.ev.env.saveChains();
+        defer self.ev.env.restoreChains(chains);
+        self.ev.env.top_value = null;
+        self.ev.env.top_function = null;
+        try self.inline_depth.put(self.arena, sym.raw, depth + 1);
+        defer self.inline_depth.put(self.arena, sym.raw, depth) catch {};
+
+        const split = try self.splitBody(body, true);
+        const saved_decls = try self.enterDecls(&split.decls);
+        defer self.leaveDecls(saved_decls);
+        const control_mark = self.control.items.len;
+        defer self.control.shrinkRetainingCapacity(control_mark);
+        _ = try self.ev.env.pushValueFrame();
+        defer self.ev.env.popValueFrame();
+
+        // What the call passed is bound all at once, the way a call
+        // binds it; a defaulted optional parameter then sees the ones
+        // before it.
+        const supplied_optionals = @min(optional.items.len, count - required.items.len);
+        var passed: std.ArrayListUnmanaged(Binding) = .empty;
+        var stateful = false;
+        for (required.items, 0..) |name, i| {
+            const target = try self.bindTarget(name, &split.decls);
+            if (target == .special) stateful = true;
+            try passed.append(self.arena, .{ .target = target, .init = arg_nodes[i] });
+        }
+        for (optional.items[0..supplied_optionals], 0..) |spec, i| {
+            const target = try self.bindTarget(spec.name, &split.decls);
+            if (target == .special) stateful = true;
+            try passed.append(self.arena, .{ .target = target, .init = arg_nodes[required.items.len + i] });
+        }
+        if (rest_name) |name| {
+            const extra = arg_nodes[required.items.len + supplied_optionals ..];
+            const list_node = try self.node(.{ .call_global = .{ .sym = try self.ev.interner.intern("LIST"), .args = extra } });
+            const target = try self.bindTarget(name, &split.decls);
+            if (target == .special) stateful = true;
+            try passed.append(self.arena, .{ .target = target, .init = list_node });
+        }
+        if (stateful) try self.control.append(self.arena, .state);
+        var defaulted: std.ArrayListUnmanaged(Binding) = .empty;
+        for (optional.items[supplied_optionals..]) |spec| {
+            const init_node = try self.convert(spec.init);
+            const target = try self.bindTarget(spec.name, &split.decls);
+            if (target == .special and !stateful) {
+                stateful = true;
+                try self.control.append(self.arena, .state);
+            }
+            try defaulted.append(self.arena, .{ .target = target, .init = init_node });
+        }
+        try self.declareFreeSpecials(&split.decls);
+        var inner = try self.convertBody(split.forms);
+        if (defaulted.items.len > 0) {
+            inner = try self.node(.{ .let = .{ .sequential = true, .bindings = defaulted.items, .body = inner } });
+        }
+        return try self.node(.{ .let = .{ .sequential = false, .bindings = passed.items, .body = inner } });
     }
 
     fn convertSpecial(self: *Converter, form: Value, head: Value, args: Value) Error!*Node {
@@ -611,7 +913,11 @@ pub const Converter = struct {
         if (eql(u8, name, "%CATCH-ERROR")) return self.convertErrors(args, .catch_error);
         if (eql(u8, name, "THE")) {
             if (!args.isCons() or !heap.cdr(args).isCons()) return Error.BadArgList;
-            return self.convert(heap.car(heap.cdr(args)));
+            const spec = heap.car(args);
+            const inner = try self.convert(heap.car(heap.cdr(args)));
+            const values_type = spec.isCons() and heap.car(spec).isSymbol() and eql(u8, symbol_mod.symbol(heap.car(spec)).name, "VALUES");
+            if (values_type or spec.equalsRaw(value.T)) return inner;
+            return self.node(.{ .the_ = .{ .spec = try self.keep(spec), .form = inner, .check = self.policy.safety >= 1 } });
         }
         if (eql(u8, name, "PROGV")) return self.convertProgv(args);
         if (eql(u8, name, "LOAD-TIME-VALUE")) return self.convertLoadTimeValue(args);
@@ -725,35 +1031,39 @@ pub const Converter = struct {
         if (!rest.equalsRaw(value.NIL)) return Error.BadArgList;
 
         if (sequential) {
+            const saved_decls = try self.enterDecls(&split.decls);
+            defer self.leaveDecls(saved_decls);
             _ = try self.ev.env.pushValueFrame();
             defer self.ev.env.popValueFrame();
             var stateful = false;
             for (specs.items) |spec| {
                 const init_node = try self.convert(spec.init);
-                const target = try self.bindTarget(spec.sym, split.specials);
+                const target = try self.bindTarget(spec.sym, &split.decls);
                 if (target == .special and !stateful) {
                     stateful = true;
                     try self.control.append(self.arena, .state);
                 }
                 try bindings.append(self.arena, .{ .target = target, .init = init_node });
             }
-            try self.declareFreeSpecials(split.specials);
+            try self.declareFreeSpecials(&split.decls);
             const body = try self.convertBody(split.forms);
             return self.node(.{ .let = .{ .sequential = true, .bindings = bindings.items, .body = body } });
         }
 
         var inits: std.ArrayListUnmanaged(*Node) = .empty;
         for (specs.items) |spec| try inits.append(self.arena, try self.convert(spec.init));
+        const saved_decls = try self.enterDecls(&split.decls);
+        defer self.leaveDecls(saved_decls);
         _ = try self.ev.env.pushValueFrame();
         defer self.ev.env.popValueFrame();
         var stateful = false;
         for (specs.items, inits.items) |spec, init_node| {
-            const target = try self.bindTarget(spec.sym, split.specials);
+            const target = try self.bindTarget(spec.sym, &split.decls);
             if (target == .special) stateful = true;
             try bindings.append(self.arena, .{ .target = target, .init = init_node });
         }
         if (stateful) try self.control.append(self.arena, .state);
-        try self.declareFreeSpecials(split.specials);
+        try self.declareFreeSpecials(&split.decls);
         const body = try self.convertBody(split.forms);
         return self.node(.{ .let = .{ .sequential = false, .bindings = bindings.items, .body = body } });
     }
@@ -861,8 +1171,8 @@ pub const Converter = struct {
         defer self.vars.shrinkRetainingCapacity(var_mark);
         _ = try self.ev.env.pushValueFrame();
         defer self.ev.env.popValueFrame();
-        try self.declareFreeSpecials(split.specials);
-        const body = try self.convertBody(split.forms);
+        try self.declareFreeSpecials(&split.decls);
+        const body = try self.convertDeclaredBody(&split);
         return self.node(.{ .local_functions = .{
             .recursive = recursive,
             .vars = vars.items,
@@ -909,8 +1219,8 @@ pub const Converter = struct {
         defer self.vars.shrinkRetainingCapacity(var_mark);
         _ = try self.ev.env.pushValueFrame();
         defer self.ev.env.popValueFrame();
-        try self.declareFreeSpecials(split.specials);
-        return self.convertBody(split.forms);
+        try self.declareFreeSpecials(&split.decls);
+        return self.convertDeclaredBody(&split);
     }
 
     /// A macro body inside the block its name calls for, with its
@@ -957,8 +1267,8 @@ pub const Converter = struct {
             try self.vars.append(self.arena, .{ .sym = name, .kind = .special });
         }
         const split = try self.splitBody(heap.cdr(args), false);
-        try self.declareFreeSpecials(split.specials);
-        return self.convertBody(split.forms);
+        try self.declareFreeSpecials(&split.decls);
+        return self.convertDeclaredBody(&split);
     }
 
     fn convertBlock(self: *Converter, args: Value) Error!*Node {
@@ -1155,7 +1465,7 @@ pub const Converter = struct {
         var stateful = false;
         var rest = heap.car(args);
         while (rest.isCons()) : (rest = heap.cdr(rest)) {
-            const target = try self.bindTarget(heap.car(rest), split.specials);
+            const target = try self.bindTarget(heap.car(rest), &split.decls);
             if (target == .special) stateful = true;
             try targets.append(self.arena, target);
         }
@@ -1163,8 +1473,8 @@ pub const Converter = struct {
         const control_mark = self.control.items.len;
         defer self.control.shrinkRetainingCapacity(control_mark);
         if (stateful) try self.control.append(self.arena, .state);
-        try self.declareFreeSpecials(split.specials);
-        const body = try self.convertBody(split.forms);
+        try self.declareFreeSpecials(&split.decls);
+        const body = try self.convertDeclaredBody(&split);
         return self.node(.{ .mv_bind = .{ .targets = targets.items, .form = form, .body = body } });
     }
 
@@ -1175,7 +1485,19 @@ pub const Converter = struct {
         const after = heap.cdr(args);
         if (!after.isCons()) return Error.BadArgList;
         const l = try self.convertLambda(self.lambda, symbol_mod.symbol(sym).name, heap.car(after), heap.cdr(after), blockName(given));
-        return self.node(.{ .define_function = .{ .sym = sym, .lambda = l, .result = try self.keep(given) } });
+        // A function proclaimed inline where it is defined keeps the
+        // expansion its calls are expanded into, when nothing lexical
+        // surrounds it for the expansion to lose.
+        var expansion: Value = .{ .raw = 0 };
+        const status = symbol_mod.plistGet(sym, try self.ev.interner.intern("%INLINE"));
+        const proclaimed = if (status) |st| st.isSymbol() and std.mem.eql(u8, symbol_mod.symbol(st).name, "INLINE") else false;
+        if (proclaimed and self.vars.items.len == 0 and self.functions.items.len == 0) {
+            const wrapped = try self.keep(try self.wrapBlock(blockName(given), heap.cdr(after)));
+            const with_params = try self.keep(try self.ev.heap.allocCons(heap.car(after), wrapped));
+            expansion = try self.keep(try self.ev.heap.allocCons(self.sym_lambda, with_params));
+            try symbol_mod.plistPut(self.ev.heap, sym, try self.ev.interner.intern("%INLINE-EXPANSION"), expansion);
+        }
+        return self.node(.{ .define_function = .{ .sym = sym, .lambda = l, .result = try self.keep(given), .expansion = expansion } });
     }
 
     fn convertDefine(self: *Converter, args: Value, kind: DefineKind) Error!*Node {
@@ -1225,20 +1547,20 @@ pub const Converter = struct {
         _ = try self.ev.env.pushValueFrame();
         defer self.ev.env.popValueFrame();
         var stateful = false;
-        const pattern = try self.convertPattern(pattern_form, split.specials, &stateful);
-        try self.declareFreeSpecials(split.specials);
-        const body = try self.convertBody(split.forms);
+        const pattern = try self.convertPattern(pattern_form, &split.decls, &stateful);
+        try self.declareFreeSpecials(&split.decls);
+        const body = try self.convertDeclaredBody(&split);
         return self.node(.{ .destructure = .{ .pattern = pattern, .value = value_node, .body = body } });
     }
 
-    fn patternTarget(self: *Converter, item: Value, specials: []const Value, stateful: *bool) Error!PatternTarget {
+    fn patternTarget(self: *Converter, item: Value, decls: *const Decls, stateful: *bool) Error!PatternTarget {
         if (item.equalsRaw(value.NIL)) return .empty;
-        if (item.isCons()) return .{ .nested = try self.convertPattern(item, specials, stateful) };
-        return .{ .target = try self.boundTarget(item, specials, stateful) };
+        if (item.isCons()) return .{ .nested = try self.convertPattern(item, decls, stateful) };
+        return .{ .target = try self.boundTarget(item, decls, stateful) };
     }
 
-    fn boundTarget(self: *Converter, sym: Value, specials: []const Value, stateful: *bool) Error!Target {
-        const target = try self.bindTarget(sym, specials);
+    fn boundTarget(self: *Converter, sym: Value, decls: *const Decls, stateful: *bool) Error!Target {
+        const target = try self.bindTarget(sym, decls);
         if (target == .special and !stateful.*) {
             stateful.* = true;
             try self.control.append(self.arena, .state);
@@ -1246,7 +1568,7 @@ pub const Converter = struct {
         return target;
     }
 
-    fn convertPattern(self: *Converter, params: Value, specials: []const Value, stateful: *bool) Error!*Pattern {
+    fn convertPattern(self: *Converter, params: Value, decls: *const Decls, stateful: *bool) Error!*Pattern {
         const p = try self.arena.create(Pattern);
         p.* = .{};
         var required: std.ArrayListUnmanaged(PatternTarget) = .empty;
@@ -1257,7 +1579,7 @@ pub const Converter = struct {
         var section: Section = .required;
         var rest = params;
         if (rest.isCons() and heap.car(rest).isSymbol() and std.mem.eql(u8, symbol_mod.symbol(heap.car(rest)).name, "&WHOLE")) {
-            p.whole = try self.patternTarget(heap.car(heap.cdr(rest)), specials, stateful);
+            p.whole = try self.patternTarget(heap.car(heap.cdr(rest)), decls, stateful);
             rest = heap.cdr(heap.cdr(rest));
         }
         while (rest.isCons()) : (rest = heap.cdr(rest)) {
@@ -1283,15 +1605,15 @@ pub const Converter = struct {
                 }
             }
             switch (section) {
-                .required => try required.append(self.arena, try self.patternTarget(item, specials, stateful)),
+                .required => try required.append(self.arena, try self.patternTarget(item, decls, stateful)),
                 .optional => {
                     const spec = try parseInitSpec(item);
                     const init_node = try self.convert(spec.init);
-                    const target = try self.patternTarget(spec.name, specials, stateful);
-                    const supplied = if (spec.supplied.equalsRaw(value.NIL)) null else try self.boundTarget(spec.supplied, specials, stateful);
+                    const target = try self.patternTarget(spec.name, decls, stateful);
+                    const supplied = if (spec.supplied.equalsRaw(value.NIL)) null else try self.boundTarget(spec.supplied, decls, stateful);
                     try optional.append(self.arena, .{ .target = target, .init = init_node, .supplied = supplied });
                 },
-                .rest => p.rest = try self.patternTarget(item, specials, stateful),
+                .rest => p.rest = try self.patternTarget(item, decls, stateful),
                 .key => {
                     var keyword: Value = undefined;
                     var var_name: Value = undefined;
@@ -1313,18 +1635,18 @@ pub const Converter = struct {
                     const init_form = if (tail.isCons()) heap.car(tail) else value.NIL;
                     const supplied_name = if (tail.isCons() and heap.cdr(tail).isCons()) heap.car(heap.cdr(tail)) else value.NIL;
                     const init_node = try self.convert(init_form);
-                    const target = try self.patternTarget(var_name, specials, stateful);
-                    const supplied = if (supplied_name.equalsRaw(value.NIL)) null else try self.boundTarget(supplied_name, specials, stateful);
+                    const target = try self.patternTarget(var_name, decls, stateful);
+                    const supplied = if (supplied_name.equalsRaw(value.NIL)) null else try self.boundTarget(supplied_name, decls, stateful);
                     try keys.append(self.arena, .{ .keyword = keyword, .target = target, .init = init_node, .supplied = supplied });
                 },
                 .aux => {
                     const spec = try parseInitSpec(item);
                     const init_node = try self.convert(spec.init);
-                    try aux.append(self.arena, .{ .target = try self.boundTarget(spec.name, specials, stateful), .init = init_node });
+                    try aux.append(self.arena, .{ .target = try self.boundTarget(spec.name, decls, stateful), .init = init_node });
                 },
             }
         }
-        if (!rest.equalsRaw(value.NIL)) p.rest = try self.patternTarget(rest, specials, stateful);
+        if (!rest.equalsRaw(value.NIL)) p.rest = try self.patternTarget(rest, decls, stateful);
         p.required = required.items;
         p.optional = optional.items;
         p.keys = keys.items;

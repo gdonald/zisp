@@ -31,6 +31,8 @@
 (defvar *%loop-accumulator-bindings* nil)
 (defvar *%loop-anonymous* nil)
 (defvar *%loop-boolean-result* nil)
+;; The variables declared with a type, each with its type.
+(defvar *%loop-types* nil)
 
 (defun %loop-keyword-p (token &rest names)
   (and (symbolp token) token
@@ -104,7 +106,14 @@
 TYPE is one type for them all, or a tree of types shaped like PATTERN."
   (cond ((null pattern) nil)
         ((symbolp pattern)
-         (list (list pattern (%loop-type-default type))))
+         (let ((default (%loop-type-default type)))
+           ;; A type the default value holds is declared for the
+           ;; compiler. One it does not hold would fail when the
+           ;; variable is first bound.
+           (when (and type (not (member type '(t nil)))
+                      (ignore-errors (typep default type)))
+             (push (cons pattern type) *%loop-types*))
+           (list (list pattern default))))
         ((and (consp type) (or type-tree (not (%loop-compound-type-p type))))
          (append (%loop-bindings-for (car pattern) (car type) t)
                  (%loop-bindings-for (cdr pattern) (cdr type) t)))
@@ -550,8 +559,14 @@ conditional's test where there is one."
   (if (null groups)
       form
       (destructuring-bind (parallel bindings) (car groups)
-        `(,(if parallel 'let 'let*) ,bindings
-          ,(%loop-wrap-groups (cdr groups) form)))))
+        (let ((declarations
+                (mapcan (lambda (binding)
+                          (let ((entry (assoc (car binding) *%loop-types*)))
+                            (and entry (list `(type ,(cdr entry) ,(car binding))))))
+                        bindings)))
+          `(,(if parallel 'let 'let*) ,bindings
+            ,@(when declarations `((declare ,@declarations)))
+            ,(%loop-wrap-groups (cdr groups) form))))))
 
 (defun %loop-result ()
   (cond (*%loop-anonymous* *%loop-anonymous*)
@@ -563,6 +578,7 @@ conditional's test where there is one."
         (*%loop-name* nil)
         (*%loop-end* (gensym "END"))
         (*%loop-groups* nil)
+        (*%loop-types* nil)
         (*%loop-variables* nil)
         (*%loop-prologue* nil)
         (*%loop-first* nil)

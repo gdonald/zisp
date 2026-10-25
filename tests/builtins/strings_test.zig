@@ -114,9 +114,10 @@ test "typep recognizes the string and base-char type names" {
     defer fx.deinit(testing.allocator);
     try fx.expectT("(typep \"a\" 'string)");
     try fx.expectT("(typep \"a\" 'simple-string)");
-    // A string element holds any codepoint, so a string is not a
-    // base-string, whose elements are base characters.
-    try fx.expectNil("(typep \"a\" 'base-string)");
+    // An array of base characters upgrades to one of characters, and
+    // typep reads an array type's element type as what it upgrades to.
+    try fx.expectT("(typep \"a\" 'base-string)");
+    try fx.expectT("(typep \"a\" 'simple-base-string)");
     try fx.expectNil("(typep 'a 'simple-string)");
     try fx.expectT("(typep #\\a 'base-char)");
     try fx.expectNil("(typep #\\U+1F600 'base-char)");

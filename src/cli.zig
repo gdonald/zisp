@@ -29,6 +29,9 @@ pub const Plan = struct {
     script: ?[]const u8 = null,
     /// Arguments following the script, bound to `*command-line-arguments*`.
     script_args: []const []const u8 = &.{},
+    /// `--image FILE` — start from a saved image instead of the boot
+    /// sources.
+    image: ?[]const u8 = null,
 
     pub fn deinit(self: Plan, allocator: std.mem.Allocator) void {
         allocator.free(self.ops);
@@ -58,6 +61,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) std.mem
     errdefer ops.deinit(allocator);
 
     var batch = false;
+    var image: ?[]const u8 = null;
     var quiet = false;
     var script: ?[]const u8 = null;
     var script_args: []const []const u8 = &.{};
@@ -100,6 +104,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) std.mem
             batch = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--image")) {
+            if (i + 1 >= args.len) {
+                ops.deinit(allocator);
+                return .{ .user_error = "--image requires a path" };
+            }
+            image = args[i + 1];
+            i += 1;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--quiet") or std.mem.eql(u8, arg, "-q")) {
             quiet = true;
             continue;
@@ -132,7 +145,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) std.mem
     }
 
     const ops_slice = try ops.toOwnedSlice(allocator);
-    if (ops_slice.len == 0 and script == null and !batch and !quiet) {
+    if (ops_slice.len == 0 and script == null and !batch and !quiet and image == null) {
         allocator.free(ops_slice);
         return .repl;
     }
@@ -142,6 +155,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) std.mem
         .quiet = quiet,
         .script = script,
         .script_args = script_args,
+        .image = image,
     } };
 }
 
@@ -161,6 +175,7 @@ pub const HELP_TEXT =
     \\    --batch             Process options and exit; no REPL
     \\    --quiet, -q         Suppress the startup banner
     \\    --read-only FILE    Parse FILE without evaluating; report parse-rate
+    \\    --image FILE        Start from an image ext:save-image wrote
     \\    --                  End of options
     \\
     \\See docs/cli.md for the full reference.

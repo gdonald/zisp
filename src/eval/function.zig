@@ -39,6 +39,7 @@ pub const NativeError = error{
     NoSuchPackage,
     PackageError,
     StackExhausted,
+    FaslVersion,
 } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 pub const Closure = struct {
@@ -127,6 +128,12 @@ pub var call_cache_epoch: u32 = 1;
 pub fn invalidateCallCaches() void {
     call_cache_epoch +%= 1;
     if (call_cache_epoch == 0) call_cache_epoch = 1;
+}
+
+/// Whether `v` is a `compiled-function`: anything callable but a closure
+/// the interpreter runs.
+pub fn isCompiledFunction(v: Value) bool {
+    return isFunction(v) and asFunction(v).kind != .closure;
 }
 
 pub fn isCompiled(v: Value) bool {

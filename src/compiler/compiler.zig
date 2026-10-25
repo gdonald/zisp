@@ -9,6 +9,7 @@ const convert = @import("convert.zig");
 const emit = @import("emit.zig");
 
 pub const bytecode = @import("bytecode.zig");
+pub const fasl = @import("fasl.zig");
 pub const vm = @import("vm.zig");
 
 const Value = value.Value;
@@ -57,4 +58,15 @@ pub fn evalCompiled(ev: *Evaluator, form: Value) Error!Value {
     const compiled = try compileLambda(ev, null, value.NIL, held.items()[1]);
     try held.push(compiled);
     return ev.callFunction(compiled, &.{});
+}
+
+/// The code for one top-level form of a file being compiled: the body of
+/// a function of no arguments.
+pub fn compileTopLevelForm(ev: *Evaluator, form: Value) Error!*const bytecode.Code {
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(form);
+    try held.push(try ev.heap.list(held.items()[0..1]));
+    const compiled = try compileLambda(ev, null, value.NIL, held.items()[1]);
+    return function.asFunction(compiled).payload.compiled.code;
 }

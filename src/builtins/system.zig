@@ -3,6 +3,7 @@
 //! test harness rely on. These sit apart from the pure value builtins because
 //! they reach the evaluator's output sink, filesystem, and exit channel.
 
+const compiler = @import("../compiler/compiler.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 const value = @import("../runtime/value.zig");
@@ -293,8 +294,32 @@ fn readFn(p: *anyopaque, args: []const Value) Error!Value {
 fn loadFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    try loadPath(ev, try namestringOf(ev.heap.allocator, args[0]));
+    try loadPath(ev, try resolveLoadPath(ev, try namestringOf(ev.heap.allocator, args[0])));
     return value.T;
+}
+
+/// The file `load` reads for `path`. A name with a type, or one a file
+/// has as it is, is that file. Otherwise it names a source file with the
+/// type `lisp` and its fasl: the fasl is loaded, and compiled from the
+/// source first when the source is newer or there is no fasl yet.
+fn resolveLoadPath(ev: *Evaluator, path: []const u8) Error![]const u8 {
+    const io = ev.io orelse return Error.FileError;
+    const cut = if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| i + 1 else 0;
+    if (std.mem.indexOfScalar(u8, path[cut..], '.') != null) return path;
+    const cwd = std.Io.Dir.cwd();
+    if (cwd.statFile(io, path, .{})) |_| return path else |_| {}
+
+    const source = try std.fmt.allocPrint(ev.heap.allocator, "{s}.lisp", .{path});
+    const fasl = try pathnames.faslPathOf(ev.heap.allocator, source);
+    const source_stat = cwd.statFile(io, source, .{}) catch null;
+    const fasl_stat = cwd.statFile(io, fasl, .{}) catch null;
+    if (source_stat) |src| {
+        const stale = if (fasl_stat) |compiled| src.mtime.nanoseconds > compiled.mtime.nanoseconds else true;
+        if (stale) _ = try compileFileFn(@ptrCast(ev), &.{try ev.heap.allocString(source)});
+        return fasl;
+    }
+    if (fasl_stat != null) return fasl;
+    return path;
 }
 
 /// Read and evaluate every form in the file at `path`. Used by the `load`
@@ -316,7 +341,9 @@ pub fn loadPath(ev: *Evaluator, path: []const u8) Error!void {
     const saved_package = ev.interner.currentPackage();
     defer ev.interner.setCurrentPackage(saved_package);
 
-    // What `compile-file` wrote is compiled as it is loaded.
+    if (compiler.fasl.isBinary(source)) return compiler.fasl.load(ev, source);
+
+    // What `compile-file` wrote as text is compiled as it is loaded.
     const mark = ev.dynamicMark();
     defer ev.unwindSpecials(mark);
     if (std.mem.startsWith(u8, source, FASL_HEADER)) {
@@ -469,6 +496,9 @@ pub fn compileToplevel(ev: *Evaluator, form: Value, ctt: bool, out: *std.ArrayLi
     // a pin is what keeps its contents from being reclaimed.
     try ev.pin(form);
     defer ev.unpin();
+    // Forms are compiled as they are processed, so a definition the rest
+    // of the file depends on while it is being compiled is made now too.
+    if (definesAtCompileTime(form)) _ = try ev.eval(form);
     var f = form;
     while (try ev.macroexpand1(f)) |expanded| {
         f = expanded;
@@ -528,18 +558,55 @@ pub fn compileToplevel(ev: *Evaluator, form: Value, ctt: bool, out: *std.ArrayLi
     if (ctt) _ = try ev.eval(f);
 }
 
+/// The definitions whose effect CLHS 3.2.3.1.1 and the dictionary entries
+/// of the operators give at compile time: a class, a structure, a type, a
+/// setf expander, a symbol macro or a compiler macro the rest of the file
+/// can refer to while it is compiled.
+const compile_time_definers = [_][]const u8{
+    "DEFCLASS",            "DEFINE-CONDITION",     "DEFSTRUCT",           "DEFTYPE",
+    "DEFSETF",             "DEFINE-SETF-EXPANDER", "DEFINE-SYMBOL-MACRO", "DEFINE-COMPILER-MACRO",
+    "DEFINE-MODIFY-MACRO", "DEFCONSTANT",
+};
+
+fn definesAtCompileTime(form: Value) bool {
+    if (!form.isCons() or !heap.car(form).isSymbol()) return false;
+    const head = heap.car(form);
+    const home = symbol_mod.homePackage(head) orelse return false;
+    if (!std.mem.eql(u8, home.name, symbol_mod.CL_PACKAGE_NAME)) return false;
+    for (compile_time_definers) |name| {
+        if (std.mem.eql(u8, symbol_mod.symbol(head).name, name)) return true;
+    }
+    return false;
+}
+
 /// Collect a load-time form, pinning it for as long as the caller keeps
 /// the list.
 fn keepForLoad(ev: *Evaluator, out: *std.ArrayList(Value), f: Value) Error!void {
     try out.append(ev.allocator, f);
     try ev.pin(f);
+    // Compiled now rather than once the file is read, so a macro the
+    // file redefines later at compile time does not change this form.
+    if (ev.fasl_codes) |codes| try codes.append(ev.allocator, try compiler.compileTopLevelForm(ev, f));
 }
 
 /// Minimal compilation of `source`: process every top-level form, collect
 /// the load-time forms into `out`.
 pub fn compileSource(ev: *Evaluator, source: []const u8, out: *std.ArrayList(Value)) Error!void {
+    return compileSourceNamed(ev, source, "", out);
+}
+
+/// `compileSource` with where each form was read recorded under the name
+/// `file`, for code compiled with `(debug 3)` to say.
+pub fn compileSourceNamed(ev: *Evaluator, source: []const u8, file: []const u8, out: *std.ArrayList(Value)) Error!void {
     var tokenizer = reader_mod.Tokenizer.init(source);
-    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    var rd = reader_mod.Reader.initFull(
+        &tokenizer,
+        ev.heap,
+        ev.interner,
+        reader_mod.reader.defaultReadtable(),
+        try ev.sourcePositions(),
+        try ev.keepSourceName(file),
+    );
     rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
     readtables.install(ev, &rd);
     while (true) {
@@ -579,7 +646,12 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
     defer load_forms.deinit(ev.allocator);
     const pin_mark = ev.pinMark();
     defer ev.unpinTo(pin_mark);
+    var codes: std.ArrayListUnmanaged(*const compiler.bytecode.Code) = .empty;
+    defer codes.deinit(ev.allocator);
     {
+        const outer_codes = ev.fasl_codes;
+        ev.fasl_codes = &codes;
+        defer ev.fasl_codes = outer_codes;
         var bindings = try PathVarBindings.bind(
             ev,
             "*COMPILE-FILE-PATHNAME*",
@@ -588,12 +660,12 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
             truename,
         );
         defer bindings.restore();
-        try compileSource(ev, source, &load_forms);
+        try compileSourceNamed(ev, source, truename, &load_forms);
     }
 
     const fasl_path = if (output_file) |given| try ev.allocator.dupe(u8, given) else try pathnames.faslPathOf(ev.allocator, path);
     defer ev.allocator.free(fasl_path);
-    try writeFasl(ev, io, fasl_path, load_forms.items);
+    try writeBinaryOrTextFasl(ev, io, fasl_path, load_forms.items, codes.items);
     const name = try ev.heap.allocString(fasl_path);
     return ev.setValues(&.{ name, value.NIL, value.NIL });
 }
@@ -611,6 +683,28 @@ fn externalizedForms(ev: *Evaluator, forms: []const Value, held: *@TypeOf(ev.hea
     const start = held.items().len;
     while (rest.isCons()) : (rest = heap.cdr(rest)) try held.push(heap.car(rest));
     return held.items()[start..];
+}
+
+/// A binary fasl of `codes`, or a text one of `forms` where some literal
+/// has no place in the binary format.
+fn writeBinaryOrTextFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value, codes: []const *const compiler.bytecode.Code) Error!void {
+    const big = symbol_mod.symbol(try ev.interner.intern("*%FASL-BIG-ENDIAN*")).value_cell;
+    var writer: compiler.fasl.Writer = .{
+        .ev = ev,
+        .allocator = ev.allocator,
+        .endian = if (big.equalsRaw(value.NIL) or big.equalsRaw(value.SPECIAL_UNBOUND)) .little else .big,
+    };
+    defer writer.deinit();
+    const bytes = writer.build(codes) catch |err| switch (err) {
+        error.Unencodable => return writeFasl(ev, io, path, forms),
+        else => |e| return e,
+    };
+    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return Error.FileError;
+    defer file.close(io);
+    var write_buf: [4096]u8 = undefined;
+    var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
+    file_writer.interface.writeAll(bytes) catch return Error.FileError;
+    file_writer.interface.flush() catch return Error.FileError;
 }
 
 fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value) Error!void {
