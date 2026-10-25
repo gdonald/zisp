@@ -33,6 +33,7 @@ const Fixture = struct {
         fx.ev = Evaluator.init(allocator, &fx.heap, &fx.interner);
         fx.ev.out = &fx.aw.writer;
         fx.ev.io = testing.io;
+        errdefer fx.deinit(allocator);
         try zisp.eval.registerStandardSpecialForms(&fx.ev);
         try zisp.builtins.registerStandard(&fx.ev);
         try zisp.builtins.registerSystem(&fx.ev);
