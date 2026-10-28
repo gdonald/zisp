@@ -534,7 +534,7 @@ const Runner = struct {
     fn count(self: *Runner, directive: Directive, slot: usize, args: *Args, default: i64) Error!usize {
         const n = try self.param(directive, slot, args, default);
         if (n < 0) return Error.ProgramError;
-        return @intCast(n);
+        return std.math.cast(usize, n) orelse std.math.maxInt(usize);
     }
 };
 
@@ -1407,7 +1407,7 @@ fn appendOrdinal(r: *Runner, n: i64, text: *std.ArrayList(u8)) Error!void {
 
 fn appendOrdinalMagnitude(r: *Runner, magnitude: u64, text: *std.ArrayList(u8)) Error!void {
     if (magnitude == 0) return text.appendSlice(r.allocator, "zeroth");
-    const tail = magnitude % 100;
+    const tail: usize = @intCast(magnitude % 100);
     // The ordinal falls on the last word, so everything before the final
     // group of two digits is spelled out as a cardinal.
     if (tail == 0) {
@@ -1419,7 +1419,7 @@ fn appendOrdinalMagnitude(r: *Runner, magnitude: u64, text: *std.ArrayList(u8)) 
         try appendMagnitude(r, magnitude - tail, text);
         try text.append(r.allocator, ' ');
     }
-    if (tail < 20) return text.appendSlice(r.allocator, ONES_ORDINAL[tail]);
+    if (tail < 20) return text.appendSlice(r.allocator, ONES_ORDINAL[@intCast(tail)]);
     if (tail % 10 == 0) return text.appendSlice(r.allocator, TENS_ORDINAL[tail / 10]);
     try text.appendSlice(r.allocator, TENS[tail / 10]);
     try text.append(r.allocator, '-');

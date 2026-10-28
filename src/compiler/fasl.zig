@@ -272,7 +272,7 @@ pub const Writer = struct {
                         try self.tag(.bignum);
                         try self.out.append(self.allocator, @intFromBool(!big.positive));
                         try self.int(u32, @intCast(big.len));
-                        for (big.limbs[0..big.len]) |limb| try self.int(u64, limb);
+                        for (big.limbs[0..@intCast(big.len)]) |limb| try self.int(u64, limb);
                     },
                     .double_float => {
                         try self.tag(.double_float);
@@ -448,7 +448,7 @@ pub fn load(ev: *Evaluator, bytes: []const u8) Error!void {
             },
             _ => {},
         }
-        r.at = std.mem.alignForward(usize, start + length, 8);
+        r.at = std.mem.alignForward(usize, @intCast(start + length), 8);
     }
 
     var held = ev.heap.protect();

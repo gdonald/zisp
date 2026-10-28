@@ -57,9 +57,9 @@ pub const Value = extern struct {
         return .{ .raw = addr | @backingInt(Tag.cons) };
     }
 
-    pub inline fn toConsAddr(self: Value) u64 {
+    pub inline fn toConsAddr(self: Value) usize {
         std.debug.assert(self.hasTag(.cons));
-        return self.raw & ~TAG_MASK;
+        return @intCast(self.raw & ~TAG_MASK);
     }
 
     pub inline fn isCons(self: Value) bool {
@@ -73,9 +73,9 @@ pub const Value = extern struct {
         return .{ .raw = addr | @backingInt(Tag.symbol) };
     }
 
-    pub inline fn toSymbolAddr(self: Value) u64 {
+    pub inline fn toSymbolAddr(self: Value) usize {
         std.debug.assert(self.hasTag(.symbol));
-        return self.raw & ~TAG_MASK;
+        return @intCast(self.raw & ~TAG_MASK);
     }
 
     pub inline fn isSymbol(self: Value) bool {
@@ -89,9 +89,9 @@ pub const Value = extern struct {
         return .{ .raw = addr | @backingInt(Tag.heap) };
     }
 
-    pub inline fn toHeapAddr(self: Value) u64 {
+    pub inline fn toHeapAddr(self: Value) usize {
         std.debug.assert(self.hasTag(.heap));
-        return self.raw & ~TAG_MASK;
+        return @intCast(self.raw & ~TAG_MASK);
     }
 
     pub inline fn isHeap(self: Value) bool {

@@ -4,6 +4,7 @@
 //! wraps them in `foreign-pointer`s.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
@@ -22,8 +23,11 @@ fn evaluator(p: *anyopaque) *Evaluator {
     return Evaluator.fromOpaque(p);
 }
 
+/// WASI has no dynamic loader to look C symbols up in.
+pub const available = !build_options.freestanding and builtin.os.tag != .wasi;
+
 pub fn registerFfi(ev: *Evaluator) !void {
-    if (build_options.freestanding) return;
+    if (!available) return;
     _ = try ev.defineNative("%FOREIGN-SYMBOL-ADDRESS", &foreignSymbolAddressFn);
     _ = try ev.defineNative("%LOAD-FOREIGN-LIBRARY", &loadForeignLibraryFn);
     _ = try ev.defineNative("%FOREIGN-CALL", &foreignCallFn);
@@ -332,7 +336,7 @@ fn integerArgument(t: CType, arg: Value, copy: *?[*:0]u8) Error!u64 {
         copy.* = text;
         return @intFromPtr(text);
     }
-    if (t == .pointer or t == .string) return addressOf(arg);
+    if (t == .pointer or t == .string) return try addressOf(arg);
     const n: i128 = if ((t == .char or t == .unsigned_char) and arg.isChar()) arg.toChar() else try integerOf(arg);
     const range = t.bounds().?;
     if (n < range.lo or n > range.hi) return Error.TypeError;

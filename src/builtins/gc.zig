@@ -168,7 +168,7 @@ fn roomFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len > 1) return Error.WrongArgCount;
     const stats = ev.heap.objects.stats;
 
-    const entries = [_]struct { name: []const u8, count: usize }{
+    const entries = [_]struct { name: []const u8, count: u64 }{
         .{ .name = "LIVE-BYTES", .count = stats.live_bytes },
         .{ .name = "NURSERY-BYTES", .count = stats.nursery_bytes },
         .{ .name = "NURSERY-CAPACITY", .count = ev.heap.objects.nursery_capacity },

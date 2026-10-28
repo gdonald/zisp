@@ -29,11 +29,11 @@ for corpus in "$@"; do
   path="$(cd "$(dirname "$corpus")" && pwd)/$(basename "$corpus")"
   output="$("$SBCL" --noinform \
     --eval "(defvar cl-user::*corpus* \"$path\")" \
-    --load "$ROOT/tests/lisp/sbcl-corpus-check.lisp" \
+    --load "$ROOT/tests/lisp/corpus-check.lisp" \
     --eval '(sb-ext:exit)' </dev/null 2>"$errors")" || true
 
   grep -E '^FORM [0-9]+: ' <<<"$output" || true
-  tally="$(grep -E '^SBCL-CORPUS [0-9]+ [0-9]+$' <<<"$output" | tail -n1 || true)"
+  tally="$(grep -E '^CORPUS [0-9]+ [0-9]+$' <<<"$output" | tail -n1 || true)"
   if [[ -z "$tally" ]]; then
     grep -v '^;' "$errors" | tail -n 20
     echo "error: $corpus did not run to the end in SBCL" >&2

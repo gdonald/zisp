@@ -524,13 +524,7 @@ fn loadLogicalPathnameTranslationsFn(p: *anyopaque, args: []const Value) Error!V
 
 fn readFile(ev: *Evaluator, path: []const u8) ![]u8 {
     const io = ev.io orelse return error.FileError;
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var read_buf: [4096]u8 = undefined;
-    var file_reader = std.Io.File.Reader.init(file, io, &read_buf);
-    var contents: std.ArrayList(u8) = .empty;
-    try file_reader.interface.appendRemainingUnlimited(ev.heap.allocator, &contents);
-    return contents.items;
+    return @import("fs.zig").readFile(io, ev.heap.allocator, path);
 }
 
 fn readOneForm(ev: *Evaluator, source: []const u8) Error!Value {

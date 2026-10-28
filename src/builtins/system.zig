@@ -27,6 +27,7 @@ const Error = function.NativeError;
 
 /// Namestring behind a pathname designator: a string, or a pathname.
 const namestringOf = pathnames.namestringOf;
+const fs = @import("fs.zig");
 
 fn evaluator(p: *anyopaque) *Evaluator {
     return Evaluator.fromOpaque(p);
@@ -306,15 +307,14 @@ fn resolveLoadPath(ev: *Evaluator, path: []const u8) Error![]const u8 {
     const io = ev.io orelse return Error.FileError;
     const cut = if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| i + 1 else 0;
     if (std.mem.indexOfScalar(u8, path[cut..], '.') != null) return path;
-    const cwd = std.Io.Dir.cwd();
-    if (cwd.statFile(io, path, .{})) |_| return path else |_| {}
+    if (fs.modified(io, path)) |_| return path else |_| {}
 
     const source = try std.fmt.allocPrint(ev.heap.allocator, "{s}.lisp", .{path});
     const fasl = try pathnames.faslPathOf(ev.heap.allocator, source);
-    const source_stat = cwd.statFile(io, source, .{}) catch null;
-    const fasl_stat = cwd.statFile(io, fasl, .{}) catch null;
+    const source_stat = fs.modified(io, source) catch null;
+    const fasl_stat = fs.modified(io, fasl) catch null;
     if (source_stat) |src| {
-        const stale = if (fasl_stat) |compiled| src.mtime.nanoseconds > compiled.mtime.nanoseconds else true;
+        const stale = if (fasl_stat) |compiled| src.nanoseconds > compiled.nanoseconds else true;
         if (stale) _ = try compileFileFn(@ptrCast(ev), &.{try ev.heap.allocString(source)});
         return fasl;
     }
@@ -356,20 +356,12 @@ pub fn loadPath(ev: *Evaluator, path: []const u8) Error!void {
 /// The first line of every fasl.
 const FASL_HEADER = ";; zisp fasl (readable load-time forms)\n";
 
-fn readFileAlloc(ev: *Evaluator, io: std.Io, path: []const u8) Error![]u8 {
-    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return Error.FileError;
-    defer file.close(io);
-
-    var read_buf: [4096]u8 = undefined;
-    var file_reader = std.Io.File.Reader.init(file, io, &read_buf);
-    var source: std.ArrayList(u8) = .empty;
-    errdefer source.deinit(ev.allocator);
-    file_reader.interface.appendRemainingUnlimited(ev.allocator, &source) catch return Error.FileError;
-    return source.toOwnedSlice(ev.allocator);
+pub fn readFileAlloc(ev: *Evaluator, io: std.Io, path: []const u8) Error![]u8 {
+    return fs.readFile(io, ev.allocator, path);
 }
 
 fn truenameOf(ev: *Evaluator, io: std.Io, path: []const u8) ![:0]u8 {
-    return std.Io.Dir.cwd().realPathFileAlloc(io, path, ev.allocator);
+    return fs.realPath(io, ev.allocator, path);
 }
 
 fn truenameFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -400,8 +392,8 @@ fn fileWriteDateFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
     const io = ev.io orelse return Error.FileError;
     const path = try namestringOf(ev.heap.allocator, args[0]);
-    const info = std.Io.Dir.cwd().statFile(io, path, .{}) catch return Error.FileError;
-    const seconds: i64 = @intCast(@divFloor(info.mtime.nanoseconds, std.time.ns_per_s));
+    const mtime = try fs.modified(io, path);
+    const seconds: i64 = @intCast(@divFloor(mtime.nanoseconds, std.time.ns_per_s));
     return Value.fromFixnum(seconds + UNIX_EPOCH_UNIVERSAL_TIME);
 }
 
@@ -699,22 +691,14 @@ fn writeBinaryOrTextFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []
         error.Unencodable => return writeFasl(ev, io, path, forms),
         else => |e| return e,
     };
-    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return Error.FileError;
-    defer file.close(io);
-    var write_buf: [4096]u8 = undefined;
-    var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
-    file_writer.interface.writeAll(bytes) catch return Error.FileError;
-    file_writer.interface.flush() catch return Error.FileError;
+    try fs.writeFile(io, path, bytes);
 }
 
 fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value) Error!void {
-    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return Error.FileError;
-    defer file.close(io);
-
-    var write_buf: [4096]u8 = undefined;
-    var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
-    const w = &file_writer.interface;
-    w.writeAll(FASL_HEADER) catch return Error.FileError;
+    var text = std.Io.Writer.Allocating.init(ev.allocator);
+    defer text.deinit();
+    const w = &text.writer;
+    w.writeAll(FASL_HEADER) catch return Error.OutOfMemory;
     var held = ev.heap.protect();
     defer held.close();
     for (try externalizedForms(ev, forms, &held)) |f| {
@@ -724,10 +708,10 @@ fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value)
         defer state.deinit(ev.allocator);
         var settings = format.prin1Settings(ev);
         settings.circle = &state;
-        printer.write(ev.allocator, w, f, settings) catch return Error.FileError;
-        w.writeByte('\n') catch return Error.FileError;
+        printer.write(ev.allocator, w, f, settings) catch return Error.OutOfMemory;
+        w.writeByte('\n') catch return Error.OutOfMemory;
     }
-    w.flush() catch return Error.FileError;
+    try fs.writeFile(io, path, text.written());
 }
 
 // --- quit / exit ---

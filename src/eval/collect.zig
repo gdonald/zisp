@@ -107,7 +107,7 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
         var stale: std.ArrayListUnmanaged(u64) = .empty;
         defer stale.deinit(ev.allocator);
         while (it.next()) |entry| {
-            const address = entry.key_ptr.*;
+            const address: usize = @intCast(entry.key_ptr.*);
             if (!ev.heap.objects.owns(address)) continue;
             // A minor collection marked the nursery alone, so a tenured
             // address carries no mark either way and is left as it is.
@@ -344,7 +344,7 @@ fn repositionMoved(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     defer young.deinit(ev.allocator);
     var it = table.map.iterator();
     while (it.next()) |entry| {
-        if (ev.heap.objects.inNursery(entry.key_ptr.*)) {
+        if (ev.heap.objects.inNursery(@intCast(entry.key_ptr.*))) {
             try young.append(ev.allocator, entry.key_ptr.*);
         }
     }
@@ -352,7 +352,7 @@ fn repositionMoved(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     for (young.items) |address| {
         const entry = table.map.get(address).?;
         _ = table.map.remove(address);
-        const moved = e.movedCons(address) orelse continue;
+        const moved = e.movedCons(@intCast(address)) orelse continue;
         try table.map.put(moved.toConsAddr(), entry);
     }
 }

@@ -15,6 +15,7 @@ const printer = @import("../runtime/printer.zig");
 const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 const pathnames = @import("pathnames.zig");
+const fs = @import("fs.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -49,6 +50,9 @@ pub fn registerStreams(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORCE-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("FINISH-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("CLEAR-OUTPUT", &noOpStreamFn);
+    _ = try ev.defineNative("FILE-LENGTH", &fileLengthFn);
+    _ = try ev.defineNative("FILE-POSITION", &filePositionFn);
+    _ = try ev.defineNative("LISTEN", &listenFn);
 
     for ([_][]const u8{
         "INPUT",     "OUTPUT",  "IO",                "PROBE",       "SUPERSEDE", "APPEND",
@@ -267,14 +271,10 @@ fn formatOf(ev: *Evaluator, v: Value) Error!heap.ExternalFormat {
 
 fn readWholeFile(ev: *Evaluator, path: []const u8) Error!?[]u8 {
     const io = ev.io orelse return Error.FileError;
-    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
-    defer file.close(io);
-    var read_buf: [4096]u8 = undefined;
-    var file_reader = std.Io.File.Reader.init(file, io, &read_buf);
-    var contents: std.ArrayList(u8) = .empty;
-    file_reader.interface.appendRemainingUnlimited(ev.heap.allocator, &contents) catch
-        return Error.FileError;
-    return contents.items;
+    return fs.readFile(io, ev.heap.allocator, path) catch |e| switch (e) {
+        error.OutOfMemory => return Error.OutOfMemory,
+        error.FileError => return null,
+    };
 }
 
 fn openFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -345,7 +345,7 @@ fn prepareOutput(
     if (renaming) {
         const backup = try std.fmt.allocPrint(ev.heap.allocator, "{s}.bak", .{path});
         const io = ev.io orelse return Error.FileError;
-        std.Io.Dir.cwd().rename(path, std.Io.Dir.cwd(), backup, io) catch return Error.FileError;
+        try fs.rename(io, path, backup);
         if (try keywordIs(ev, clash, "RENAME-AND-DELETE")) {
             stream.delete_on_close = try ev.heap.allocString(backup);
         }
@@ -368,7 +368,7 @@ fn closeFn(p: *anyopaque, args: []const Value) Error!Value {
     if (heap.isString(s.delete_on_close)) {
         const io = ev.io orelse return Error.FileError;
         const backup = try heap.stringUtf8Alloc(ev.heap.allocator, s.delete_on_close);
-        std.Io.Dir.cwd().deleteFile(io, backup) catch {};
+        fs.deleteFile(io, backup) catch {};
     }
     return value.T;
 }
@@ -376,12 +376,7 @@ fn closeFn(p: *anyopaque, args: []const Value) Error!Value {
 fn writeBack(ev: *Evaluator, s: *Stream) Error!void {
     const io = ev.io orelse return Error.FileError;
     const path = try pathnames.namestringOf(ev.heap.allocator, s.path);
-    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return Error.FileError;
-    defer file.close(io);
-    var write_buf: [4096]u8 = undefined;
-    var file_writer = std.Io.File.Writer.init(file, io, &write_buf);
-    file_writer.interface.writeAll(s.output.items) catch return Error.FileError;
-    file_writer.interface.flush() catch return Error.FileError;
+    try fs.writeFile(io, path, s.output.items);
 }
 
 fn flushStreamFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -646,6 +641,69 @@ fn writeByteFn(p: *anyopaque, args: []const Value) Error!Value {
     if (n < 0 or n > 255) return Error.TypeError;
     try emitBytes(ev, s, &.{@intCast(n)});
     return args[0];
+}
+
+// --- positions ---
+
+fn elementWidth(s: *const Stream) usize {
+    return if (s.element == .signed_byte_16) 2 else 1;
+}
+
+fn writes(s: *const Stream) bool {
+    return s.direction == .output or s.direction == .io;
+}
+
+/// The stream's contents in bytes: what has been written for an output
+/// stream, what there is to read for an input one.
+fn byteLength(s: *const Stream) usize {
+    return if (writes(s)) s.output.items.len else s.input.len;
+}
+
+fn fileLengthFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    const s = try expectStream(args[0]);
+    if (s.kind != .file) return Error.TypeError;
+    return Value.fromFixnum(@intCast(byteLength(s) / elementWidth(s)));
+}
+
+/// `(file-position stream)` is the position in elements, NIL for the
+/// console. `(file-position stream position)` moves it to an index,
+/// `:start` or `:end`, and is NIL when the index is past the end.
+fn filePositionFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
+    const s = try expectStream(args[0]);
+    if (s.kind == .console or s.kind == .pretty) return value.NIL;
+    const width = elementWidth(s);
+    if (args.len == 1) {
+        if (writes(s)) return Value.fromFixnum(@intCast(s.write_position / width));
+        var at = s.position;
+        if (s.pending) |c| at -= std.unicode.utf8CodepointSequenceLength(c) catch 1;
+        return Value.fromFixnum(@intCast(at / width));
+    }
+    const length = byteLength(s);
+    const target: usize = if (try keywordIs(ev, args[1], "START"))
+        0
+    else if (try keywordIs(ev, args[1], "END"))
+        length
+    else blk: {
+        if (!args[1].isFixnum() or args[1].toFixnum() < 0) return Error.TypeError;
+        break :blk std.math.mul(usize, @intCast(args[1].toFixnum()), width) catch return value.NIL;
+    };
+    if (target > length) return value.NIL;
+    if (writes(s)) s.write_position = target else s.position = target;
+    s.pending = null;
+    return value.T;
+}
+
+fn listenFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len > 1) return Error.WrongArgCount;
+    const s = try streamOf(ev, if (args.len == 1) args[0] else null, .input);
+    if (s.kind == .console) return value.NIL;
+    try expectInput(s);
+    return boolv(s.pending != null or s.position < s.input.len);
 }
 
 // --- string streams ---

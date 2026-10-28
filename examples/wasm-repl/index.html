@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zisp REPL</title>
+<style>
+  :root { --background: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7; --panel: #f5f5f7; }
+  @media (prefers-color-scheme: dark) {
+    :root { --background: #1c1c1e; --text: #f2f2f7; --muted: #a1a1a6; --border: #3a3a3c; --panel: #2c2c2e; }
+  }
+  body { margin: 0; padding: 16px; background: var(--background); color: var(--text);
+         font: 15px/1.4 system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; display: grid; gap: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  textarea, pre { width: 100%; box-sizing: border-box; margin: 0; padding: 10px; border: 1px solid var(--border);
+                  border-radius: 6px; background: var(--panel); color: var(--text);
+                  font: 14px/1.4 ui-monospace, Menlo, monospace; }
+  textarea { height: 180px; resize: vertical; }
+  pre { min-height: 60px; max-height: 360px; overflow: auto; white-space: pre-wrap; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .controls span { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 14px; margin: 4px 0 0; color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>zisp REPL</h1>
+  <textarea id="input" spellcheck="false" aria-label="Lisp input">(js:call "console.log" "hello")
+(js:call "Date.now")</textarea>
+  <div class="controls">
+    <button id="evaluate">Evaluate</button>
+    <button id="demo">Load the demo</button>
+    <span>Ctrl+Enter or Cmd+Enter evaluates.</span>
+  </div>
+  <h2>Output</h2>
+  <pre id="transcript" aria-live="polite"></pre>
+  <h2>JavaScript console</h2>
+  <pre id="console"></pre>
+</main>
+<script src="zisp-wasm.js"></script>
+<script src="zisp.js"></script>
+<script>
+  const input = document.getElementById("input");
+  const transcript = document.getElementById("transcript");
+  const consolePane = document.getElementById("console");
+
+  const consoleLog = console.log.bind(console);
+  console.log = (...items) => {
+    consolePane.textContent += items.join(" ") + "\n";
+    consoleLog(...items);
+  };
+
+  const zisp = globalThis.loadZisp(globalThis.zispWasm);
+
+  function evaluate() {
+    const text = input.value;
+    const result = zisp.evaluate(text);
+    transcript.textContent += text.trim().split("\n").map((line) => "> " + line).join("\n") + "\n" + result.output;
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  document.getElementById("evaluate").addEventListener("click", evaluate);
+  document.getElementById("demo").addEventListener("click", () => { input.value = globalThis.zispDemo; });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      evaluate();
+    }
+  });
+
+  if (location.hash === "#demo") {
+    input.value = globalThis.zispDemo;
+    evaluate();
+  }
+</script>
+</body>
+</html>

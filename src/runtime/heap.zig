@@ -76,14 +76,14 @@ pub const HeapString = extern struct {
     }
 
     pub fn slice(self: *HeapString) []u32 {
-        return self.codes[0..self.len];
+        return self.codes[0..@intCast(self.len)];
     }
     pub fn constSlice(self: *const HeapString) []const u32 {
-        return self.codes[0..self.len];
+        return self.codes[0..@intCast(self.len)];
     }
     /// Everything the storage can hold, past the fill pointer included.
     pub fn allocated(self: *HeapString) []u32 {
-        return self.codes[0..self.capacity];
+        return self.codes[0..@intCast(self.capacity)];
     }
 };
 
@@ -258,7 +258,7 @@ pub const HeapBignum = extern struct {
     _pad: [7]u8 = @splat(0),
 
     pub fn toConst(self: *const HeapBignum) std.math.big.int.Const {
-        return .{ .limbs = self.limbs[0..self.len], .positive = self.positive };
+        return .{ .limbs = self.limbs[0..@intCast(self.len)], .positive = self.positive };
     }
 };
 
@@ -303,12 +303,12 @@ pub const HeapStructure = extern struct {
         return @ptrCast(@alignCast(base + @sizeOf(HeapStructure)));
     }
     pub fn slice(self: *HeapStructure) []Value {
-        return self.data()[0..self.len];
+        return self.data()[0..@intCast(self.len)];
     }
     pub fn constSlice(self: *const HeapStructure) []const Value {
         const base: [*]const u8 = @ptrCast(self);
         const ptr: [*]const Value = @ptrCast(@alignCast(base + @sizeOf(HeapStructure)));
-        return ptr[0..self.len];
+        return ptr[0..@intCast(self.len)];
     }
 };
 
@@ -850,16 +850,16 @@ fn finalizeObject(context: *anyopaque, object: [*]align(gc.ALIGNMENT) u8) void {
         .readtable => {
             const table: *HeapReadtable = @ptrCast(@alignCast(obj));
             const bytes: [*]align(8) u8 = @ptrCast(@alignCast(table.handlers));
-            self.allocator.free(bytes[0..table.handlers_size]);
+            self.allocator.free(bytes[0..@intCast(table.handlers_size)]);
         },
         .vector => {
             const array: *HeapArray = @ptrCast(obj);
             self.allocator.free(array.dims[0..array.rank]);
-            self.allocator.free(array.storage[0..array.storage_len]);
+            self.allocator.free(array.storage[0..@intCast(array.storage_len)]);
         },
         .bignum => {
             const big: *HeapBignum = @ptrCast(obj);
-            self.allocator.free(@constCast(big.limbs[0..big.len]));
+            self.allocator.free(@constCast(big.limbs[0..@intCast(big.len)]));
         },
         .hash_table => {
             const table: *HeapHashTable = @ptrCast(@alignCast(obj));

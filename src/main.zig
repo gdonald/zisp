@@ -47,7 +47,7 @@ pub fn main(init: std.process.Init) !u8 {
 /// script if present, then drop into the REPL unless `--batch` was given.
 fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
     var out_buf: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.Writer.init(std.Io.File.stdout(), io, &out_buf);
+    var stdout_writer = std.Io.File.Writer.initStreaming(std.Io.File.stdout(), io, &out_buf);
     const out = &stdout_writer.interface;
 
     var repl = zisp.repl.Repl.initFrom(gpa, out, io, plan.image) catch |e| {
@@ -56,7 +56,7 @@ fn runPlan(gpa: std.mem.Allocator, io: std.Io, plan: cli.Plan) !u8 {
     };
     defer repl.deinit();
 
-    var stderr_writer = std.Io.File.Writer.init(std.Io.File.stderr(), io, &.{});
+    var stderr_writer = std.Io.File.Writer.initStreaming(std.Io.File.stderr(), io, &.{});
     repl.ev.warn_out = &stderr_writer.interface;
 
     for (plan.ops) |op| {
@@ -129,7 +129,7 @@ fn bindCommandLineArgs(repl: *zisp.repl.Repl, script_args: []const []const u8) !
 /// Read all of stdin and feed it to the REPL.
 fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
     var out_buf: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.Writer.init(std.Io.File.stdout(), io, &out_buf);
+    var stdout_writer = std.Io.File.Writer.initStreaming(std.Io.File.stdout(), io, &out_buf);
     const out = &stdout_writer.interface;
 
     try out.print("zisp {s}\n", .{cli.VERSION});
@@ -137,7 +137,7 @@ fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
     var repl = try zisp.repl.Repl.init(gpa, out, io);
     defer repl.deinit();
 
-    var stderr_writer = std.Io.File.Writer.init(std.Io.File.stderr(), io, &.{});
+    var stderr_writer = std.Io.File.Writer.initStreaming(std.Io.File.stderr(), io, &.{});
     repl.ev.warn_out = &stderr_writer.interface;
 
     try runInteractive(gpa, io, repl, out);
@@ -147,7 +147,7 @@ fn replMode(gpa: std.mem.Allocator, io: std.Io) !u8 {
 
 fn runInteractive(gpa: std.mem.Allocator, io: std.Io, repl: *zisp.repl.Repl, out: *std.Io.Writer) !void {
     var read_buf: [4096]u8 = undefined;
-    var file_reader = std.Io.File.Reader.init(std.Io.File.stdin(), io, &read_buf);
+    var file_reader = std.Io.File.Reader.initStreaming(std.Io.File.stdin(), io, &read_buf);
     var source_list: std.ArrayList(u8) = .empty;
     defer source_list.deinit(gpa);
     file_reader.interface.appendRemainingUnlimited(gpa, &source_list) catch |e| {

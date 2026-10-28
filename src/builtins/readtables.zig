@@ -34,7 +34,7 @@ fn allocStandard(ev: *Evaluator, case: u64) Error!Value {
 
 /// A heap readtable holding its own copy of `source`'s handler table.
 fn allocCopy(ev: *Evaluator, source: *const Readtable, case: u64) Error!Value {
-    const bytes = try ev.heap.allocator.alignedAlloc(u8, .of(Readtable), @sizeOf(Readtable));
+    const bytes = try ev.heap.allocator.alignedAlloc(u8, std.mem.Alignment.of(Readtable).max(.of(u64)), @sizeOf(Readtable));
     const table: *Readtable = @ptrCast(bytes.ptr);
     table.* = source.*;
     return ev.heap.allocReadtable(bytes, case);

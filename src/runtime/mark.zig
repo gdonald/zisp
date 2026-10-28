@@ -235,7 +235,7 @@ pub const Marker = struct {
                 // A displaced array does not own its storage, and the
                 // array it points at will be walked in its own right.
                 if (a.displaced_to.equalsRaw(value.NIL)) {
-                    for (a.storage[0..a.storage_len]) |element| try self.push(element);
+                    for (a.storage[0..@intCast(a.storage_len)]) |element| try self.push(element);
                 }
             },
             .structure => {

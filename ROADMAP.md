@@ -710,15 +710,15 @@ Things no other CL implementation can easily do, because they don't have Zig und
   - [ ] 10.1.3. Type-check Lisp at the macro layer using Zig's type system as the source of truth
 - [ ] 10.2. Embedded / no-std
   - [x] 10.2.1. `-Dfreestanding=true` build links against a custom minimal-std (only `std.mem`, `std.math`, `std.meta` permitted). Acceptance: `zig build -Dfreestanding=true` succeeds AND `grep -rE "std\.(io|fs|os|process|time|http|net)" src/runtime/ src/eval/ src/reader/` returns no matches. CI runs the freestanding build on every commit so backsliding is immediate
-  - [ ] 10.2.2. `freestanding` build target
+  - [x] 10.2.2. `freestanding` build target
   - [ ] 10.2.3. Minimal allocator interface (so user supplies their own on a microcontroller)
   - [ ] 10.2.4. Strip out the file/stream/pathname code paths in `freestanding` builds
   - [ ] 10.2.5. Specific board chosen and committed: Raspberry Pi Pico (RP2040, Cortex-M0+). Acceptance: zisp cross-compiles for `thumbv6m-freestanding`, image fits in 64KB, blinks the on-board LED via a `gpio` builtin. Demo committed to `examples/blink-pico/` with build instructions
   - [ ] 10.2.6. ESP32 follow-up — same shape as 10.2.5
 - [ ] 10.3. WASM
-  - [ ] 10.3.1. `wasm32-freestanding` build
-  - [ ] 10.3.2. `wasm32-wasi` build with full file/stream support
-  - [ ] 10.3.3. Browser demo: REPL in a `<textarea>`
+  - [x] 10.3.1. `wasm32-freestanding` build
+  - [x] 10.3.2. `wasm32-wasi` build with full file/stream support
+  - [x] 10.3.3. Browser demo: REPL in a `<textarea>`
   - [ ] 10.3.4. JS interop. **Prerequisite**: `docs/wasm-interop.md` written. Minimum demo: a 20-line Lisp program calls `console.log("hello")` and receives back a result from `Date.now()`. Acceptance: that demo runs in Chrome and Firefox; commit to `examples/wasm-repl/`
 - [ ] 10.4. C interoperability
   - [x] 10.4.1. FFI declarations (`defcfun`-style). Split:

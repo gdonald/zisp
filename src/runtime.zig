@@ -3,6 +3,7 @@ pub const heap = @import("runtime/heap.zig");
 pub const symbol = @import("runtime/symbol.zig");
 pub const package = @import("runtime/package.zig");
 pub const printer = @import("runtime/printer.zig");
+pub const equality = @import("runtime/equality.zig");
 pub const pathname = @import("runtime/pathname.zig");
 pub const pretty = @import("runtime/pretty.zig");
 pub const gc = @import("runtime/gc.zig");

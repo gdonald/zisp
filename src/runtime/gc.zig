@@ -51,7 +51,7 @@ pub const BLOCK_HEADER_BYTES: usize = @sizeOf(BlockHeader);
 /// lives in the block header ahead of it, so a sweep can read the size of
 /// a free block and a live one the same way.
 const FreeBlock = struct {
-    next: ?*FreeBlock,
+    next: ?*FreeBlock align(ALIGNMENT),
 };
 
 /// A reclaimed cons cell. A cell carries no header, so the first word

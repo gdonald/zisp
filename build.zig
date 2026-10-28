@@ -20,13 +20,12 @@ pub fn build(b: *std.Build) void {
         "Enable profiling instrumentation (placeholder)",
     ) orelse false;
 
-    // -Dfreestanding=true selects the embedded build. The option is accepted
-    // now and threaded through build_options so a grep-gate can detect
-    // violations the moment the freestanding tree starts taking shape.
+    // -Dfreestanding=true leaves out the file system and the foreign
+    // function interface, as a build for a freestanding target does.
     const freestanding = b.option(
         bool,
         "freestanding",
-        "Build for a freestanding target — no std.io/std.fs/std.os (placeholder)",
+        "Leave out the file system and the foreign function interface",
     ) orelse false;
 
     // -Dgc-torture=N runs a collection every N allocations, so a value a
@@ -300,6 +299,98 @@ pub fn build(b: *std.Build) void {
     subtypep_sbcl_run.step.dependOn(&suite_install.step);
     const subtypep_sbcl_step = b.step("subtypep-sbcl", "Compare subtypep with SBCL on the ansi-test subtypep calls");
     subtypep_sbcl_step.dependOn(&subtypep_sbcl_run.step);
+
+    // `zig build wasi-test` builds zisp for wasm32-wasi and runs the
+    // corpora in tests/wasi-corpora.txt in it under Node's WASI.
+    const wasi_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
+    const wasi_exe = b.addExecutable(.{
+        .name = "zisp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = wasi_target,
+            .optimize = .ReleaseSafe,
+            .imports = &.{
+                .{ .name = "zisp", .module = b.createModule(.{
+                    .root_source_file = b.path("src/runtime.zig"),
+                    .target = wasi_target,
+                    .optimize = .ReleaseSafe,
+                    .link_libc = true,
+                    .imports = &.{
+                        .{ .name = "build_options", .module = build_options_module },
+                    },
+                }) },
+                .{ .name = "cli", .module = b.createModule(.{
+                    .root_source_file = b.path("src/cli.zig"),
+                    .target = wasi_target,
+                    .optimize = .ReleaseSafe,
+                }) },
+            },
+        }),
+    });
+    const wasi_install = b.addInstallArtifact(wasi_exe, .{ .dest_dir = .{ .override = .{ .custom = "wasi" } } });
+    const wasi_run = b.addSystemCommand(&.{"env"});
+    wasi_run.addPrefixedFileArg("ZISP_WASM=", wasi_exe.getEmittedBin());
+    wasi_run.addArgs(&.{ "bash", "tests/run-corpus-wasi.sh" });
+    wasi_run.step.dependOn(&wasi_install.step);
+    wasi_run.addPassthruArgs();
+    const wasi_step = b.step("wasi-test", "Run the corpora in zisp built for wasm32-wasi, under Node");
+    wasi_step.dependOn(&wasi_run.step);
+
+    // `zig build wasm` builds zisp as a wasm32-freestanding module for a
+    // host such as a browser, with the entry points in src/wasm.zig.
+    const freestanding_wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+    const freestanding_options = b.addOptions();
+    freestanding_options.addOption([]const u8, "dispatch", dispatch);
+    freestanding_options.addOption(u32, "gc_torture", 0);
+    freestanding_options.addOption(bool, "ansi_tests", false);
+    freestanding_options.addOption(bool, "profile", false);
+    freestanding_options.addOption(bool, "freestanding", true);
+    const web_wasm = b.addExecutable(.{
+        .name = "zisp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm.zig"),
+            .target = freestanding_wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "zisp", .module = b.createModule(.{
+                    .root_source_file = b.path("src/runtime.zig"),
+                    .target = freestanding_wasm_target,
+                    .optimize = .ReleaseSmall,
+                    .imports = &.{
+                        .{ .name = "build_options", .module = freestanding_options.createModule() },
+                    },
+                }) },
+            },
+        }),
+    });
+    web_wasm.entry = .disabled;
+    web_wasm.rdynamic = true;
+    const web_dir: std.Build.InstallDir = .{ .custom = "web" };
+    const web_wasm_install = b.addInstallArtifact(web_wasm, .{ .dest_dir = .{ .override = web_dir } });
+    const embed_wasm = b.addExecutable(.{
+        .name = "embed-wasm",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/embed-wasm.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const embed_run = b.addRunArtifact(embed_wasm);
+    embed_run.addFileArg(web_wasm.getEmittedBin());
+    embed_run.addFileArg(b.path("examples/wasm-repl/demo.lisp"));
+    const embedded = embed_run.addOutputFileArg("zisp-wasm.js");
+    const web_wasm_step = b.step("wasm", "Build zisp for wasm32-freestanding and the REPL page into zig-out/web/");
+    web_wasm_step.dependOn(&web_wasm_install.step);
+    web_wasm_step.dependOn(&b.addInstallFileWithDir(embedded, web_dir, "zisp-wasm.js").step);
+    for ([_][]const u8{ "index.html", "zisp.js" }) |name| {
+        const file = b.addInstallFileWithDir(b.path(b.fmt("examples/wasm-repl/{s}", .{name})), web_dir, name);
+        web_wasm_step.dependOn(&file.step);
+    }
+
+    // `zig build wasm-test` runs the demo through the page's loader under Node.
+    const wasm_test_run = b.addSystemCommand(&.{ "node", "tests/run-wasm-repl.mjs" });
+    wasm_test_run.addFileArg(web_wasm.getEmittedBin());
+    const wasm_test_step = b.step("wasm-test", "Run the REPL page's demo in the wasm32-freestanding build under Node");
+    wasm_test_step.dependOn(&wasm_test_run.step);
 
     // -Dansi-tests=true: fold ansi-test into the default build.
     if (ansi_tests) {

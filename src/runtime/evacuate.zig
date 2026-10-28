@@ -250,7 +250,7 @@ pub const Evacuator = struct {
                 const a = heap.asArray(v);
                 try self.update(&a.displaced_to);
                 if (a.displaced_to.equalsRaw(value.NIL)) {
-                    for (a.storage[0..a.storage_len]) |*element| try self.update(element);
+                    for (a.storage[0..@intCast(a.storage_len)]) |*element| try self.update(element);
                 }
             },
             .structure => {

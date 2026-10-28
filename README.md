@@ -7,6 +7,7 @@ standard.
 
 - Zig 0.17.0 (pinned in `build.zig.zon`)
 - Bash (only for `tests/run-ansi.sh`)
+- Node (only for `zig build wasi-test` and `zig build wasm-test`)
 - Linux or macOS — Windows is a non-goal
 
 ## Cloning
@@ -35,6 +36,9 @@ zig build run          # build and run the REPL
 zig build tests        # run unit tests
 zig build coverage     # run unit tests under kcov; report in ./coverage/
 zig build ansi-test    # run the ANSI compliance suite
+zig build wasi-test    # run the corpora in the wasm32-wasi build under Node
+zig build wasm         # build the browser REPL into zig-out/web/
+zig build wasm-test    # run the browser REPL's demo under Node
 ```
 
 ### Build options
@@ -43,7 +47,7 @@ zig build ansi-test    # run the ANSI compliance suite
 zig build -Doptimize=ReleaseFast    # standard Zig optimization modes
 zig build -Dansi-tests=true         # include ansi-test in the default build
 zig build -Dprofile=true            # enable profiling hooks (placeholder)
-zig build -Dfreestanding=true       # embedded build (placeholder)
+zig build -Dfreestanding=true       # leave out the file system and the FFI
 ```
 
 ## Documentation
@@ -55,6 +59,8 @@ zig build -Dfreestanding=true       # embedded build (placeholder)
 - [docs/gc.md](docs/gc.md) - the collector
 - [docs/printer.md](docs/printer.md) - the printer variables
 - [docs/ffi.md](docs/ffi.md) - calling C functions
+- [docs/wasm.md](docs/wasm.md) - the WebAssembly builds
+- [docs/wasm-interop.md](docs/wasm-interop.md) - calling JavaScript from Lisp
 
 ## License
 

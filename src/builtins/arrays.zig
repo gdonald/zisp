@@ -473,7 +473,7 @@ fn rowMajorArefFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 2) return Error.WrongArgCount;
     if (heap.isString(args[0])) {
         const s = heap.asString(args[0]);
-        const code = s.allocated()[try rowMajorOffset(args[0], args[1], s.capacity)];
+        const code = s.allocated()[try rowMajorOffset(args[0], args[1], @intCast(s.capacity))];
         return Value.fromChar(@intCast(code));
     }
     const a = try expectArray(args[0]);
@@ -486,7 +486,7 @@ fn setRowMajorArefFn(p: *anyopaque, args: []const Value) Error!Value {
     if (heap.isString(args[0])) {
         const s = heap.asString(args[0]);
         if (args[2].tag() != .char) return Error.TypeError;
-        s.allocated()[try rowMajorOffset(args[0], args[1], s.capacity)] = args[2].toChar();
+        s.allocated()[try rowMajorOffset(args[0], args[1], @intCast(s.capacity))] = args[2].toChar();
         return args[2];
     }
     const a = try expectArray(args[0]);
@@ -636,7 +636,7 @@ fn setFillPointerFn(p: *anyopaque, args: []const Value) Error!Value {
     if (heap.isString(args[0])) {
         const s = heap.asString(args[0]);
         if (!s.has_fill_pointer) return Error.TypeError;
-        s.len = try fillPointerValue(args[1], s.capacity);
+        s.len = try fillPointerValue(args[1], @intCast(s.capacity));
         return args[1];
     }
     const a = try expectArray(args[0]);
@@ -654,7 +654,7 @@ fn pushTarget(v: Value) Error!PushTarget {
     if (heap.isString(v)) {
         const s = heap.asString(v);
         if (!s.has_fill_pointer) return Error.TypeError;
-        return .{ .index = @intCast(s.len), .capacity = s.capacity };
+        return .{ .index = @intCast(s.len), .capacity = @intCast(s.capacity) };
     }
     const a = try expectArray(v);
     if (!a.has_fill_pointer or a.rank != 1) return Error.TypeError;
@@ -710,7 +710,7 @@ fn vectorPushExtendFn(p: *anyopaque, args: []const Value) Error!Value {
 fn grow(ev: *Evaluator, v: Value, capacity: usize) Error!void {
     if (heap.isString(v)) {
         const s = heap.asString(v);
-        const old = s.capacity;
+        const old: usize = @intCast(s.capacity);
         try ev.heap.resizeString(v, capacity);
         @memset(s.allocated()[old..], ' ');
         return;
@@ -816,7 +816,7 @@ fn adjustString(ev: *Evaluator, v: Value, sizes: []const usize, options: MakeArr
         @memcpy(heap.asString(result).allocated()[0..keep], s.allocated()[0..keep]);
         return result;
     }
-    const old = s.capacity;
+    const old: usize = @intCast(s.capacity);
     try ev.heap.resizeString(v, size);
     if (size > old) {
         const fill: u32 = if (options.initial_element) |element| blk: {

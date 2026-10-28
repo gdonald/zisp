@@ -11,7 +11,9 @@ package, nicknamed `FFI`, and follow CFFI's names.
 ```
 
 `src/lisp/ffi.lisp` is the Lisp side and `src/builtins/ffi.zig` holds the
-natives under it. A freestanding build has neither the natives nor libc.
+natives under it. A freestanding build has neither the natives nor libc,
+and a `wasm32-wasi` build has no natives, since WASI has no dynamic
+loader.
 
 ## Types
 

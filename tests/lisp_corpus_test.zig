@@ -131,6 +131,11 @@ test "C structures" {
     try testing.expectEqual(@as(u32, 14), checked);
 }
 
+test "files and file streams" {
+    const checked = try runCorpus("file-streams", @embedFile("lisp/file-streams.lisp"));
+    try testing.expectEqual(@as(u32, 23), checked);
+}
+
 test "inferred types in compiled code" {
     const checked = try runCorpus("type-inference", @embedFile("lisp/type-inference.lisp"));
     try testing.expectEqual(@as(u32, 11), checked);

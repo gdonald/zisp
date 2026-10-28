@@ -38,6 +38,13 @@ jobs:
       - name: start from a saved image within the cold-start limit
         run: zig build image-cold-start -Doptimize=ReleaseFast
 
+      # The runner image's Node runs the wasm32-wasi build.
+      - name: corpora in the wasm32-wasi build
+        run: zig build wasi-test
+
+      - name: browser REPL demo in the wasm32-freestanding build
+        run: zig build wasm-test
+
       - name: freestanding build
         run: zig build -Dfreestanding=true
 

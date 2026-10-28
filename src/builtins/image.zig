@@ -14,6 +14,7 @@ const bytecode = @import("../compiler/bytecode.zig");
 const fasl = @import("../compiler/fasl.zig");
 const hash_tables = @import("hash_tables.zig");
 const streams = @import("streams.zig");
+const system = @import("system.zig");
 const reader_mod = @import("../reader.zig");
 
 const Value = value.Value;
@@ -302,7 +303,7 @@ const Writer = struct {
                 try self.int(u8, @backingInt(Tag.bignum));
                 try self.int(u8, @intFromBool(!big.positive));
                 try self.int(u32, @intCast(big.len));
-                for (big.limbs[0..big.len]) |limb| try self.int(u64, limb);
+                for (big.limbs[0..@intCast(big.len)]) |limb| try self.int(u64, limb);
             },
             .ratio => {
                 try self.int(u8, @backingInt(Tag.ratio));
@@ -329,7 +330,7 @@ const Writer = struct {
                     try self.int(u64, @intCast((@intFromPtr(s.codes) - @intFromPtr(target.codes)) / @sizeOf(u32)));
                 } else {
                     try self.int(u64, s.capacity);
-                    for (s.codes[0..s.capacity]) |c| try self.int(u32, c);
+                    for (s.codes[0..@intCast(s.capacity)]) |c| try self.int(u32, c);
                 }
             },
             .vector => {
@@ -346,7 +347,7 @@ const Writer = struct {
                     try self.int(u64, a.displaced_offset);
                 } else {
                     try self.int(u64, a.storage_len);
-                    for (a.storage[0..a.storage_len]) |element| try self.ref(element);
+                    for (a.storage[0..@intCast(a.storage_len)]) |element| try self.ref(element);
                 }
             },
             .hash_table => {
@@ -631,12 +632,7 @@ fn saveImageFn(p: *anyopaque, args: []const Value) Error!Value {
     defer ev.allocator.free(path);
     const bytes = try saveSession(ev, ev.allocator);
     defer ev.allocator.free(bytes);
-    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return Error.FileError;
-    defer file.close(io);
-    var buf: [4096]u8 = undefined;
-    var fw = std.Io.File.Writer.init(file, io, &buf);
-    fw.interface.writeAll(bytes) catch return Error.FileError;
-    fw.interface.flush() catch return Error.FileError;
+    try @import("fs.zig").writeFile(io, path, bytes);
     return value.T;
 }
 
@@ -839,7 +835,7 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
                 const capacity = try l.r.int(u64);
                 const s = try ev.heap.allocStringWithCapacity(@intCast(len), @intCast(capacity));
                 const str = heap.asString(s);
-                for (str.codes[0..capacity]) |*c| c.* = try l.r.int(u32);
+                for (str.codes[0..@intCast(capacity)]) |*c| c.* = try l.r.int(u32);
                 str.has_fill_pointer = flags & 1 != 0;
                 str.adjustable = flags & 2 != 0;
                 break :blk s;
@@ -877,9 +873,9 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
                 if (flags & 4 != 0) {
                     l.r.at += 16;
                 } else {
-                    const n = try l.r.int(u64);
+                    const n: usize = @intCast(try l.r.int(u64));
                     if (n != array.storage_len) return Error.FileError;
-                    l.r.at += 8 * n;
+                    l.r.at += 8 * @as(usize, @intCast(n));
                 }
                 array.has_fill_pointer = flags & 1 != 0;
                 array.adjustable = flags & 2 != 0;
@@ -890,7 +886,7 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
                 const hash_test: heap.HashTest = @fromBackingInt(@intCast(try l.r.int(u8)));
                 const size = try l.r.int(u64);
                 l.r.at += 16;
-                const n = try l.r.int(u64);
+                const n: usize = @intCast(try l.r.int(u64));
                 l.r.at += 16 * n;
                 break :blk try ev.heap.allocHashTableWith(hash_test, size, value.NIL, value.NIL);
             },
@@ -952,7 +948,7 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
             },
             .structure => blk: {
                 l.r.at += 8;
-                const n = try l.r.int(u64);
+                const n: usize = @intCast(try l.r.int(u64));
                 l.r.at += 8 * n;
                 const nils = try l.scratch.alloc(Value, n);
                 @memset(nils, value.NIL);
@@ -995,7 +991,7 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
             },
             .readtable => blk: {
                 const case = try l.r.int(u64);
-                const bytes = try ev.heap.allocator.alignedAlloc(u8, .of(reader_mod.Readtable), @sizeOf(reader_mod.Readtable));
+                const bytes = try ev.heap.allocator.alignedAlloc(u8, std.mem.Alignment.of(reader_mod.Readtable).max(.of(u64)), @sizeOf(reader_mod.Readtable));
                 const table: *reader_mod.Readtable = @ptrCast(bytes.ptr);
                 table.* = reader_mod.reader.defaultReadtable().*;
                 break :blk try ev.heap.allocReadtable(bytes, case);
@@ -1042,7 +1038,7 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
                 if (!heap.isString(to)) return Error.FileError;
                 const s = heap.asString(target);
                 s.displaced_to = to;
-                s.codes = heap.asString(to).codes + offset;
+                s.codes = heap.asString(to).codes + @as(usize, @intCast(offset));
                 s.len = len;
                 s.capacity = len;
                 s.has_fill_pointer = flags & 1 != 0;
@@ -1076,14 +1072,14 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
                     if (!heap.isArray(to)) return Error.FileError;
                     a.displaced_to = to;
                     a.displaced_offset = offset;
-                    a.storage = heap.asArray(to).storage + offset;
+                    a.storage = heap.asArray(to).storage + @as(usize, @intCast(offset));
                     @memcpy(a.dims[0..rank], dims);
                     var total: u64 = 1;
                     for (dims) |d| total *= d;
                     a.storage_len = total;
                     heap.writeBarrier(ev.heap, target, to);
                 } else {
-                    const n = try l.r.int(u64);
+                    const n: usize = @intCast(try l.r.int(u64));
                     for (0..n) |k| heap.setSlot(ev.heap, target, k, try l.readRef(held));
                 }
             },
@@ -1133,7 +1129,7 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
                 const s = heap.asStructure(target);
                 s.name = try l.readRef(held);
                 heap.writeBarrier(ev.heap, target, s.name);
-                const n = try l.r.int(u64);
+                const n: usize = @intCast(try l.r.int(u64));
                 for (0..n) |k| heap.setSlot(ev.heap, target, k, try l.readRef(held));
             },
             .pathname => {
@@ -1169,7 +1165,7 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
         t.rehash_threshold = try l.readRef(held);
         heap.writeBarrier(ev.heap, target, t.rehash_size);
         heap.writeBarrier(ev.heap, target, t.rehash_threshold);
-        const n = try l.r.int(u64);
+        const n: usize = @intCast(try l.r.int(u64));
         for (0..n) |_| {
             const key = try l.readRef(held);
             const val = try l.readRef(held);
@@ -1260,7 +1256,7 @@ pub fn load(ev: *Evaluator, bytes: []const u8) Error!void {
             .state => sections.state = start,
             _ => {},
         }
-        l.r.at = std.mem.alignForward(usize, start + length, 8);
+        l.r.at = std.mem.alignForward(usize, @intCast(start + length), 8);
     }
 
     var held = ev.heap.protect();
@@ -1374,7 +1370,7 @@ fn imageRoundTripFn(p: *anyopaque, args: []const Value) Error!Value {
 /// Read the image file at `path` into `ev`.
 pub fn loadPath(ev: *Evaluator, path: []const u8) Error!void {
     const io = ev.io orelse return Error.FileError;
-    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, ev.allocator, .unlimited) catch return Error.FileError;
+    const bytes = try system.readFileAlloc(ev, io, path);
     defer ev.allocator.free(bytes);
     return load(ev, bytes);
 }
