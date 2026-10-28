@@ -28,10 +28,10 @@ instructions for are called like any other function, and no function is
 expanded inline.
 
 At 1 and 2, those functions are compiled to their instructions: `+`,
-`-`, `<`, `>`, `<=`, `>=` and `=` of two arguments, `1+`, `1-`, `eq`,
-`cons`, `car`, `cdr`, `not` and `null`. Where every argument is known to
-be a fixnum, through a type declaration, a `the`, or a fixnum constant,
-the instruction is one that does not check them. A function declared
+`-` and `*` of two or more arguments, `<`, `>`, `<=`, `>=` and `=` of
+two, `1+`, `1-`, `eq`, `cons`, `car`, `cdr`, `not` and `null`. Where every argument is known to be a fixnum,
+or every one a single-float, the instruction is one that does not check
+them. `docs/bytecode.md` says where those types come from. A function declared
 inline is expanded at a call when speed is not below space.
 
 At 3, a function declared inline is expanded whatever space is.

@@ -165,9 +165,8 @@ test "read float and ratio" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     const f = try readOne(s, "1.5");
-    try std.testing.expect(f.isHeap());
-    try std.testing.expectEqual(heap.HeapType.single_float, heap.heapType(f));
-    try std.testing.expectEqual(@as(f32, 1.5), heap.asSingleFloat(f).value);
+    try std.testing.expect(f.isSingleFloat());
+    try std.testing.expectEqual(@as(f32, 1.5), f.toSingleFloat());
 
     const d = try readOne(s, "2.5d0");
     try std.testing.expectEqual(heap.HeapType.double_float, heap.heapType(d));

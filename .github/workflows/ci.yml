@@ -43,3 +43,10 @@ jobs:
 
       - name: no OS-facing std modules in the runtime, evaluator or reader
         run: "! grep -rnE 'std\\.(io|fs|os|process|time|http|net)' src/runtime/ src/eval/ src/reader/"
+
+      - name: corpora agree with SBCL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sbcl
+          tests/run-corpus-sbcl.sh tests/lisp/unwind-protect-corpus.lisp \
+            tests/lisp/init-protocol.lisp tests/lisp/loop-corpus.lisp

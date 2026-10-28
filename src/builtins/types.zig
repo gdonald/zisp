@@ -220,11 +220,11 @@ fn classOf(ev: *Evaluator, v: Value) Class {
     }
     if (v.isFixnum()) return .fixnum;
     if (v.tag() == .char) return if (v.toChar() <= 0xFF) .base_char else .character;
+    if (v.isSingleFloat()) return .single_float;
     if (v.tag() != .heap) return .t_type;
     return switch (heap.heapType(v)) {
         .bignum => .bignum,
         .ratio => .ratio,
-        .single_float => .single_float,
         .double_float => .double_float,
         .complex => .complex,
         .string => stringClassOf(v),

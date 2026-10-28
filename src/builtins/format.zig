@@ -1480,9 +1480,9 @@ const Real = struct { x: f64, single: bool };
 
 fn realValue(v: Value) ?Real {
     if (v.isFixnum()) return .{ .x = equality.toF64(v), .single = false };
+    if (v.isSingleFloat()) return .{ .x = equality.toF64(v), .single = true };
     if (v.tag() != .heap) return null;
     return switch (heap.heapType(v)) {
-        .single_float => .{ .x = equality.toF64(v), .single = true },
         .double_float, .bignum, .ratio => .{ .x = equality.toF64(v), .single = false },
         else => null,
     };

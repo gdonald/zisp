@@ -23,7 +23,7 @@ const Frame = env_mod.Frame;
 const Code = bytecode.Code;
 
 pub const MAGIC = "ZISPIMG\x00";
-pub const MAJOR: u16 = 1;
+pub const MAJOR: u16 = 2;
 pub const MINOR: u16 = 0;
 const NONE: u32 = 0xFFFFFFFF;
 
@@ -32,7 +32,6 @@ const SectionKind = enum(u32) { natives = 1, code = 2, packages = 3, objects = 4
 const Tag = enum(u8) {
     bignum = 2,
     ratio = 3,
-    single_float = 4,
     double_float = 5,
     complex = 6,
     string = 8,
@@ -57,7 +56,7 @@ const Tag = enum(u8) {
 
 /// A reference to an object in the image: its index with the tag no
 /// live value carries, so every other value can be written as itself.
-const REF_TAG: u64 = 6;
+const REF_TAG: u64 = 7;
 
 fn refTo(index: u32) u64 {
     return (@as(u64, index) << 3) | REF_TAG;
@@ -309,10 +308,6 @@ const Writer = struct {
                 try self.int(u8, @backingInt(Tag.ratio));
                 try self.ref(heap.asRatio(v).numerator);
                 try self.ref(heap.asRatio(v).denominator);
-            },
-            .single_float => {
-                try self.int(u8, @backingInt(Tag.single_float));
-                try self.int(u32, @bitCast(heap.asSingleFloat(v).value));
             },
             .double_float => {
                 try self.int(u8, @backingInt(Tag.double_float));
@@ -826,7 +821,6 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
                 for (limbs) |*limb| limb.* = @intCast(try l.r.int(u64));
                 break :blk try ev.heap.allocBignum(.{ .limbs = limbs, .positive = !negative });
             },
-            .single_float => try ev.heap.allocSingleFloat(@bitCast(try l.r.int(u32))),
             .double_float => try ev.heap.allocDoubleFloat(@bitCast(try l.r.int(u64))),
             .ratio, .complex => blk: {
                 l.r.at += 16;

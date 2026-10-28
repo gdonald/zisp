@@ -33,8 +33,10 @@ pub const Var = struct {
     /// Whether what is bound or assigned to it is checked against the
     /// declared type.
     check: bool = false,
-    /// Whether the declared type holds only fixnums.
-    fixnum: bool = false,
+    /// The type of every value it holds: the declared one at first, and
+    /// for a variable nothing assigns, whatever `infer` finds its
+    /// initial value has.
+    known: Type = .unknown,
 
     /// A variable a closure captures and that is assigned lives in a
     /// cell, so every closure over the binding sees one value.
@@ -195,28 +197,86 @@ pub const Decls = struct {
     }
 };
 
-/// Whether every object of type `spec` is a fixnum.
-pub fn fixnumType(spec: Value) bool {
+/// The fixnums from `lo` to `hi`, both included.
+pub const Range = struct {
+    lo: i64,
+    hi: i64,
+
+    pub const all: Range = .{ .lo = value.FIXNUM_MIN, .hi = value.FIXNUM_MAX };
+
+    /// The range, when every integer in it is a fixnum.
+    pub fn of(lo: i128, hi: i128) ?Range {
+        if (lo < value.FIXNUM_MIN or hi > value.FIXNUM_MAX or lo > hi) return null;
+        return .{ .lo = @intCast(lo), .hi = @intCast(hi) };
+    }
+};
+
+/// What the compiler knows about the values a form can have.
+pub const Type = union(enum) {
+    unknown,
+    fixnum: Range,
+    single_float,
+
+    pub const any_fixnum: Type = .{ .fixnum = Range.all };
+
+    /// What both say, or `a` when they disagree, which only a value that
+    /// fails a declaration's check could make them do.
+    pub fn meet(a: Type, b: Type) Type {
+        return switch (a) {
+            .unknown => b,
+            .fixnum => |ra| switch (b) {
+                .fixnum => |rb| if (Range.of(@max(ra.lo, rb.lo), @min(ra.hi, rb.hi))) |r| .{ .fixnum = r } else a,
+                else => a,
+            },
+            .single_float => a,
+        };
+    }
+
+    /// What holds of a value that has one type or the other.
+    pub fn join(a: Type, b: Type) Type {
+        return switch (a) {
+            .unknown => .unknown,
+            .fixnum => |ra| switch (b) {
+                .fixnum => |rb| .{ .fixnum = .{ .lo = @min(ra.lo, rb.lo), .hi = @max(ra.hi, rb.hi) } },
+                else => .unknown,
+            },
+            .single_float => if (b == .single_float) .single_float else .unknown,
+        };
+    }
+};
+
+/// The type `spec` names, where it is one the compiler uses.
+pub fn specType(spec: Value) Type {
     if (spec.isSymbol()) {
         const name = symbol_mod.symbol(spec).name;
-        return std.mem.eql(u8, name, "FIXNUM") or std.mem.eql(u8, name, "BIT");
+        if (std.mem.eql(u8, name, "FIXNUM")) return Type.any_fixnum;
+        if (std.mem.eql(u8, name, "BIT")) return .{ .fixnum = .{ .lo = 0, .hi = 1 } };
+        if (std.mem.eql(u8, name, "SINGLE-FLOAT") or std.mem.eql(u8, name, "SHORT-FLOAT")) return .single_float;
+        return .unknown;
     }
-    if (!spec.isCons() or !heap.car(spec).isSymbol()) return false;
+    if (!spec.isCons() or !heap.car(spec).isSymbol()) return .unknown;
     const head = symbol_mod.symbol(heap.car(spec)).name;
+    if (std.mem.eql(u8, head, "SINGLE-FLOAT") or std.mem.eql(u8, head, "SHORT-FLOAT")) return .single_float;
     const args = heap.cdr(spec);
-    if (!args.isCons()) return false;
+    if (!args.isCons()) return .unknown;
     const first = heap.car(args);
     if (std.mem.eql(u8, head, "INTEGER")) {
         const after = heap.cdr(args);
-        if (!after.isCons()) return false;
-        return first.isFixnum() and heap.car(after).isFixnum();
+        if (!after.isCons() or !first.isFixnum() or !heap.car(after).isFixnum()) return .unknown;
+        const r = Range.of(first.toFixnum(), heap.car(after).toFixnum()) orelse return .unknown;
+        return .{ .fixnum = r };
     }
-    if (!first.isFixnum()) return false;
+    if (!first.isFixnum()) return .unknown;
     const n = first.toFixnum();
-    if (std.mem.eql(u8, head, "SIGNED-BYTE")) return n >= 1 and n <= 61;
-    if (std.mem.eql(u8, head, "UNSIGNED-BYTE")) return n >= 1 and n <= 60;
-    if (std.mem.eql(u8, head, "MOD")) return n >= 1 and n - 1 <= value.FIXNUM_MAX;
-    return false;
+    if (std.mem.eql(u8, head, "SIGNED-BYTE") and n >= 1 and n <= 61) {
+        const half = @as(i128, 1) << @intCast(n - 1);
+        return .{ .fixnum = Range.of(-half, half - 1).? };
+    }
+    if (std.mem.eql(u8, head, "UNSIGNED-BYTE") and n >= 1 and n <= 60) {
+        return .{ .fixnum = Range.of(0, (@as(i128, 1) << @intCast(n)) - 1).? };
+    }
+    if (std.mem.eql(u8, head, "MOD") and n >= 1) return .{ .fixnum = Range.of(0, n - 1).? };
+    return .unknown;
 }
 
 const VarEntry = struct {
@@ -253,6 +313,7 @@ const primitives = [_]Primitive{
     .{ .name = "=", .op = .num_equal, .arity = 2 },
     .{ .name = "1+", .op = .inc, .arity = 1 },
     .{ .name = "1-", .op = .dec, .arity = 1 },
+    .{ .name = "*", .op = .mul, .arity = 2 },
     .{ .name = "EQ", .op = .eq, .arity = 2 },
     .{ .name = "CONS", .op = .cons, .arity = 2 },
     .{ .name = "CAR", .op = .car, .arity = 1 },
@@ -304,7 +365,7 @@ pub const Converter = struct {
         return self;
     }
 
-    fn node(self: *Converter, n: Node) !*Node {
+    pub fn node(self: *Converter, n: Node) !*Node {
         const made = try self.arena.create(Node);
         made.* = n;
         return made;
@@ -324,7 +385,7 @@ pub const Converter = struct {
     /// Keep a value the tree refers to alive until the code holding it
     /// is built. A macro's expansion is fresh structure nothing else
     /// holds.
-    fn keep(self: *Converter, v: Value) !Value {
+    pub fn keep(self: *Converter, v: Value) !Value {
         try self.ev.pin(v);
         return v;
     }
@@ -498,7 +559,7 @@ pub const Converter = struct {
                     while (names.isCons()) : (names = heap.cdr(names)) {
                         if (heap.car(names).isSymbol()) try types.append(self.arena, .{ .sym = heap.car(names), .spec = type_spec });
                     }
-                } else if (std.mem.eql(u8, kind, "FIXNUM")) {
+                } else if (specType(heap.car(spec)) != .unknown) {
                     while (names.isCons()) : (names = heap.cdr(names)) {
                         if (heap.car(names).isSymbol()) try types.append(self.arena, .{ .sym = heap.car(names), .spec = heap.car(spec) });
                     }
@@ -547,7 +608,7 @@ pub const Converter = struct {
         const v = try self.newVar(sym);
         if (decls.typeOf(sym)) |spec| {
             v.declared = try self.keep(spec);
-            v.fixnum = fixnumType(spec);
+            v.known = specType(spec);
             v.check = self.policy.safety >= 1;
         }
         try self.vars.append(self.arena, .{ .sym = sym, .kind = .{ .lexical = v } });
@@ -690,8 +751,10 @@ pub const Converter = struct {
         const nodes = try self.convertArgs(args);
         if (self.policy.speed >= 1) {
             for (primitives, 0..) |p, i| {
-                if (head.equalsRaw(self.primitive_syms[i]) and nodes.len == p.arity) {
-                    return self.node(.{ .primitive = .{ .op = typedOp(p.op, nodes), .args = nodes } });
+                if (!head.equalsRaw(self.primitive_syms[i])) continue;
+                if (nodes.len == p.arity) return self.node(.{ .primitive = .{ .op = p.op, .args = nodes } });
+                if (p.arity == 2 and nodes.len > 2 and (p.op == .add or p.op == .sub or p.op == .mul)) {
+                    return self.foldPrimitive(p.op, nodes);
                 }
             }
         }
@@ -704,32 +767,17 @@ pub const Converter = struct {
         return self.node(.{ .call_global = .{ .sym = head, .args = nodes, .form = form } });
     }
 
-    /// Whether `n`'s value is known to be a fixnum.
-    fn isFixnumNode(n: *const Node) bool {
-        return switch (n.*) {
-            .constant => |v| v.isFixnum(),
-            .local_ref => |v| v.fixnum,
-            .the_ => |t| fixnumType(t.spec),
-            else => false,
-        };
-    }
-
-    /// The instruction for a primitive whose arguments are all known to
-    /// be fixnums, which needs no check on them.
-    fn typedOp(op: Op, args: []*Node) Op {
-        for (args) |arg| if (!isFixnumNode(arg)) return op;
-        return switch (op) {
-            .add => .add_fixnums,
-            .sub => .sub_fixnums,
-            .less => .less_fixnums,
-            .greater => .greater_fixnums,
-            .less_equal => .less_equal_fixnums,
-            .greater_equal => .greater_equal_fixnums,
-            .num_equal => .num_equal_fixnums,
-            .inc => .inc_fixnum,
-            .dec => .dec_fixnum,
-            else => op,
-        };
+    /// `(op a b c ...)` as `(op (op a b) c ...)`, which is the order the
+    /// standard function combines its arguments in.
+    fn foldPrimitive(self: *Converter, op: Op, nodes: []*Node) Error!*Node {
+        var folded = nodes[0];
+        for (nodes[1..]) |arg| {
+            const pair = try self.arena.alloc(*Node, 2);
+            pair[0] = folded;
+            pair[1] = arg;
+            folded = try self.node(.{ .primitive = .{ .op = op, .args = pair } });
+        }
+        return folded;
     }
 
     /// Whether a call to the global function `sym` is expanded in place:

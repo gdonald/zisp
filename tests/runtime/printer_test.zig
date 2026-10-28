@@ -268,10 +268,7 @@ test "print vector heap object" {
 
 test "a single-float of the default type prints with no exponent marker" {
     const a = std.testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(a);
-    defer arena.deinit();
-    var h = heap.Heap.init(arena.allocator());
-    const v = try h.allocSingleFloat(1.5);
+    const v = Value.fromSingleFloat(1.5);
     const s = try fmtValue(a, v);
     defer a.free(s);
     try std.testing.expectEqualStrings("1.5", s);

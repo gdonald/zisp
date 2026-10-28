@@ -496,6 +496,14 @@ first and the arguments spread the way `apply` spreads them."
 (defun %struct-slot-initform (slot)
   (if (consp slot) (car (cdr slot)) nil))
 
+(defun %struct-slot-type (slot)
+  "The :type a slot is declared with, or T."
+  (labels ((scan (options)
+             (cond ((null options) t)
+                   ((eq (car options) :type) (car (cdr options)))
+                   (t (scan (cdr (cdr options)))))))
+    (if (consp slot) (scan (cdr (cdr slot))) t)))
+
 (defun %struct-description (slot)
   "A slot description as (name initform)."
   (list (%struct-slot-name slot) (%struct-slot-initform slot)))
@@ -596,11 +604,17 @@ there is one keyword constructor named make-NAME."
          (predicate (%struct-option options :predicate (%struct-symbol name "-P")))
          (copier (%struct-option options :copier (%struct-symbol "COPY-" name)))
          (slot-names (mapcar #'car descriptions))
+         (slot-types (append (and include
+                                  (or (get (cadr include) '%structure-slot-types)
+                                      (mapcar (lambda (description) description t)
+                                              (%struct-included-descriptions include))))
+                             (mapcar #'%struct-slot-type slots)))
          (accessors (%struct-accessors conc slot-names)))
     (%struct-check-options options)
     `(progn
        (%put ',name '%structure-slots ',slot-names)
        (%put ',name '%structure-descriptions ',descriptions)
+       (%put ',name '%structure-slot-types ',slot-types)
        (%define-structure-class ',name ',slot-names ',(cadr include))
        ,@(mapcar (lambda (constructor) (%struct-constructor-form name constructor descriptions))
                  constructors)

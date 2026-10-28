@@ -175,6 +175,7 @@ fn printValue(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         .heap => try printHeap(ctx, v, depth),
         .char => try printChar(ctx, v.toChar()),
         .special => try printSpecial(ctx, v),
+        .single_float => try printFloat(ctx, f32, v.toSingleFloat(), 'f'),
         else => try ctx.writer.writeAll("#<?>"),
     }
 }
@@ -343,7 +344,6 @@ fn isSafeSymbolChar(c: u8) bool {
 fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     switch (heap.heapType(v)) {
         .string => try printString(ctx, heap.asString(v).constSlice()),
-        .single_float => try printFloat(ctx, f32, heap.asSingleFloat(v).value, 'f'),
         .double_float => try printFloat(ctx, f64, heap.asDoubleFloat(v).value, 'd'),
         .ratio => try printRatio(ctx, v),
         .vector => try printArray(ctx, v, depth),

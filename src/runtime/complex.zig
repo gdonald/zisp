@@ -33,7 +33,7 @@ pub fn imagpartOf(h: *Heap, v: Value) Error!Value {
     if (heap.isComplex(v)) return heap.asComplex(v).imagpart;
     // The imaginary part of a real matches its own kind, so a float real
     // yields a float zero.
-    if (heap.isSingleFloat(v)) return h.allocSingleFloat(0);
+    if (heap.isSingleFloat(v)) return Value.fromSingleFloat(0);
     if (heap.isDoubleFloat(v)) return h.allocDoubleFloat(0);
     return Value.fromFixnum(0);
 }
@@ -56,10 +56,10 @@ pub fn make(h: *Heap, realpart: Value, imagpart: Value) Error!Value {
         return h.allocComplex(boxed_real, boxed_imag);
     }
     if (heap.isSingleFloat(realpart) or heap.isSingleFloat(imagpart)) {
-        const boxed_real = try h.allocSingleFloat(@floatCast(equality.toF64(realpart)));
-        try held.push(boxed_real);
-        const boxed_imag = try h.allocSingleFloat(@floatCast(equality.toF64(imagpart)));
-        return h.allocComplex(boxed_real, boxed_imag);
+        return h.allocComplex(
+            Value.fromSingleFloat(@floatCast(equality.toF64(realpart))),
+            Value.fromSingleFloat(@floatCast(equality.toF64(imagpart))),
+        );
     }
     if (bignum.isZero(bignum.numeratorOf(imagpart))) return realpart;
     return h.allocComplex(realpart, imagpart);

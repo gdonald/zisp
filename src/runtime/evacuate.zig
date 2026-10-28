@@ -215,7 +215,7 @@ pub const Evacuator = struct {
         }
         switch (heap.heapType(v)) {
             // Nothing inside these points at another object.
-            .bignum, .single_float, .double_float, .random_state, .package, .readtable => {},
+            .bignum, .double_float, .random_state, .package, .readtable => {},
             .string => {
                 const text = heap.asString(v);
                 if (text.isDisplaced()) {

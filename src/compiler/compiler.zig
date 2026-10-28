@@ -6,6 +6,7 @@ const heap = @import("../runtime/heap.zig");
 const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 const convert = @import("convert.zig");
+const infer = @import("infer.zig");
 const emit = @import("emit.zig");
 
 pub const bytecode = @import("bytecode.zig");
@@ -17,8 +18,9 @@ const Evaluator = eval_mod.Evaluator;
 const Error = eval_mod.Error;
 
 /// A compiled function for `(lambda params . body)`, given as its params
-/// and body, in the null lexical environment.
-pub fn compileLambda(ev: *Evaluator, name: ?[]const u8, params: Value, body: Value) Error!Value {
+/// and body, in the null lexical environment. `defines` is the global
+/// function it is compiled to be, or null.
+pub fn compileLambda(ev: *Evaluator, name: ?[]const u8, params: Value, body: Value, defines: ?Value) Error!Value {
     var arena = std.heap.ArenaAllocator.init(ev.allocator);
     defer arena.deinit();
     const pins = ev.pinMark();
@@ -35,6 +37,8 @@ pub fn compileLambda(ev: *Evaluator, name: ?[]const u8, params: Value, body: Val
 
     var converter = try convert.Converter.init(ev, arena.allocator());
     const l = try converter.convertLambda(null, name, params, body, null);
+    const result = try infer.run(&converter, l);
+    if (defines) |sym| try infer.recordDerivedType(ev, sym, result);
     const code = try emit.compileFunction(ev, arena.allocator(), l);
     return function.allocCompiled(ev.heap, code, &.{});
 }
@@ -55,7 +59,7 @@ pub fn evalCompiled(ev: *Evaluator, form: Value) Error!Value {
         return result;
     }
     try held.push(try ev.heap.list(held.items()[0..1]));
-    const compiled = try compileLambda(ev, null, value.NIL, held.items()[1]);
+    const compiled = try compileLambda(ev, null, value.NIL, held.items()[1], null);
     try held.push(compiled);
     return ev.callFunction(compiled, &.{});
 }
@@ -67,6 +71,6 @@ pub fn compileTopLevelForm(ev: *Evaluator, form: Value) Error!*const bytecode.Co
     defer held.close();
     try held.push(form);
     try held.push(try ev.heap.list(held.items()[0..1]));
-    const compiled = try compileLambda(ev, null, value.NIL, held.items()[1]);
+    const compiled = try compileLambda(ev, null, value.NIL, held.items()[1], null);
     return function.asFunction(compiled).payload.compiled.code;
 }

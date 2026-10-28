@@ -74,13 +74,13 @@ const Fixture = struct {
 
     fn expectSingleRoundTrip(self: *Fixture, bits: u32) !void {
         const x: f32 = @bitCast(bits);
-        const v = try self.heap.allocSingleFloat(x);
+        const v = Value.fromSingleFloat(x);
         const back = try self.roundTrip(v);
         if (!heap_mod.isSingleFloat(back)) {
             std.debug.print("float 0x{X} did not read back as a single\n", .{bits});
             return error.TestUnexpectedResult;
         }
-        const got: u32 = @bitCast(heap_mod.asSingleFloat(back).value);
+        const got: u32 = @bitCast(back.toSingleFloat());
         if (got != bits) {
             const text = try printer.printToOwnedSlice(testing.allocator, v);
             defer testing.allocator.free(text);

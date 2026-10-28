@@ -24,8 +24,6 @@ pub fn eql(a: Value, b: Value) bool {
     // Floats compare by bit pattern, so 0.0 and -0.0 are not eql even
     // though `=` says they are equal.
     return switch (ta) {
-        .single_float => @as(u32, @bitCast(heap.asSingleFloat(a).value)) ==
-            @as(u32, @bitCast(heap.asSingleFloat(b).value)),
         .double_float => @as(u64, @bitCast(heap.asDoubleFloat(a).value)) ==
             @as(u64, @bitCast(heap.asDoubleFloat(b).value)),
         .ratio => eql(heap.asRatio(a).numerator, heap.asRatio(b).numerator) and
@@ -38,18 +36,18 @@ pub fn eql(a: Value, b: Value) bool {
 }
 
 pub fn isNumber(v: Value) bool {
-    if (v.isFixnum()) return true;
+    if (v.isFixnum() or v.isSingleFloat()) return true;
     if (v.tag() != .heap) return false;
     return switch (heap.heapType(v)) {
-        .single_float, .double_float, .ratio, .bignum, .complex => true,
+        .double_float, .ratio, .bignum, .complex => true,
         else => false,
     };
 }
 
 pub fn toF64(v: Value) f64 {
     if (v.isFixnum()) return @floatFromInt(v.toFixnum());
+    if (v.isSingleFloat()) return v.toSingleFloat();
     const t = heap.heapType(v);
-    if (t == .single_float) return heap.asSingleFloat(v).value;
     if (t == .double_float) return heap.asDoubleFloat(v).value;
     if (t == .bignum) return heap.asBignum(v).toConst().toFloat(f64, .nearest_even)[0];
     const r = heap.asRatio(v);
@@ -197,9 +195,10 @@ fn numberHash(v: Value) u64 {
 }
 
 fn eqlHash(v: Value) u64 {
+    if (v.isSingleFloat()) return mix(1, numberHash(v));
     if (v.tag() != .heap) return v.raw;
     return switch (heap.heapType(v)) {
-        .single_float, .double_float => mix(1, numberHash(v)),
+        .double_float => mix(1, numberHash(v)),
         .ratio => mix(9, mix(eqlHash(heap.asRatio(v).numerator), eqlHash(heap.asRatio(v).denominator))),
         .bignum => mix(8, bignumHash(v)),
         .complex => mix(10, mix(eqlHash(heap.asComplex(v).realpart), eqlHash(heap.asComplex(v).imagpart))),

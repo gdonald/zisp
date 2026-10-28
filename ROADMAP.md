@@ -538,7 +538,7 @@ Phase 7: CLOS
 
 The Common Lisp Object System. Large, but mostly implementable in Lisp once the metaobject hooks exist.
 
-- [ ] 7.1. Classes
+- [x] 7.1. Classes
   - [x] 7.1.1. `defclass`
   - [x] 7.1.2. Slot specifications (one session per option):
     - [x] 7.1.2a. `:initform` — default value evaluated when slot needs initialization
@@ -549,7 +549,7 @@ The Common Lisp Object System. Large, but mostly implementable in Lisp once the 
     - [x] 7.1.2f. `:type` — slot writes assert type at `(safety > 0)`
     - [x] 7.1.2g. `:documentation` — string accessible via `documentation`
     - [x] 7.1.2h. Slot inheritance: combined slot definition merges options from each class in the MRO per AMOP. 4 cases
-  - [ ] 7.1.3. `make-instance`, `initialize-instance`, `shared-initialize`, `reinitialize-instance`. Protocol ordering (per AMOP): `make-instance` → `allocate-instance` → `initialize-instance` (which in standard method calls `shared-initialize` with `t` for slot-names). `:before`/`:after` methods on `initialize-instance` and `shared-initialize` interleave correctly across the inheritance chain (most-specific `:before` first, least-specific `:after` last, around the primary chain). Acceptance: `tests/lisp/init-protocol.lisp` has 12 cases — each defines a class hierarchy with `:before`/`:after` methods on both `initialize-instance` and `shared-initialize` that record the call sequence into a list; asserted call sequence is `equal` to SBCL's
+  - [x] 7.1.3. `make-instance`, `initialize-instance`, `shared-initialize`, `reinitialize-instance`. Protocol ordering (per AMOP): `make-instance` → `allocate-instance` → `initialize-instance` (which in standard method calls `shared-initialize` with `t` for slot-names). `:before`/`:after` methods on `initialize-instance` and `shared-initialize` interleave correctly across the inheritance chain (most-specific `:before` first, least-specific `:after` last, around the primary chain). Acceptance: `tests/lisp/init-protocol.lisp` has 12 cases — each defines a class hierarchy with `:before`/`:after` methods on both `initialize-instance` and `shared-initialize` that record the call sequence into a list; asserted call sequence is `equal` to SBCL's
   - [x] 7.1.4. `slot-value`, `(setf slot-value)`, `slot-boundp`, `slot-makunbound`
   - [x] 7.1.5. `with-slots`, `with-accessors`
   - [x] 7.1.6. Class redefinition with `update-instance-for-redefined-class`. Split into 4 milestones:
@@ -601,7 +601,7 @@ Phase 8: LOOP and Heavy Iteration
 
 `LOOP` is its own sub-language and gets its own phase.
 
-- [ ] 8.1. Loop facility — done means: `vendor/ansi-test/iteration/loop*.lsp` pass rate ≥ 95% AND a 200-form corpus from "Practical Common Lisp" + CLHS section 6 expands identically to SBCL (`tests/lisp/loop-corpus.lisp`)
+- [x] 8.1. Loop facility — done means: `vendor/ansi-test/iteration/loop*.lsp` pass rate ≥ 95% AND a 200-form corpus from "Practical Common Lisp" + CLHS section 6 expands identically to SBCL (`tests/lisp/loop-corpus.lisp`)
   - [x] 8.1.1. `loop` macro — simple form (body repeated forever)
   - [x] 8.1.2. Iteration clauses — one session each:
     - [x] 8.1.2a. `for ... in` (list elements) and `for ... on` (cdr-walk)
@@ -630,8 +630,8 @@ Phase 8: LOOP and Heavy Iteration
   - [x] 8.2.1. `do`, `do*` with multiple stepped variables, end-test, result form, body. `do` evaluates step forms in PARALLEL (all step forms reference the old values); `do*` evaluates SEQUENTIALLY (each step form sees prior steps' new values). Acceptance: 8 cases in `tests/lisp/do-corpus.lisp` distinguishing parallel-vs-sequential semantics — including `(do ((a 1) (b a)) ...)` failing in `do` (unbound `a` in `b`'s init context per spec) but working in `do*`
   - [x] 8.2.2. `dolist`, `dotimes` — including optional result form, `return`/`return-from` to exit early, the variable being bound to NIL after normal completion (per spec). Acceptance: `vendor/ansi-test/iteration/do*.lsp` and `dolist*.lsp` pass rate ≥ 95%
   - [x] 8.2.3. `dohash` helper (zisp extension, wraps `maphash` with the `dolist`-style binding form)
-- [ ] 8.3. Loop testing
-  - [ ] 8.3.1. Cross-test loop expansions against SBCL on a fixed corpus
+- [x] 8.3. Loop testing
+  - [x] 8.3.1. Cross-test loop expansions against SBCL on a fixed corpus
 
 ansi-test slice: `loop.lsp`, `iteration.lsp`
 
@@ -669,8 +669,8 @@ Move beyond tree-walking. This is where Zig's strengths really show.
 - [ ] 9.2. Native codegen
   - [ ] 9.2.1. Backend decision: `docs/codegen-backend.md` written BEFORE any code. Doc compares LLVM-via-`zig cc` / Cranelift / hand-rolled on five axes (implementation effort, output quality on cl-bench arithmetic, dependency cost, debug-info support, build-time impact). Recommendation made with explicit tradeoffs. User signs off (initial-here checkbox in the doc). NOT bail-able: "let the user decide" without first producing the comparison is the historic stall here
   - [ ] 9.2.2. IR design — SSA over Lisp values, documented in `docs/codegen-ir.md`. Doc MUST cover: every IR op listed with operand/result types; value representation (boxed vs unboxed, when types are tracked); control-flow representation (basic blocks, phi nodes); the IR-to-bytecode lowering pass with one section per IR op showing target bytecode; one example function compiled end-to-end from Lisp source through IR through bytecode through native code. NOT bail-able to "high-level overview"
-  - [ ] 9.2.3. Type inference. Acceptance: 6 cases in `tests/lisp/type-inference.lisp` showing unboxed code in `disassemble` for: (a) `(the fixnum (+ x 1))`, (b) `(declare (type single-float x))` then float math, (c) `(let ((y (+ x 1))) ...)` inferring `y`'s type from `x`, (d) `if`-typing — a variable's type narrows in the then/else branches based on a `typep` test, (e) inference through one function call (callee return type informs caller), (f) negative test — a value with no type info uses boxed dispatch (regression guard so I can't accidentally claim "always unboxed")
-  - [ ] 9.2.4. Unboxing of fixnums and floats in hot loops. Acceptance: 4 benchmarks in `tests/lisp/unboxing-bench.lisp` each ≥ 10× faster than Phase 8 tree-walker: (a) fixnum sum loop `(loop for i fixnum from 0 to 1000000 sum i)`, (b) float dot-product over a 1M-element array, (c) integer factorial via `do`, (d) Mandelbrot pixel-test inner loop. NOT bail-able to "pattern-matched the one example" — the four benchmarks span different control structures
+  - [x] 9.2.3. Type inference. Acceptance: 6 cases in `tests/lisp/type-inference.lisp` showing unboxed code in `disassemble` for: (a) `(the fixnum (+ x 1))`, (b) `(declare (type single-float x))` then float math, (c) `(let ((y (+ x 1))) ...)` inferring `y`'s type from `x`, (d) `if`-typing — a variable's type narrows in the then/else branches based on a `typep` test, (e) inference through one function call (callee return type informs caller), (f) negative test — a value with no type info uses boxed dispatch (regression guard so I can't accidentally claim "always unboxed")
+  - [x] 9.2.4. Unboxing of fixnums and floats in hot loops. Acceptance: 4 benchmarks in `tests/lisp/unboxing-bench.lisp` each ≥ 10× faster than Phase 8 tree-walker: (a) fixnum sum loop `(loop for i fixnum from 0 to 1000000 sum i)`, (b) float dot-product over a 1M-element array, (c) integer factorial via `do`, (d) Mandelbrot pixel-test inner loop. NOT bail-able to "pattern-matched the one example" — the four benchmarks span different control structures
   - [x] 9.2.5. Inlining of small functions. `(declare (inline foo))` inlines at every call site in scope; `(declaim (inline foo))` inlines globally. Acceptance: 5 cases in `tests/lisp/inline.lisp`: (a) basic — no `call` instruction in `disassemble`, (b) transitive — inline function calls another inline function, both inline, (c) cross-compilation-unit — inline `declaim` in fileA, call in fileB compiled separately, both inlined, (d) recursive inline limited to 3 levels then bottoms out to a real call (no infinite expansion), (e) `(declare (notinline foo))` overrides global `(declaim (inline foo))`
   - [x] 9.2.6. Tail-call optimization. Split into 4 milestones:
     - [x] 9.2.6a. Direct self-call TCO. `(defun loop-forever () (loop-forever))` runs 60 seconds without stack growth (RSS / stack pointer monitored, no growth beyond startup baseline)
@@ -721,16 +721,16 @@ Things no other CL implementation can easily do, because they don't have Zig und
   - [ ] 10.3.3. Browser demo: REPL in a `<textarea>`
   - [ ] 10.3.4. JS interop. **Prerequisite**: `docs/wasm-interop.md` written. Minimum demo: a 20-line Lisp program calls `console.log("hello")` and receives back a result from `Date.now()`. Acceptance: that demo runs in Chrome and Firefox; commit to `examples/wasm-repl/`
 - [ ] 10.4. C interoperability
-  - [ ] 10.4.1. FFI declarations (`defcfun`-style). Split:
-    - [ ] 10.4.1a. C-type representation in Lisp: `:int`, `:long`, `:pointer`, `:char`, `:float`, `:double`, plus type aliases (`size_t`, `off_t`)
-    - [ ] 10.4.1b. `defcfun` macro syntax: `(defcfun "strlen" :int (s :pointer))` parses and registers
-    - [ ] 10.4.1c. Argument marshalling (Lisp value → C ABI representation per type)
-    - [ ] 10.4.1d. Return-value unmarshalling (C return → Lisp value per type)
-    - [ ] 10.4.1e. Library lookup: `defcfun` resolves the symbol via `dlopen`/`dlsym` (or platform equivalent)
-    - [ ] 10.4.1f. Integration test: call `strlen` on a Lisp string, get back correct length on Linux and macOS
-  - [ ] 10.4.2. Direct C-ABI struct generation from Lisp `defstruct`
+  - [x] 10.4.1. FFI declarations (`defcfun`-style). Split:
+    - [x] 10.4.1a. C-type representation in Lisp: `:int`, `:long`, `:pointer`, `:char`, `:float`, `:double`, plus type aliases (`size_t`, `off_t`)
+    - [x] 10.4.1b. `defcfun` macro syntax: `(defcfun "strlen" :int (s :pointer))` parses and registers
+    - [x] 10.4.1c. Argument marshalling (Lisp value → C ABI representation per type)
+    - [x] 10.4.1d. Return-value unmarshalling (C return → Lisp value per type)
+    - [x] 10.4.1e. Library lookup: `defcfun` resolves the symbol via `dlopen`/`dlsym` (or platform equivalent)
+    - [x] 10.4.1f. Integration test: call `strlen` on a Lisp string, get back correct length on Linux and macOS
+  - [x] 10.4.2. Direct C-ABI struct generation from Lisp `defstruct`
   - [ ] 10.4.3. Callbacks (Lisp function → C function pointer). Implementation choice (libffi vs hand-rolled per-arch trampolines) documented in `docs/ffi-callbacks.md` BEFORE implementation. Acceptance: a Lisp function passed as comparator to `qsort(3)` correctly sorts a 100-element array on `x86_64-linux` and `aarch64-darwin` (CI runs both). Variadic callbacks are explicitly out of scope — but documenting that they're out of scope is a sub-bullet, not silence
-  - [ ] 10.4.4. `with-foreign-object`, `foreign-alloc`, `foreign-free`
+  - [x] 10.4.4. `with-foreign-object`, `foreign-alloc`, `foreign-free`
 - [ ] 10.5. Allocator extensibility
   - [ ] 10.5.1. Expose Zig's allocator interface at the Lisp level
   - [ ] 10.5.2. `with-allocator` macro to scope allocations to an arena

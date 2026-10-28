@@ -64,10 +64,12 @@ to, and the width of a fixnum.
 
 A self-checking corpus under `tests/lisp/`, one whose every top-level
 form evaluates to T, can be run under SBCL too, which shows its expected
-values are SBCL's:
+values are SBCL's. GitHub CI runs it on the unwind-protect, instance
+initialization and loop corpora:
 
 ```sh
-tests/run-corpus-sbcl.sh tests/lisp/unwind-protect-corpus.lisp
+tests/run-corpus-sbcl.sh tests/lisp/unwind-protect-corpus.lisp \
+  tests/lisp/init-protocol.lisp tests/lisp/loop-corpus.lisp
 ```
 
 ## Layout

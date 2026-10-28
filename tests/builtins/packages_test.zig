@@ -123,13 +123,13 @@ test "list-all-packages holds the standard packages and omits deleted ones" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     // COMMON-LISP, COMMON-LISP-USER, KEYWORD, EXTENSIONS, which is where
-    // what this implementation adds to the standard lives, and ZISP-MOP,
-    // the metaobject protocol.
-    try fx.runPrints("(length (list-all-packages))", "5");
-    _ = try fx.run("(make-package \"EXTRA\")");
+    // what this implementation adds to the standard lives, ZISP-MOP, the
+    // metaobject protocol, and ZISP-FFI, the foreign function interface.
     try fx.runPrints("(length (list-all-packages))", "6");
+    _ = try fx.run("(make-package \"EXTRA\")");
+    try fx.runPrints("(length (list-all-packages))", "7");
     _ = try fx.run("(delete-package \"EXTRA\")");
-    try fx.runPrints("(length (list-all-packages))", "5");
+    try fx.runPrints("(length (list-all-packages))", "6");
 }
 
 test "packagep distinguishes packages from other values" {

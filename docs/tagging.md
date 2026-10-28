@@ -12,8 +12,8 @@ Zisp uses low-3-bit pointer tagging on 64-bit. Every Lisp value fits in a single
 | `0b011` | heap object | aligned pointer to `HeapObject` whose first byte tags the concrete type (string, vector, hash-table, function, etc.) |
 | `0b100` | character | 21-bit Unicode codepoint in the high bits |
 | `0b101` | special immediate | low byte after the tag indexes a small table (`unbound-marker`, `eof`, etc.) |
-| `0b110` | reserved | — |
-| `0b111` | reserved | — |
+| `0b110` | single-float | IEEE 754 binary32 bits in the high 32 bits |
+| `0b111` | collector marker | never a value a program holds: a forwarded cons's car, a broken weak pointer's referent |
 
 ## Why these choices
 
@@ -25,6 +25,8 @@ Zisp uses low-3-bit pointer tagging on 64-bit. Every Lisp value fits in a single
 
 **Characters as immediates.** Avoids a heap allocation per character. 21 bits covers all of Unicode.
 
+**Single-floats as immediates.** Arithmetic on single-floats allocates nothing, and `eql` on two of them is raw equality, since equal bit patterns give equal words. Double-floats need all 64 bits and stay on the heap.
+
 **Heap-object tag carries everything else.** The heap-object header has a one-byte type tag (`HeapType`) so we don't burn precious low bits on rare types like `package` or `pathname`.
 
 ## Fixnum range
@@ -34,8 +36,5 @@ Zisp uses low-3-bit pointer tagging on 64-bit. Every Lisp value fits in a single
 - `FIXNUM_MIN = -2^60 = -1152921504606846976`
 - `FIXNUM_MAX = 2^60 - 1 = 1152921504606846975`
 
-Overflow will promote to a `bignum` heap object (not yet implemented).
+An overflowing result is a `bignum` heap object.
 
-## Reserved tags
-
-`0b110` and `0b111` are reserved for future immediate types. Candidates include single-precision floats (28 bits is enough for f32 if we sacrifice some range), small ratios, and SIMD-packed values. Unused for now so we can add them without breaking the encoding.

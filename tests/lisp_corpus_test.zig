@@ -116,6 +116,26 @@ test "type declarations in compiled code" {
     try testing.expectEqual(@as(u32, 6), checked);
 }
 
+test "foreign function interface" {
+    const checked = try runCorpus("ffi", @embedFile("lisp/ffi-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 35), checked);
+}
+
+test "callbacks from C into Lisp" {
+    const checked = try runCorpus("ffi-callbacks", @embedFile("lisp/ffi-callbacks.lisp"));
+    try testing.expectEqual(@as(u32, 13), checked);
+}
+
+test "C structures" {
+    const checked = try runCorpus("ffi-structs", @embedFile("lisp/ffi-structs.lisp"));
+    try testing.expectEqual(@as(u32, 14), checked);
+}
+
+test "inferred types in compiled code" {
+    const checked = try runCorpus("type-inference", @embedFile("lisp/type-inference.lisp"));
+    try testing.expectEqual(@as(u32, 11), checked);
+}
+
 test "tail calls keep the frame count" {
     const checked = try runCorpus("tco-frame-count", @embedFile("lisp/tco-frame-count.lisp"));
     try testing.expectEqual(@as(u32, 9), checked);
@@ -138,7 +158,7 @@ test "every kind of object survives an image round trip" {
 
 test "loop corpus" {
     const checked = try runCorpus("loop", @embedFile("lisp/loop-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 50), checked);
+    try testing.expectEqual(@as(u32, 203), checked);
 }
 
 test "do, dolist, dotimes and psetq corpus" {
@@ -264,6 +284,11 @@ test "class redefinition corpus" {
 test "change-class corpus" {
     const checked = try runCorpus("clos-redef", @embedFile("lisp/clos-redef.lisp"));
     try testing.expectEqual(@as(u32, 11), checked);
+}
+
+test "instance initialization protocol call order" {
+    const checked = try runCorpus("init-protocol", @embedFile("lisp/init-protocol.lisp"));
+    try testing.expectEqual(@as(u32, 13), checked);
 }
 
 test "class precedence list corpus" {

@@ -61,6 +61,8 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/runtime.zig"),
         .target = target,
         .optimize = optimize,
+        // The foreign function interface looks C symbols up with dlsym.
+        .link_libc = !freestanding,
         .imports = &.{
             .{ .name = "build_options", .module = build_options_module },
         },
@@ -190,6 +192,13 @@ pub fn build(b: *std.Build) void {
     bytecode_bench_run.addArgs(&.{ "--batch", "--quiet", "--load", "tests/lisp/bytecode-bench.lisp" });
     const bytecode_bench_step = b.step("bytecode-bench", "Measure the bytecode VM against the interpreter");
     bytecode_bench_step.dependOn(&bytecode_bench_run.step);
+
+    // `zig build unboxing-bench` times typed fixnum and single-float
+    // loops compiled against the same loops interpreted.
+    const unboxing_bench_run = b.addRunArtifact(exe);
+    unboxing_bench_run.addArgs(&.{ "--batch", "--quiet", "--load", "tests/lisp/unboxing-bench.lisp" });
+    const unboxing_bench_step = b.step("unboxing-bench", "Measure typed loops compiled against the interpreter");
+    unboxing_bench_step.dependOn(&unboxing_bench_run.step);
 
     // `zig build optimize-bench` times a loop compiled with (speed 3)
     // against the same loop compiled with (speed 0).

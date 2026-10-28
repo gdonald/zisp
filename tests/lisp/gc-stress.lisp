@@ -47,9 +47,10 @@
 (defvar *small-count* 0)
 (defvar *large-count* 0)
 
-;; The first collection drops the macro expansion cache, and what that
-;; cache held is reclaimed by the second.
-(gc)
+;; A first, small run makes what the first call of `churn` makes once,
+;; such as its macro expansions, so the baseline already holds it.
+(churn 1000 *gc-stress-retain-every*)
+
 (gc)
 
 (setq *baseline* (room-value :live-bytes))

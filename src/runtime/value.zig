@@ -10,7 +10,7 @@ pub const Tag = enum(u3) {
     heap = 0b011,
     char = 0b100,
     special = 0b101,
-    _reserved6 = 0b110,
+    single_float = 0b110,
     _reserved7 = 0b111,
 };
 
@@ -127,6 +127,22 @@ pub const Value = extern struct {
     pub inline fn isSpecial(self: Value) bool {
         return self.hasTag(.special);
     }
+
+    // --- single-float ---
+
+    pub inline fn fromSingleFloat(x: f32) Value {
+        const bits: u32 = @bitCast(x);
+        return .{ .raw = (@as(u64, bits) << 32) | @backingInt(Tag.single_float) };
+    }
+
+    pub inline fn toSingleFloat(self: Value) f32 {
+        std.debug.assert(self.hasTag(.single_float));
+        return @bitCast(@as(u32, @truncate(self.raw >> 32)));
+    }
+
+    pub inline fn isSingleFloat(self: Value) bool {
+        return self.hasTag(.single_float);
+    }
 };
 
 pub const SPECIAL_UNBOUND: Value = Value.fromSpecial(0);
@@ -141,12 +157,12 @@ pub const SPECIAL_DYNAMIC: Value = Value.fromSpecial(3);
 /// Left in a cons a collection has copied out of the nursery: the car
 /// says the cell moved and the cdr says where to. The tag is one no real
 /// value carries, so a live cons cannot hold this by accident.
-pub const FORWARDED: Value = .{ .raw = @backingInt(Tag._reserved6) };
+pub const FORWARDED: Value = .{ .raw = @backingInt(Tag._reserved7) };
 
 /// Left in a weak pointer whose referent a collection reclaimed. Like
 /// `FORWARDED` it carries a tag no real value does, so it can never be
 /// mistaken for something the program put there.
-pub const BROKEN: Value = .{ .raw = @backingInt(Tag._reserved7) };
+pub const BROKEN: Value = .{ .raw = (@as(u64, 1) << TAG_BITS) | @backingInt(Tag._reserved7) };
 
 // NIL and T are populated when the symbol table is initialized.
 // Their canonical Value forms are exposed so identity checks can use raw equality.

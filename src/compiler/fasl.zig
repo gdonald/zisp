@@ -122,7 +122,7 @@ pub const Writer = struct {
     /// objects it is made of, when it has none yet.
     fn objectIndex(self: *Writer, v: Value) WriteError!u32 {
         if (self.indices.get(v.raw)) |index| return index;
-        if (v.isFixnum() or v.isChar()) return self.add(v);
+        if (v.isFixnum() or v.isChar() or v.isSingleFloat()) return self.add(v);
         if (v.isSymbol()) {
             const sym = symbol_mod.symbol(v);
             if (sym.home) |pkg| _ = try self.nameIndex(pkg.name);
@@ -136,7 +136,7 @@ pub const Writer = struct {
         }
         if (v.tag() != .heap) return error.Unencodable;
         switch (heap.heapType(v)) {
-            .bignum, .single_float, .double_float => return self.add(v),
+            .bignum, .double_float => return self.add(v),
             .ratio => {
                 _ = try self.objectIndex(heap.asRatio(v).numerator);
                 _ = try self.objectIndex(heap.asRatio(v).denominator);
@@ -259,6 +259,9 @@ pub const Writer = struct {
                     try self.tag(.symbol);
                     try self.int(u32, if (sym.home) |pkg| self.names.get(pkg.name).? else NONE);
                     try self.int(u32, self.names.get(sym.name).?);
+                } else if (v.isSingleFloat()) {
+                    try self.tag(.single_float);
+                    try self.int(u32, @bitCast(v.toSingleFloat()));
                 } else if (v.isCons()) {
                     try self.tag(.cons);
                     try self.int(u32, self.indexOf(heap.car(v)));
@@ -270,10 +273,6 @@ pub const Writer = struct {
                         try self.out.append(self.allocator, @intFromBool(!big.positive));
                         try self.int(u32, @intCast(big.len));
                         for (big.limbs[0..big.len]) |limb| try self.int(u64, limb);
-                    },
-                    .single_float => {
-                        try self.tag(.single_float);
-                        try self.int(u32, @bitCast(heap.asSingleFloat(v).value));
                     },
                     .double_float => {
                         try self.tag(.double_float);
@@ -574,7 +573,7 @@ fn readObjects(ev: *Evaluator, r: *Reader, codes: []const PendingCode, held: any
                 for (limbs) |*limb| limb.* = @intCast(try r.int(u64));
                 break :blk try ev.heap.allocBignum(.{ .limbs = limbs, .positive = !negative });
             },
-            .single_float => try ev.heap.allocSingleFloat(@bitCast(try r.int(u32))),
+            .single_float => Value.fromSingleFloat(@bitCast(try r.int(u32))),
             .double_float => try ev.heap.allocDoubleFloat(@bitCast(try r.int(u64))),
             .ratio, .complex => blk: {
                 const a = try objectAt(held.items()[base..], try r.int(u32));

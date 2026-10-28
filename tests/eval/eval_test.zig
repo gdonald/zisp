@@ -78,7 +78,7 @@ test "self-evaluating: float" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
-    const f = try fx.heap.allocSingleFloat(3.14);
+    const f = value.Value.fromSingleFloat(3.14);
     const r = try fx.ev.eval(f);
     try std.testing.expect(r.equalsRaw(f));
 }
@@ -196,7 +196,7 @@ test "eval rejects reserved-tag values with TypeError" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
-    const bogus = value.Value{ .raw = 0b110 };
+    const bogus = value.Value{ .raw = 0b111 };
     try std.testing.expectError(Error.TypeError, fx.ev.eval(bogus));
 }
 

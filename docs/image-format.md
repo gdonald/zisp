@@ -84,16 +84,16 @@ to a multiple of 8. An image holds, in this order:
 ### Objects
 
 A reference is 8 bytes. A value that refers to nothing in the heap, a
-fixnum, a character or one of the evaluator's markers such as unbound,
-is written as itself. A reference to an object is the object's index
-shifted left 3 bits, with 6 in the low 3: a tag no live value carries.
+fixnum, a character, a single float or one of the evaluator's markers
+such as unbound, is written as itself. A reference to an object is the
+object's index shifted left 3 bits, with 7 in the low 3: a tag no live
+value carries.
 
 | Tag | Object | Fields |
 | --- | --- | --- |
 | 1 | fixnum | 8, signed |
 | 2 | bignum | sign byte, limb count, limbs |
 | 3 | ratio | numerator, denominator |
-| 4 | single float | its bits |
 | 5 | double float | its bits |
 | 6 | complex | real part, imaginary part |
 | 7 | character | code point |
@@ -168,4 +168,4 @@ A file whose major version, or whose instruction set, is not the one
 this zisp writes signals an error before anything is made. The minor
 version changes when a section kind is added that an older loader can
 pass over by its length; an object tag cannot be skipped, so adding one
-changes the major version. This zisp writes version 1.0.
+changes the major version. This zisp writes version 2.0.

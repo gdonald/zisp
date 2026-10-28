@@ -27,6 +27,7 @@ const instances = @import("instances.zig");
 const frames = @import("frames.zig");
 pub const image = @import("image.zig");
 const compiler = @import("compiler.zig");
+const ffi = @import("ffi.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -191,6 +192,7 @@ pub fn registerNatives(ev: *Evaluator) !void {
     try instances.registerInstances(ev);
     try frames.registerFrames(ev);
     try compiler.registerCompiler(ev);
+    try ffi.registerFfi(ev);
     try image.register(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
@@ -212,6 +214,7 @@ pub fn loadBootSources(ev: *Evaluator) !void {
     try system.evalSource(ev, conditions_source);
     try system.evalSource(ev, types_source);
     try system.evalSource(ev, debugger_source);
+    try system.evalSource(ev, ffi_source);
 }
 
 // --- conses, plists, symbol cells ---
@@ -599,6 +602,7 @@ const clos_source = @embedFile("../lisp/clos.lisp");
 const conditions_source = @embedFile("../lisp/conditions.lisp");
 const types_source = @embedFile("../lisp/types.lisp");
 const debugger_source = @embedFile("../lisp/debugger.lisp");
+const ffi_source = @embedFile("../lisp/ffi.lisp");
 
 /// `(error datum args...)` as the prelude needs it before the condition
 /// system is loaded. `conditions.lisp` replaces it with the one that

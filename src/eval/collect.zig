@@ -94,6 +94,7 @@ pub fn collectScoped(ev: *Evaluator, scope: Scope) !void {
     if (scope == .minor) try pushCapturedFrames(&marker, ev);
     try pushRoots(&marker, ev);
     try marker.run();
+    try markExpansionsOfLiveForms(&marker, ev, scope);
     marker.breakDeadWeakPointers();
     if (scope == .major) pruneCapturedFrames(&marker, ev);
 
@@ -365,14 +366,44 @@ fn dropDeadExpansions(ev: *Evaluator, scope: Scope) !void {
 
     var it = ev.macro_cache.keyIterator();
     while (it.next()) |key| {
-        const address = (Value{ .raw = key.* }).toConsAddr();
-        if (!ev.heap.objects.owns(address)) continue;
-        // A minor collection marked the nursery alone, so a tenured
-        // address carries no mark either way and is left as it is.
-        if (scope == .minor and !ev.heap.objects.inNursery(address)) continue;
-        if (!ev.heap.objects.isMarked(address)) try stale.append(ev.allocator, key.*);
+        if (!expansionFormLive(ev, key.*, scope)) try stale.append(ev.allocator, key.*);
     }
     for (stale.items) |key| _ = ev.macro_cache.remove(key);
+}
+
+/// Whether the call form a cached expansion is keyed on survives this
+/// collection.
+fn expansionFormLive(ev: *Evaluator, key: u64, scope: Scope) bool {
+    const address = (Value{ .raw = key }).toConsAddr();
+    if (!ev.heap.objects.owns(address)) return true;
+    // A minor collection marked the nursery alone, so a tenured address
+    // carries no mark either way and is left as it is.
+    if (scope == .minor and !ev.heap.objects.inNursery(address)) return true;
+    return ev.heap.objects.isMarked(address);
+}
+
+/// The cached expansions whose call forms are reachable, and what they
+/// hold. An expansion whose form has died is reached through nothing, so
+/// it goes in the same collection as the form, and so do the expansions
+/// of the forms inside it.
+fn markExpansionsOfLiveForms(marker: *mark_mod.Marker, ev: *Evaluator, scope: Scope) !void {
+    mark_mod.Marker.source = "a cached macro expansion";
+    var marked: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    defer marked.deinit(ev.allocator);
+    while (true) {
+        var pushed = false;
+        var it = ev.macro_cache.iterator();
+        while (it.next()) |entry| {
+            if (marked.contains(entry.key_ptr.*)) continue;
+            if (!expansionFormLive(ev, entry.key_ptr.*, scope)) continue;
+            try marked.put(ev.allocator, entry.key_ptr.*, {});
+            try marker.push(entry.value_ptr.expander);
+            try marker.push(entry.value_ptr.expansion);
+            pushed = true;
+        }
+        if (!pushed) return;
+        try marker.run();
+    }
 }
 
 /// What the cache holds: an expansion a form part-way through evaluation
@@ -475,25 +506,12 @@ fn verbose(ev: *Evaluator) bool {
     return !setting.equalsRaw(value.NIL);
 }
 
-/// The cached expansions, which running code holds only through the
-/// cache: a form part-way through evaluation is reachable from nowhere
-/// else.
-fn pushExpansions(marker: *mark_mod.Marker, ev: *Evaluator) !void {
-    var it = ev.macro_cache.valueIterator();
-    while (it.next()) |cached| {
-        try marker.push(cached.expander);
-        try marker.push(cached.expansion);
-    }
-}
-
 pub fn pushRoots(marker: *mark_mod.Marker, ev: *Evaluator) !void {
     mark_mod.Marker.source = "the symbol table";
     try pushSymbols(marker, ev);
     mark_mod.Marker.source = "the environment";
     try pushEnvironment(marker, ev);
     try pushEvaluatorState(marker, ev);
-    mark_mod.Marker.source = "a cached macro expansion";
-    try pushExpansions(marker, ev);
     mark_mod.Marker.source = "reachable structure";
 }
 

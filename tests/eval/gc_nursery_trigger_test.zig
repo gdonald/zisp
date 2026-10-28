@@ -75,8 +75,11 @@ test "the garbage a long-running form makes does not reach the tenured space" {
     fx.heap.objects.quarantine = false;
 
     // Bringing the runtime up leaves cards dirty, and the first collection
-    // after it scans them all, which would put the next one off. That
-    // first collection is taken here, so the loop is what is measured.
+    // after it scans them all, which would put the next one off by four
+    // times what it read. That collection and one more, which reads only
+    // what the first left dirty, are taken here, so the loop is what is
+    // measured.
+    try zisp.eval.collect.collect(&fx.ev);
     try zisp.eval.collect.collect(&fx.ev);
     const before = fx.heap.objects.stats.region_bytes;
     try zisp.builtins.system.loadPath(&fx.ev, corpus_path);

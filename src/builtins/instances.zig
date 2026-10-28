@@ -271,11 +271,11 @@ fn builtInClassName(v: Value) Interned {
     if (v.isSymbol()) return .symbol;
     if (v.isFixnum()) return .fixnum;
     if (v.tag() == .char) return .character;
+    if (v.isSingleFloat()) return .single_float;
     if (v.tag() != .heap) return .t;
     return switch (heap.heapType(v)) {
         .bignum => .bignum,
         .ratio => .ratio,
-        .single_float => .single_float,
         .double_float => .double_float,
         .complex => .complex,
         .string => .string,

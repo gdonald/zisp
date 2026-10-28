@@ -1,103 +1,305 @@
-;; The order make-instance runs initialize-instance and shared-initialize
-;; methods in, across a class hierarchy. Each case records the calls
-;; into *trace* and compares the sequence with the one CLHS 7.1 and the
-;; standard method combination give.
+;; The instance initialization protocol: make-instance, allocate-instance,
+;; initialize-instance, shared-initialize and reinitialize-instance, with
+;; :before, :after and :around methods across class hierarchies. Each
+;; expected call sequence is the one SBCL records for the same forms.
+;;
+;; Each top-level form is self-checking and evaluates to T.
 
 (progn
-  (defvar *trace* nil)
-  (defun traced (form) (setq *trace* nil) (funcall form) (reverse *trace*))
-  (defclass init-a () ((s :initarg :s :initform 'default)))
-  (defclass init-b (init-a) ())
-  (defclass init-c (init-b) ())
+  (defvar *init-calls* nil)
+  (defun note-call (&rest entry) (push entry *init-calls*))
+  (defun recorded-calls (thunk)
+    (let ((*init-calls* nil))
+      (funcall thunk)
+      (reverse *init-calls*)))
   t)
 
-;; 1. A :before on initialize-instance runs ahead of the slot filling.
+;; 1. One class with :before and :after methods on both generic functions.
 (progn
-  (defmethod initialize-instance :before ((x init-a) &key)
-    (push (list :ii-before-a (slot-boundp x 's)) *trace*))
-  (equal (traced (lambda () (make-instance 'init-a)))
-         '((:ii-before-a nil))))
+  (defclass init-single () ((a :initarg :a :initform 1)))
+  (defmethod initialize-instance :before ((x init-single) &key)
+    (note-call :ii-before 'init-single))
+  (defmethod initialize-instance :after ((x init-single) &key)
+    (note-call :ii-after 'init-single))
+  (defmethod shared-initialize :before ((x init-single) slot-names &key)
+    (note-call :si-before 'init-single slot-names))
+  (defmethod shared-initialize :after ((x init-single) slot-names &key)
+    (note-call :si-after 'init-single slot-names))
+  (equal (recorded-calls (lambda () (make-instance 'init-single)))
+         '((:ii-before init-single)
+           (:si-before init-single t)
+           (:si-after init-single t)
+           (:ii-after init-single))))
 
-;; 2. An :after on initialize-instance sees the slots filled.
+;; 2. Two levels: most specific :before first, least specific :after last.
 (progn
-  (defmethod initialize-instance :after ((x init-a) &key)
-    (push (list :ii-after-a (slot-value x 's)) *trace*))
-  (equal (traced (lambda () (make-instance 'init-a)))
-         '((:ii-before-a nil) (:ii-after-a default))))
+  (defclass init-base () ())
+  (defclass init-derived (init-base) ())
+  (defmethod initialize-instance :before ((x init-base) &key)
+    (note-call :ii-before 'init-base))
+  (defmethod initialize-instance :before ((x init-derived) &key)
+    (note-call :ii-before 'init-derived))
+  (defmethod initialize-instance :after ((x init-base) &key)
+    (note-call :ii-after 'init-base))
+  (defmethod initialize-instance :after ((x init-derived) &key)
+    (note-call :ii-after 'init-derived))
+  (defmethod shared-initialize :before ((x init-base) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before 'init-base))
+  (defmethod shared-initialize :before ((x init-derived) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before 'init-derived))
+  (defmethod shared-initialize :after ((x init-base) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-base))
+  (defmethod shared-initialize :after ((x init-derived) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-derived))
+  (equal (recorded-calls (lambda () (make-instance 'init-derived)))
+         '((:ii-before init-derived)
+           (:ii-before init-base)
+           (:si-before init-derived)
+           (:si-before init-base)
+           (:si-after init-base)
+           (:si-after init-derived)
+           (:ii-after init-base)
+           (:ii-after init-derived))))
 
-;; 3. A subclass's :before runs ahead of its superclass's.
+;; 3. Instances of the base class run only the base class methods.
+(equal (recorded-calls (lambda () (make-instance 'init-base)))
+       '((:ii-before init-base)
+         (:si-before init-base)
+         (:si-after init-base)
+         (:ii-after init-base)))
+
+;; 4. Three levels, with the middle class defining methods on only one of
+;; the two generic functions.
 (progn
-  (defmethod initialize-instance :before ((x init-b) &key)
-    (push :ii-before-b *trace*))
-  (equal (traced (lambda () (make-instance 'init-b)))
-         '(:ii-before-b (:ii-before-a nil) (:ii-after-a default))))
+  (defclass init-top () ())
+  (defclass init-middle (init-top) ())
+  (defclass init-leaf (init-middle) ())
+  (defmethod initialize-instance :before ((x init-top) &key)
+    (note-call :ii-before 'init-top))
+  (defmethod initialize-instance :after ((x init-top) &key)
+    (note-call :ii-after 'init-top))
+  (defmethod shared-initialize :before ((x init-middle) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before 'init-middle))
+  (defmethod shared-initialize :after ((x init-middle) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-middle))
+  (defmethod initialize-instance :before ((x init-leaf) &key)
+    (note-call :ii-before 'init-leaf))
+  (defmethod shared-initialize :after ((x init-leaf) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-leaf))
+  (equal (recorded-calls (lambda () (make-instance 'init-leaf)))
+         '((:ii-before init-leaf)
+           (:ii-before init-top)
+           (:si-before init-middle)
+           (:si-after init-middle)
+           (:si-after init-leaf)
+           (:ii-after init-top))))
 
-;; 4. A subclass's :after runs after its superclass's.
+;; 5. A diamond: methods run in class precedence list order.
 (progn
-  (defmethod initialize-instance :after ((x init-b) &key)
-    (push :ii-after-b *trace*))
-  (equal (traced (lambda () (make-instance 'init-b)))
-         '(:ii-before-b (:ii-before-a nil) (:ii-after-a default) :ii-after-b)))
+  (defclass init-root () ())
+  (defclass init-left (init-root) ())
+  (defclass init-right (init-root) ())
+  (defclass init-bottom (init-left init-right) ())
+  (defmethod initialize-instance :before ((x init-root) &key)
+    (note-call :ii-before 'init-root))
+  (defmethod initialize-instance :before ((x init-left) &key)
+    (note-call :ii-before 'init-left))
+  (defmethod initialize-instance :before ((x init-right) &key)
+    (note-call :ii-before 'init-right))
+  (defmethod shared-initialize :after ((x init-root) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-root))
+  (defmethod shared-initialize :after ((x init-left) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-left))
+  (defmethod shared-initialize :after ((x init-right) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-right))
+  (equal (recorded-calls (lambda () (make-instance 'init-bottom)))
+         '((:ii-before init-left)
+           (:ii-before init-right)
+           (:ii-before init-root)
+           (:si-after init-root)
+           (:si-after init-right)
+           (:si-after init-left))))
 
-;; 5. shared-initialize's methods run inside initialize-instance's primary.
+;; 6. :around methods wrap the :before, primary and :after methods.
 (progn
-  (defmethod shared-initialize :before ((x init-a) slot-names &key)
-    (push (list :si-before-a slot-names) *trace*))
-  (defmethod shared-initialize :after ((x init-a) slot-names &key)
-    (push (list :si-after-a slot-names) *trace*))
-  (equal (traced (lambda () (make-instance 'init-a)))
-         '((:ii-before-a nil) (:si-before-a t) (:si-after-a t) (:ii-after-a default))))
-
-;; 6. Three levels: befores most specific first, afters least specific first.
-(progn
-  (defmethod initialize-instance :before ((x init-c) &key) (push :ii-before-c *trace*))
-  (defmethod initialize-instance :after ((x init-c) &key) (push :ii-after-c *trace*))
-  (equal (traced (lambda () (make-instance 'init-c)))
-         '(:ii-before-c :ii-before-b (:ii-before-a nil) (:si-before-a t) (:si-after-a t)
-           (:ii-after-a default) :ii-after-b :ii-after-c)))
-
-;; 7. shared-initialize :before and :after interleave by class as well.
-(progn
-  (defmethod shared-initialize :before ((x init-c) slot-names &key) (push :si-before-c *trace*))
-  (defmethod shared-initialize :after ((x init-c) slot-names &key) (push :si-after-c *trace*))
-  (equal (traced (lambda () (make-instance 'init-c)))
-         '(:ii-before-c :ii-before-b (:ii-before-a nil) :si-before-c (:si-before-a t)
-           (:si-after-a t) :si-after-c (:ii-after-a default) :ii-after-b :ii-after-c)))
-
-;; 8. An initarg reaches the slot before any :after sees it.
-(equal (traced (lambda () (make-instance 'init-a :s 'given)))
-       '((:ii-before-a nil) (:si-before-a t) (:si-after-a t) (:ii-after-a given)))
-
-;; 9. A keyword an :after method accepts is a valid initarg.
-(progn
-  (defclass init-d () ())
-  (defmethod initialize-instance :after ((x init-d) &key extra)
-    (push (list :extra extra) *trace*))
-  (equal (traced (lambda () (make-instance 'init-d :extra 4)))
-         '((:extra 4))))
-
-;; 10. An :around on initialize-instance wraps the whole sequence.
-(progn
-  (defclass init-e () ())
-  (defmethod initialize-instance :around ((x init-e) &key)
-    (push :around-in *trace*)
+  (defclass init-wrapped-base () ())
+  (defclass init-wrapped (init-wrapped-base) ())
+  (defmethod initialize-instance :around ((x init-wrapped-base) &key)
+    (note-call :ii-around-enter 'init-wrapped-base)
     (call-next-method)
-    (push :around-out *trace*))
-  (defmethod initialize-instance :before ((x init-e) &key) (push :before *trace*))
-  (defmethod initialize-instance :after ((x init-e) &key) (push :after *trace*))
-  (equal (traced (lambda () (make-instance 'init-e)))
-         '(:around-in :before :after :around-out)))
+    (note-call :ii-around-exit 'init-wrapped-base))
+  (defmethod initialize-instance :around ((x init-wrapped) &key)
+    (note-call :ii-around-enter 'init-wrapped)
+    (call-next-method)
+    (note-call :ii-around-exit 'init-wrapped))
+  (defmethod initialize-instance :before ((x init-wrapped) &key)
+    (note-call :ii-before 'init-wrapped))
+  (defmethod initialize-instance :after ((x init-wrapped-base) &key)
+    (note-call :ii-after 'init-wrapped-base))
+  (defmethod shared-initialize :around ((x init-wrapped) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-around-enter 'init-wrapped)
+    (call-next-method)
+    (note-call :si-around-exit 'init-wrapped))
+  (defmethod shared-initialize :before ((x init-wrapped-base) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before 'init-wrapped-base))
+  (equal (recorded-calls (lambda () (make-instance 'init-wrapped)))
+         '((:ii-around-enter init-wrapped)
+           (:ii-around-enter init-wrapped-base)
+           (:ii-before init-wrapped)
+           (:si-around-enter init-wrapped)
+           (:si-before init-wrapped-base)
+           (:si-around-exit init-wrapped)
+           (:ii-after init-wrapped-base)
+           (:ii-around-exit init-wrapped-base)
+           (:ii-around-exit init-wrapped))))
 
-;; 11. reinitialize-instance calls shared-initialize with no slot names.
-(let ((x (make-instance 'init-a)))
-  (equal (traced (lambda () (reinitialize-instance x :s 'again)))
-         '((:si-before-a nil) (:si-after-a nil))))
-
-;; 12. allocate-instance runs ahead of initialize-instance.
+;; 7. A primary initialize-instance method runs around the standard one
+;; through call-next-method, inside the :before and :after methods.
 (progn
-  (defclass init-f () ())
-  (defmethod allocate-instance :before ((class (eql (find-class 'init-f))) &key)
-    (push :allocate *trace*))
-  (defmethod initialize-instance :before ((x init-f) &key) (push :initialize *trace*))
-  (equal (traced (lambda () (make-instance 'init-f)))
-         '(:allocate :initialize)))
+  (defclass init-primary () ((a :initarg :a)))
+  (defmethod initialize-instance ((x init-primary) &key)
+    (note-call :ii-primary-enter (slot-boundp x 'a))
+    (call-next-method)
+    (note-call :ii-primary-exit (slot-value x 'a)))
+  (defmethod initialize-instance :before ((x init-primary) &key)
+    (note-call :ii-before 'init-primary))
+  (defmethod initialize-instance :after ((x init-primary) &key)
+    (note-call :ii-after 'init-primary))
+  (defmethod shared-initialize :after ((x init-primary) slot-names &key)
+    (note-call :si-after slot-names (slot-value x 'a)))
+  (equal (recorded-calls (lambda () (make-instance 'init-primary :a 7)))
+         '((:ii-before init-primary)
+           (:ii-primary-enter nil)
+           (:si-after t 7)
+           (:ii-primary-exit 7)
+           (:ii-after init-primary))))
+
+;; 8. Slots are unbound in an initialize-instance :before method and filled
+;; from initargs and initforms by the time a shared-initialize :after runs.
+(progn
+  (defclass init-slots ()
+    ((given :initarg :given)
+     (default :initform 'from-initform)))
+  (defmethod initialize-instance :before ((x init-slots) &key)
+    (note-call :ii-before (slot-boundp x 'given) (slot-boundp x 'default)))
+  (defmethod shared-initialize :before ((x init-slots) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before (slot-boundp x 'given) (slot-boundp x 'default)))
+  (defmethod shared-initialize :after ((x init-slots) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after (slot-value x 'given) (slot-value x 'default)))
+  (defmethod initialize-instance :after ((x init-slots) &key)
+    (note-call :ii-after (slot-value x 'given) (slot-value x 'default)))
+  (equal (recorded-calls (lambda () (make-instance 'init-slots :given 'from-initarg)))
+         '((:ii-before nil nil)
+           (:si-before nil nil)
+           (:si-after from-initarg from-initform)
+           (:ii-after from-initarg from-initform))))
+
+;; 9. allocate-instance runs before initialize-instance, and make-instance
+;; methods wrap both.
+(progn
+  (defclass init-allocated () ())
+  (defmethod make-instance :before ((class (eql (find-class 'init-allocated))) &key)
+    (note-call :mi-before))
+  (defmethod make-instance :after ((class (eql (find-class 'init-allocated))) &key)
+    (note-call :mi-after))
+  (defmethod allocate-instance :before ((class (eql (find-class 'init-allocated))) &key)
+    (note-call :ai-before))
+  (defmethod allocate-instance :after ((class (eql (find-class 'init-allocated))) &key)
+    (note-call :ai-after))
+  (defmethod initialize-instance :before ((x init-allocated) &key)
+    (note-call :ii-before))
+  (defmethod shared-initialize :after ((x init-allocated) slot-names &key)
+    (note-call :si-after slot-names))
+  ;; SBCL's first make-instance of a class also allocates its prototype.
+  (recorded-calls (lambda () (make-instance 'init-allocated)))
+  (equal (recorded-calls (lambda () (make-instance 'init-allocated)))
+         '((:mi-before)
+           (:ai-before)
+           (:ai-after)
+           (:ii-before)
+           (:si-after t)
+           (:mi-after))))
+
+;; 10. reinitialize-instance calls shared-initialize with NIL for the slot
+;; names, so initforms do not fill in a slot made unbound.
+(progn
+  (defclass init-reinit-base () ())
+  (defclass init-reinit (init-reinit-base)
+    ((a :initarg :a :initform 'initform-a)))
+  (defmethod reinitialize-instance :before ((x init-reinit-base) &key)
+    (note-call :ri-before 'init-reinit-base))
+  (defmethod reinitialize-instance :before ((x init-reinit) &key)
+    (note-call :ri-before 'init-reinit))
+  (defmethod reinitialize-instance :after ((x init-reinit-base) &key)
+    (note-call :ri-after 'init-reinit-base))
+  (defmethod reinitialize-instance :after ((x init-reinit) &key)
+    (note-call :ri-after 'init-reinit))
+  (defmethod shared-initialize :before ((x init-reinit) slot-names &key)
+    (note-call :si-before slot-names))
+  (defmethod shared-initialize :after ((x init-reinit) slot-names &key)
+    (note-call :si-after slot-names (slot-boundp x 'a)))
+  (let ((instance (make-instance 'init-reinit)))
+    (slot-makunbound instance 'a)
+    (equal (recorded-calls (lambda () (reinitialize-instance instance)))
+           '((:ri-before init-reinit)
+             (:ri-before init-reinit-base)
+             (:si-before nil)
+             (:si-after nil nil)
+             (:ri-after init-reinit-base)
+             (:ri-after init-reinit)))))
+
+;; 11. Initargs passed to reinitialize-instance reach shared-initialize and
+;; replace the slot's value.
+(let ((instance (make-instance 'init-reinit :a 1)))
+  (and (equal (recorded-calls (lambda () (reinitialize-instance instance :a 2)))
+              '((:ri-before init-reinit)
+                (:ri-before init-reinit-base)
+                (:si-before nil)
+                (:si-after nil t)
+                (:ri-after init-reinit-base)
+                (:ri-after init-reinit)))
+       (eql (slot-value instance 'a) 2)))
+
+;; 12. A mixin with only shared-initialize methods and a class with only
+;; initialize-instance methods: each generic function interleaves the
+;; methods of both in precedence order.
+(progn
+  (defclass init-mixin () ())
+  (defclass init-host () ())
+  (defclass init-combined (init-host init-mixin) ())
+  (defmethod shared-initialize :before ((x init-mixin) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before 'init-mixin))
+  (defmethod shared-initialize :after ((x init-mixin) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-after 'init-mixin))
+  (defmethod initialize-instance :before ((x init-host) &key)
+    (note-call :ii-before 'init-host))
+  (defmethod initialize-instance :after ((x init-host) &key)
+    (note-call :ii-after 'init-host))
+  (defmethod initialize-instance :after ((x init-combined) &key)
+    (note-call :ii-after 'init-combined))
+  (defmethod shared-initialize :before ((x init-combined) slot-names &key)
+    (declare (ignore slot-names))
+    (note-call :si-before 'init-combined))
+  (equal (recorded-calls (lambda () (make-instance 'init-combined)))
+         '((:ii-before init-host)
+           (:si-before init-combined)
+           (:si-before init-mixin)
+           (:si-after init-mixin)
+           (:ii-after init-host)
+           (:ii-after init-combined))))

@@ -650,14 +650,14 @@ pub const Evaluator = struct {
         if (form.equalsRaw(value.NIL)) return self.set1(form);
         if (form.equalsRaw(value.T)) return self.set1(form);
         switch (form.tag()) {
-            .fixnum, .char, .heap, .special => return self.set1(form),
+            .fixnum, .char, .heap, .special, .single_float => return self.set1(form),
             .symbol => {
                 const found = try self.evalSymbol(form);
                 if (self.symbolMacroExpansion(found)) |expansion| return self.eval(expansion);
                 return self.set1(found);
             },
             .cons => return self.evalCons(form),
-            ._reserved6, ._reserved7 => return Error.TypeError,
+            ._reserved7 => return Error.TypeError,
         }
     }
 

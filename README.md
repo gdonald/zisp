@@ -54,6 +54,7 @@ zig build -Dfreestanding=true       # embedded build (placeholder)
 - [docs/macros.md](docs/macros.md) - macro non-hygiene and gensym
 - [docs/gc.md](docs/gc.md) - the collector
 - [docs/printer.md](docs/printer.md) - the printer variables
+- [docs/ffi.md](docs/ffi.md) - calling C functions
 
 ## License
 

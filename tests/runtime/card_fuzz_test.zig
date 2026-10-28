@@ -152,7 +152,7 @@ const Checker = struct {
                 if (text.isDisplaced()) try self.check(container, text.displaced_to);
             },
             // Nothing inside these refers to another object.
-            .bignum, .single_float, .double_float, .random_state, .package, .readtable => {},
+            .bignum, .double_float, .random_state, .package, .readtable => {},
             else => {},
         }
     }

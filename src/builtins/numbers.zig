@@ -190,7 +190,7 @@ fn asF64(v: Value) f64 {
 }
 
 fn boxFloat(ev: *Evaluator, comptime T: type, x: T) Error!Value {
-    if (T == f32) return ev.heap.allocSingleFloat(x);
+    if (T == f32) return Value.fromSingleFloat(x);
     return ev.heap.allocDoubleFloat(x);
 }
 
@@ -1406,7 +1406,7 @@ fn registerFloatConstants(ev: *Evaluator) !void {
     };
     for (singles) |c| {
         const sym = try ev.interner.intern(c.name);
-        symbol_mod.symbol(sym).value_cell = try ev.heap.allocSingleFloat(c.v);
+        symbol_mod.symbol(sym).value_cell = Value.fromSingleFloat(c.v);
         const short = try ev.interner.intern(try shortName(ev, c.name, "SINGLE", "SHORT"));
         symbol_mod.symbol(short).value_cell = symbol_mod.symbol(sym).value_cell;
     }
@@ -1468,7 +1468,7 @@ const Decoded = struct {
 fn decodeBits(v: Value) Error!Decoded {
     const shape = try floatShape(v);
     if (shape.single) {
-        const bits: u32 = @bitCast(heap.asSingleFloat(v).value);
+        const bits: u32 = @bitCast(v.toSingleFloat());
         const raw = (bits >> 23) & 0xFF;
         const frac: u64 = bits & 0x7FFFFF;
         return .{
@@ -1530,7 +1530,7 @@ fn decodeFloatFn(p: *anyopaque, args: []const Value) Error!Value {
     const shape = try floatShape(v);
     const negative = std.math.signbit(asF64(v));
     if (shape.single) {
-        const x: f32 = heap.asSingleFloat(v).value;
+        const x: f32 = v.toSingleFloat();
         const parts = std.math.frexp(@abs(x));
         var held = ev.heap.protect();
         defer held.close();
@@ -1558,7 +1558,7 @@ fn scaleFloatFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!args[1].isFixnum()) return Error.TypeError;
     const n: i32 = @intCast(args[1].toFixnum());
     if (shape.single) {
-        return boxFloat(ev, f32, std.math.ldexp(heap.asSingleFloat(args[0]).value, n));
+        return boxFloat(ev, f32, std.math.ldexp(args[0].toSingleFloat(), n));
     }
     return boxFloat(ev, f64, std.math.ldexp(heap.asDoubleFloat(args[0]).value, n));
 }

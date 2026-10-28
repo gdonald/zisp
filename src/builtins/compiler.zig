@@ -35,6 +35,9 @@ pub fn registerCompiler(ev: *Evaluator) !void {
 
     _ = try ev.interner.internExtension("FASL-VERSION-ERROR");
     _ = try ev.interner.internExtension("*TCO-FRAME-COUNTER*");
+    const derive = try ev.interner.internExtension("*DERIVE-FUNCTION-TYPES*");
+    symbol_mod.symbol(derive).special = true;
+    if (symbol_mod.symbol(derive).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) symbol_mod.symbol(derive).value_cell = value.NIL;
     // Set to write fasls big-endian, which is what tests the loader's
     // byte swapping.
     const big = try ev.interner.intern("*%FASL-BIG-ENDIAN*");
@@ -53,6 +56,13 @@ fn nameOf(ev: *Evaluator, given: Value) Error!?[]const u8 {
     return symbol_mod.symbol(try ev.functionNameSymbol(given)).name;
 }
 
+/// The global function a compile native's optional name argument says
+/// it compiles, or null.
+fn definedSymbol(ev: *Evaluator, args: []const Value) Error!?Value {
+    if (args.len != 2 or args[1].equalsRaw(value.NIL)) return null;
+    return try ev.functionNameSymbol(args[1]);
+}
+
 /// `(%compile-lambda lambda-expression &optional name)`.
 fn compileLambdaFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
@@ -64,7 +74,7 @@ fn compileLambdaFn(p: *anyopaque, args: []const Value) Error!Value {
     const rest = heap.cdr(form);
     if (!rest.isCons()) return Error.BadArgList;
     const name = if (args.len == 2) try nameOf(ev, args[1]) else null;
-    return compiler.compileLambda(ev, name, heap.car(rest), heap.cdr(rest));
+    return compiler.compileLambda(ev, name, heap.car(rest), heap.cdr(rest), try definedSymbol(ev, args));
 }
 
 /// `(%compile-function function &optional name)`: a compiled function
@@ -80,7 +90,7 @@ fn compileFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
     const closure = f.payload.closure;
     if (closure.is_macro or closure.captured_env != null or closure.captured_fenv != null) return fn_v;
     const name = if (args.len == 2) try nameOf(ev, args[1]) else f.name;
-    return compiler.compileLambda(ev, name, closure.params, closure.body);
+    return compiler.compileLambda(ev, name, closure.params, closure.body, try definedSymbol(ev, args));
 }
 
 fn macroexpand1Fn(p: *anyopaque, args: []const Value) Error!Value {

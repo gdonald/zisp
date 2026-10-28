@@ -28,7 +28,6 @@ pub const HeapType = enum(u8) {
     stream = 7,
     ratio = 8,
     complex = 9,
-    single_float = 10,
     double_float = 11,
     weak_pointer = 12,
     closure = 13,
@@ -86,14 +85,6 @@ pub const HeapString = extern struct {
     pub fn allocated(self: *HeapString) []u32 {
         return self.codes[0..self.capacity];
     }
-};
-
-/// Single-precision float box. The fixed `_pad` keeps `value` 8-byte
-/// aligned so the GC can scan headers uniformly.
-pub const HeapSingleFloat = extern struct {
-    header: HeapHeader,
-    value: f32,
-    _pad: u32 = 0,
 };
 
 pub const HeapDoubleFloat = extern struct {
@@ -613,15 +604,6 @@ pub const Heap = struct {
         s.capacity = capacity;
     }
 
-    pub fn allocSingleFloat(self: *Heap, x: f32) !Value {
-        const obj = try self.create(HeapSingleFloat);
-        obj.* = .{
-            .header = .{ .type_tag = .single_float, .size = @sizeOf(HeapSingleFloat) },
-            .value = x,
-        };
-        return Value.fromHeapAddr(@intFromPtr(obj));
-    }
-
     pub fn allocDoubleFloat(self: *Heap, x: f64) !Value {
         const obj = try self.create(HeapDoubleFloat);
         obj.* = .{
@@ -910,10 +892,6 @@ pub fn asString(v: Value) *HeapString {
     return @ptrFromInt(v.toHeapAddr());
 }
 
-pub fn asSingleFloat(v: Value) *HeapSingleFloat {
-    return @ptrFromInt(v.toHeapAddr());
-}
-
 pub fn asDoubleFloat(v: Value) *HeapDoubleFloat {
     return @ptrFromInt(v.toHeapAddr());
 }
@@ -995,7 +973,7 @@ pub fn isComplex(v: Value) bool {
 }
 
 pub fn isSingleFloat(v: Value) bool {
-    return v.tag() == .heap and heapType(v) == .single_float;
+    return v.isSingleFloat();
 }
 
 pub fn isDoubleFloat(v: Value) bool {

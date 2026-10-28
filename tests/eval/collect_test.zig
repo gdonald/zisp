@@ -137,10 +137,10 @@ test "collecting twice in a row reclaims nothing the second time" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
     _ = try fx.eval("(defparameter *kept* (list 1 2 3))");
-    try collect.collect(&fx.ev);
+    try collect.collectScoped(&fx.ev, .major);
     const settled = fx.liveBytes();
 
-    try collect.collect(&fx.ev);
+    try collect.collectScoped(&fx.ev, .major);
 
     try testing.expectEqual(settled, fx.liveBytes());
 }

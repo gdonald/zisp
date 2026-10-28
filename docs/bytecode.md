@@ -2,8 +2,8 @@
 
 `compile` turns a lambda expression into a function that runs on a stack
 machine instead of being walked by the interpreter. The compiler is in
-`src/compiler/`: `convert.zig` and `emit.zig` are its two passes,
-`bytecode.zig` holds the instruction set, and `vm.zig` runs it.
+`src/compiler/`: `convert.zig`, `infer.zig` and `emit.zig` are its three
+passes, `bytecode.zig` holds the instruction set, and `vm.zig` runs it.
 
 With `ext:*evaluator-mode*` set to `:compile`, `eval`, `load` and the
 REPL compile every top-level form as the body of a function of no
@@ -32,7 +32,29 @@ binding:
 - for each local exit, whether it passes anything that changes the stack
   depth or the dynamic state on the way out.
 
-The second pass emits each function's code, children first. A form is
+The second pass types the tree. It runs once the tree is complete, so it
+knows which variables are ever assigned, and it finds a form's type from:
+
+- a type declaration on a variable, and `the`;
+- a constant;
+- the initial value of a variable nothing assigns, so in
+  `(let ((y (+ x 1))) ...)` with x declared `(integer 0 100)`, y is an
+  integer from 1 to 101;
+- a `(typep var 'type)` test, which gives a variable nothing assigns that
+  type in the branch the test guards;
+- the result type derived for a compiled global function, when
+  `ext:*derive-function-types*` is true. It is NIL to begin with, since a
+  global function can be redefined to return something else. A call
+  typed this way has its result checked against the type where safety is
+  above 0.
+
+The types it uses are fixnums within a range, and single-floats.
+Ranges follow the arithmetic, so a sum or product known to stay within
+the fixnums is a fixnum. Compiling a global function, with `defun` in
+compiled code or with `compile` and a name, records the type its body
+returns.
+
+The third pass emits each function's code, children first. A form is
 compiled for one of four destinations: for effect, one value on the
 stack, every value in the values register, or the function's own return.
 A call in return position is a tail call.
@@ -282,23 +304,37 @@ list being taken apart:
 | `list_key` | k; l, i, target | as `key_arg`, in the property list in slot l |
 | `check_list_keys` | k; l, allow | as `check_keys`, for the property list in slot l |
 
-Primitives work on fixnums themselves and call the standard function for
-anything else, so the result is the one the function gives:
+Primitives work on fixnums themselves, and `add`, `sub` and `mul` on two
+single-floats too, and call the standard function for anything else, so
+the result is the one the function gives. `+`, `-` and `*` of more than
+two arguments are compiled as a chain of two-argument instructions, left
+to right:
 
 | Instruction | Function |
 | --- | --- |
 | `add`, `sub` | `+`, `-` of two arguments |
 | `less`, `greater`, `less_equal`, `greater_equal`, `num_equal` | `<`, `>`, `<=`, `>=`, `=` of two arguments |
 | `inc`, `dec` | `1+`, `1-` |
+| `mul` | `*` of two arguments |
 | `car`, `cdr` | `car`, `cdr` |
 | `eq`, `cons`, `not` | `eq`, `cons`, `not` and `null` |
 
-Where the compiler knows every argument is a fixnum, from a type
-declaration, a `the` or a constant, it uses an instruction that does not
-check them: `add_fixnums`, `sub_fixnums`, `less_fixnums`,
-`greater_fixnums`, `less_equal_fixnums`, `greater_equal_fixnums`,
-`num_equal_fixnums`, `inc_fixnum` and `dec_fixnum`. A sum or difference
-too large for a fixnum still comes out as a bignum.
+Where the typing pass knows every argument is a fixnum, it uses an
+instruction that does not check them: `add_fixnums`, `sub_fixnums`,
+`mul_fixnums`, `less_fixnums`, `greater_fixnums`, `less_equal_fixnums`,
+`greater_equal_fixnums`, `num_equal_fixnums`, `inc_fixnum` and
+`dec_fixnum`. A result too large for a fixnum still comes out as a
+bignum.
+
+Where it knows every argument is a single-float, it uses
+`add_single_floats`, `sub_single_floats`, `mul_single_floats`,
+`less_single_floats`, `greater_single_floats`,
+`less_equal_single_floats`, `greater_equal_single_floats` and
+`num_equal_single_floats`, which work on the float bits a single-float
+value holds. An integer constant whose single-float is exact counts as
+that single-float. `1+` and `1-` of a single-float are an add or
+subtract of 1.0. A result that overflows goes to the standard function,
+which signals the error.
 
 `check_type` k signals `type-error` unless the value on top of the stack
 is of the type in constant k, leaving the value where it is. It is what
@@ -347,3 +383,20 @@ compiled loop is less than three times as fast.
 | Measured on | Interpreted | Compiled | Ratio |
 | --- | --- | --- | --- |
 | macOS, aarch64, 2026-10-24 | 181.6 ms | 9.0 ms | 20.2x |
+
+    zig build unboxing-bench -Doptimize=ReleaseFast
+
+`tests/lisp/unboxing-bench.lisp` times four loops with type
+declarations, interpreted and compiled, taking the best of three rounds
+for each, and fails when a compiled one is less than ten times as fast:
+a fixnum sum to a million, a single-float dot product of two vectors of
+a million elements, the factorial of 19 by `do` twenty thousand times,
+and the Mandelbrot escape test over a 64 by 64 grid at up to 200
+iterations a point.
+
+| Measured on, 2026-10-27 | Loop | Interpreted | Compiled | Ratio |
+| --- | --- | --- | --- | --- |
+| macOS, aarch64 | fixnum sum | 184.3 ms | 9.2 ms | 19.9x |
+| macOS, aarch64 | dot product | 252.4 ms | 19.8 ms | 12.8x |
+| macOS, aarch64 | factorial | 86.3 ms | 4.6 ms | 18.7x |
+| macOS, aarch64 | Mandelbrot | 111.6 ms | 6.1 ms | 18.2x |

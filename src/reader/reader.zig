@@ -751,7 +751,7 @@ pub const Reader = struct {
     fn parseFloatAt(self: *Reader, text: []const u8, p: Position) Error!Value {
         const fv = float_parse.parseFloatLexeme(text) catch return self.errAt(p, Error.BadToken);
         return switch (fv) {
-            .single => |x| try self.heap.allocSingleFloat(x),
+            .single => |x| Value.fromSingleFloat(x),
             .double => |x| try self.heap.allocDoubleFloat(x),
         };
     }

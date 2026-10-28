@@ -84,9 +84,9 @@ pub const Handler = struct {
 
 /// The functions a primitive instruction stands for, called when the
 /// arguments are not ones the instruction handles itself.
-const fallback_names = [_][]const u8{ "+", "-", "<", ">", "<=", ">=", "=", "1+", "1-", "CAR", "CDR" };
+const fallback_names = [_][]const u8{ "+", "-", "<", ">", "<=", ">=", "=", "1+", "1-", "CAR", "CDR", "*" };
 
-const Fallback = enum(u8) { add, sub, less, greater, less_equal, greater_equal, num_equal, inc, dec, car, cdr };
+const Fallback = enum(u8) { add, sub, less, greater, less_equal, greater_equal, num_equal, inc, dec, car, cdr, mul };
 
 pub const VM = struct {
     allocator: std.mem.Allocator,
@@ -101,6 +101,8 @@ pub const VM = struct {
     in_reserve: bool = false,
     fallbacks: [fallback_names.len]Value = undefined,
     fixnum_symbol: Value = undefined,
+    single_float_symbol: Value = undefined,
+    integer_symbol: Value = undefined,
     typep_symbol: Value = undefined,
     /// The callees megamorphic call sites have looked up, with the epoch
     /// the table was filled in.
@@ -116,6 +118,8 @@ pub const VM = struct {
         vm.* = .{ .allocator = ev.allocator, .stack = stack };
         for (fallback_names, 0..) |name, i| vm.fallbacks[i] = try ev.interner.intern(name);
         vm.fixnum_symbol = try ev.interner.intern("FIXNUM");
+        vm.single_float_symbol = try ev.interner.intern("SINGLE-FLOAT");
+        vm.integer_symbol = try ev.interner.intern("INTEGER");
         vm.typep_symbol = try ev.interner.intern("TYPEP");
         return vm;
     }
@@ -331,6 +335,17 @@ pub const VM = struct {
 
     fn primary(ev: *const Evaluator) Value {
         return if (ev.values.items.len == 0) value.NIL else ev.values.items[0];
+    }
+
+    /// Whether `spec` is `(integer lo hi)` with fixnum bounds, and `n` is
+    /// within them.
+    fn inFixnumRange(self: *const VM, spec: Value, n: i64) bool {
+        if (!spec.isCons() or !heap.car(spec).equalsRaw(self.integer_symbol)) return false;
+        const bounds = heap.cdr(spec);
+        if (!bounds.isCons() or !heap.cdr(bounds).isCons()) return false;
+        const lo = heap.car(bounds);
+        const hi = heap.car(heap.cdr(bounds));
+        return lo.isFixnum() and hi.isFixnum() and n >= lo.toFixnum() and n <= hi.toFixnum();
     }
 
     fn fallback(self: *VM, ev: *Evaluator, which: Fallback, args: []const Value) Error!Value {
@@ -654,6 +669,10 @@ pub const VM = struct {
             .add_fixnums, .sub_fixnums => opAddFixnums(run, w),
             .less_fixnums, .greater_fixnums, .less_equal_fixnums, .greater_equal_fixnums, .num_equal_fixnums => opCompareFixnums(run, w),
             .inc_fixnum, .dec_fixnum => opIncFixnum(run, w),
+            .mul => opMul(run, w),
+            .mul_fixnums => opMulFixnums(run, w),
+            .add_single_floats, .sub_single_floats, .mul_single_floats => opArithSingleFloats(run, w),
+            .less_single_floats, .greater_single_floats, .less_equal_single_floats, .greater_equal_single_floats, .num_equal_single_floats => opCompareSingleFloats(run, w),
             .check_type => opCheckType(run, w),
         };
     }
@@ -1352,6 +1371,14 @@ pub const VM = struct {
                 return .next;
             }
         }
+        if (x.isSingleFloat() and y.isSingleFloat()) {
+            const f = if (is_add) x.toSingleFloat() + y.toSingleFloat() else x.toSingleFloat() - y.toSingleFloat();
+            if (std.math.isFinite(f)) {
+                run.stack[run.sp - 2] = Value.fromSingleFloat(f);
+                run.sp -= 1;
+                return .next;
+            }
+        }
         run.stack[run.sp - 2] = try run.vm.fallback(run.ev, if (is_add) .add else .sub, run.stack[run.sp - 2 .. run.sp]);
         run.sp -= 1;
         return .next;
@@ -1472,12 +1499,94 @@ pub const VM = struct {
         return .next;
     }
 
+    inline fn opMul(run: *Run, _: u32) Error!Flow {
+        const x = run.stack[run.sp - 2];
+        const y = run.stack[run.sp - 1];
+        if (x.isFixnum() and y.isFixnum()) {
+            if (fixnumProduct(x.toFixnum(), y.toFixnum())) |n| {
+                run.stack[run.sp - 2] = Value.fromFixnum(n);
+                run.sp -= 1;
+                return .next;
+            }
+        }
+        if (x.isSingleFloat() and y.isSingleFloat()) {
+            const f = x.toSingleFloat() * y.toSingleFloat();
+            if (std.math.isFinite(f)) {
+                run.stack[run.sp - 2] = Value.fromSingleFloat(f);
+                run.sp -= 1;
+                return .next;
+            }
+        }
+        run.stack[run.sp - 2] = try run.vm.fallback(run.ev, .mul, run.stack[run.sp - 2 .. run.sp]);
+        run.sp -= 1;
+        return .next;
+    }
+
+    fn fixnumProduct(x: i64, y: i64) ?i64 {
+        const product = @mulWithOverflow(x, y);
+        if (product[1] != 0) return null;
+        if (product[0] < value.FIXNUM_MIN or product[0] > value.FIXNUM_MAX) return null;
+        return product[0];
+    }
+
+    inline fn opMulFixnums(run: *Run, _: u32) Error!Flow {
+        if (fixnumProduct(run.stack[run.sp - 2].toFixnum(), run.stack[run.sp - 1].toFixnum())) |n| {
+            run.stack[run.sp - 2] = Value.fromFixnum(n);
+        } else {
+            run.stack[run.sp - 2] = try run.vm.fallback(run.ev, .mul, run.stack[run.sp - 2 .. run.sp]);
+        }
+        run.sp -= 1;
+        return .next;
+    }
+
+    /// `+`, `-` and `*` of two values the compiler knows are single-floats.
+    /// A result that overflows goes through the standard function, which
+    /// signals the error.
+    inline fn opArithSingleFloats(run: *Run, w: u32) Error!Flow {
+        const x = run.stack[run.sp - 2].toSingleFloat();
+        const y = run.stack[run.sp - 1].toSingleFloat();
+        const op = bytecode.opOf(w);
+        const f = switch (op) {
+            .add_single_floats => x + y,
+            .sub_single_floats => x - y,
+            else => x * y,
+        };
+        if (std.math.isFinite(f)) {
+            run.stack[run.sp - 2] = Value.fromSingleFloat(f);
+        } else {
+            const which: Fallback = switch (op) {
+                .add_single_floats => .add,
+                .sub_single_floats => .sub,
+                else => .mul,
+            };
+            run.stack[run.sp - 2] = try run.vm.fallback(run.ev, which, run.stack[run.sp - 2 .. run.sp]);
+        }
+        run.sp -= 1;
+        return .next;
+    }
+
+    inline fn opCompareSingleFloats(run: *Run, w: u32) Error!Flow {
+        const p = run.stack[run.sp - 2].toSingleFloat();
+        const q = run.stack[run.sp - 1].toSingleFloat();
+        run.stack[run.sp - 2] = boolean(switch (bytecode.opOf(w)) {
+            .less_single_floats => p < q,
+            .greater_single_floats => p > q,
+            .less_equal_single_floats => p <= q,
+            .greater_equal_single_floats => p >= q,
+            else => p == q,
+        });
+        run.sp -= 1;
+        return .next;
+    }
+
     /// Signal `type-error` unless the value on top of the stack is of the
     /// type in constant A. The value stays where it is.
     inline fn opCheckType(run: *Run, w: u32) Error!Flow {
         const spec = run.r.consts[w >> 8];
         const v = run.stack[run.sp - 1];
         if (spec.equalsRaw(run.vm.fixnum_symbol) and v.isFixnum()) return .next;
+        if (spec.equalsRaw(run.vm.single_float_symbol) and v.isSingleFloat()) return .next;
+        if (v.isFixnum() and run.vm.inFixnumRange(spec, v.toFixnum())) return .next;
         const typep = symbol_mod.symbol(run.vm.typep_symbol).function_cell;
         if (!(try run.ev.callFunction(typep, &.{ v, spec })).equalsRaw(value.NIL)) return .next;
         run.ev.error_datum = v;
