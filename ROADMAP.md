@@ -715,12 +715,12 @@ Things no other CL implementation can easily do, because they don't have Zig und
   - [ ] 10.2.4. Strip out the file/stream/pathname code paths in `freestanding` builds
   - [ ] 10.2.5. Specific board chosen and committed: Raspberry Pi Pico (RP2040, Cortex-M0+). Acceptance: zisp cross-compiles for `thumbv6m-freestanding`, image fits in 64KB, blinks the on-board LED via a `gpio` builtin. Demo committed to `examples/blink-pico/` with build instructions
   - [ ] 10.2.6. ESP32 follow-up — same shape as 10.2.5
-- [ ] 10.3. WASM
+- [x] 10.3. WASM
   - [x] 10.3.1. `wasm32-freestanding` build
   - [x] 10.3.2. `wasm32-wasi` build with full file/stream support
   - [x] 10.3.3. Browser demo: REPL in a `<textarea>`
-  - [ ] 10.3.4. JS interop. **Prerequisite**: `docs/wasm-interop.md` written. Minimum demo: a 20-line Lisp program calls `console.log("hello")` and receives back a result from `Date.now()`. Acceptance: that demo runs in Chrome and Firefox; commit to `examples/wasm-repl/`
-- [ ] 10.4. C interoperability
+  - [x] 10.3.4. JS interop. **Prerequisite**: `docs/wasm-interop.md` written. Minimum demo: a 20-line Lisp program calls `console.log("hello")` and receives back a result from `Date.now()`. Acceptance: that demo runs in Chrome and Firefox; commit to `examples/wasm-repl/`
+- [x] 10.4. C interoperability
   - [x] 10.4.1. FFI declarations (`defcfun`-style). Split:
     - [x] 10.4.1a. C-type representation in Lisp: `:int`, `:long`, `:pointer`, `:char`, `:float`, `:double`, plus type aliases (`size_t`, `off_t`)
     - [x] 10.4.1b. `defcfun` macro syntax: `(defcfun "strlen" :int (s :pointer))` parses and registers
@@ -729,7 +729,7 @@ Things no other CL implementation can easily do, because they don't have Zig und
     - [x] 10.4.1e. Library lookup: `defcfun` resolves the symbol via `dlopen`/`dlsym` (or platform equivalent)
     - [x] 10.4.1f. Integration test: call `strlen` on a Lisp string, get back correct length on Linux and macOS
   - [x] 10.4.2. Direct C-ABI struct generation from Lisp `defstruct`
-  - [ ] 10.4.3. Callbacks (Lisp function → C function pointer). Implementation choice (libffi vs hand-rolled per-arch trampolines) documented in `docs/ffi-callbacks.md` BEFORE implementation. Acceptance: a Lisp function passed as comparator to `qsort(3)` correctly sorts a 100-element array on `x86_64-linux` and `aarch64-darwin` (CI runs both). Variadic callbacks are explicitly out of scope — but documenting that they're out of scope is a sub-bullet, not silence
+  - [x] 10.4.3. Callbacks (Lisp function → C function pointer). Implementation choice (libffi vs hand-rolled per-arch trampolines) documented in `docs/ffi-callbacks.md` BEFORE implementation. Acceptance: a Lisp function passed as comparator to `qsort(3)` correctly sorts a 100-element array on `x86_64-linux` and `aarch64-darwin` (CI runs both). Variadic callbacks are explicitly out of scope — but documenting that they're out of scope is a sub-bullet, not silence
   - [x] 10.4.4. `with-foreign-object`, `foreign-alloc`, `foreign-free`
 - [ ] 10.5. Allocator extensibility
   - [ ] 10.5.1. Expose Zig's allocator interface at the Lisp level

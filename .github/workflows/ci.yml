@@ -57,3 +57,21 @@ jobs:
           sudo apt-get install -y sbcl
           tests/run-corpus-sbcl.sh tests/lisp/unwind-protect-corpus.lisp \
             tests/lisp/init-protocol.lisp tests/lisp/loop-corpus.lisp
+
+  test-macos:
+    if: github.event.context == 'continuous-integration/jenkins/branch' && github.event.state == 'success'
+    runs-on: macos-15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.sha }}
+          submodules: recursive
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: zig build tests on aarch64-darwin
+        run: zig build tests --summary all
