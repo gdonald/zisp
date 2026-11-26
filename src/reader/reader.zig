@@ -32,9 +32,15 @@ const bignum = @import("../runtime/bignum.zig");
 const complex = @import("../runtime/complex.zig");
 const character = @import("../runtime/character.zig");
 const pathname_mod = @import("../runtime/pathname.zig");
+const build_options = @import("build_options");
+const builtin = @import("builtin");
 const symbol = @import("../runtime/symbol.zig");
 const source_pos = @import("../runtime/source_pos.zig");
 const stack_mod = @import("../runtime/stack.zig");
+
+/// A build with no file system has no pathname functions, so `#P` is a
+/// reader error there.
+const pathnames_available = !build_options.freestanding and builtin.os.tag != .freestanding;
 
 const Token = tok.Token;
 const TokenKind = tok.TokenKind;
@@ -510,6 +516,7 @@ pub const Reader = struct {
         if (t.kind == .eof) return self.errAt(t.pos, Error.EndOfInput);
         if (t.kind != .string) return self.errAt(t.pos, Error.BadToken);
         if (self.suppress) return value.NIL;
+        if (!pathnames_available) return self.errAt(t.pos, Error.BadToken);
         const namestring = try self.parseStringAt(t.text, t.pos);
         const text = try heap_mod.stringUtf8Alloc(self.heap.allocator, namestring);
         return pathname_mod.parseText(self.heap, self.interner, text) catch

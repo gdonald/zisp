@@ -73,7 +73,7 @@ fn runProgramFn(p: *anyopaque, args: []const Value) Error!Value {
 
     const code: i64 = switch (result.term) {
         .exited => |exit_code| exit_code,
-        .signal => |signal| 128 + @as(i64, @intFromEnum(signal)),
+        .signal => |signal| 128 + @as(i64, @backingInt(signal)),
         // The wait asks only for exits, so stops and continues are never reported.
         .stopped, .unknown => unreachable,
     };

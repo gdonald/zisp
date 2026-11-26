@@ -16,6 +16,7 @@ const reader_mod = @import("../reader.zig");
 const eval_mod = @import("../eval/eval.zig");
 const readtables = @import("readtables.zig");
 const function = @import("../eval/function.zig");
+const fs = @import("fs.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -29,8 +30,9 @@ fn evaluator(p: *anyopaque) *Evaluator {
 pub const FASL_TYPE = "zfasl";
 
 pub fn registerPathnames(ev: *Evaluator) !void {
-    _ = try ev.defineNative("PATHNAME", &pathnameFn);
     _ = try ev.defineNative("PATHNAMEP", &pathnamepFn);
+    if (!fs.available) return;
+    _ = try ev.defineNative("PATHNAME", &pathnameFn);
     _ = try ev.defineNative("MAKE-PATHNAME", &makePathnameFn);
     _ = try ev.defineNative("MERGE-PATHNAMES", &mergePathnamesFn);
     _ = try ev.defineNative("NAMESTRING", &namestringFn);

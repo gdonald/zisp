@@ -48,6 +48,9 @@ jobs:
       - name: freestanding build
         run: zig build -Dfreestanding=true
 
+      - name: no file system functions in the freestanding build
+        run: ZISP_TEST_FILTER="file system" zig build tests -Dfreestanding=true
+
       - name: no OS-facing std modules in the runtime, evaluator or reader
         run: "! grep -rnE 'std\\.(io|fs|os|process|time|http|net)' src/runtime/ src/eval/ src/reader/"
 

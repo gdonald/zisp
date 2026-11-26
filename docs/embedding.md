@@ -10,8 +10,25 @@ defer repl.deinit();
 try repl.run("(+ 1 2)");
 ```
 
-With no `std.Io`, the session has no file system. `-Dfreestanding=true`
-also leaves out the foreign function interface.
+With no `std.Io`, the session has no file system, and the file functions
+signal `file-error`.
+
+## What a freestanding build leaves out
+
+`-Dfreestanding=true`, and any build for a freestanding target, compiles
+none of the file system code. These functions are not defined:
+
+- file streams: `open` and `file-length`. `with-open-file` expands to a
+  call to `open`, so it signals `undefined-function`.
+- files: `load`, `compile-file`, `probe-file`, `truename`, `file-write-date`,
+  `delete-file`, `rename-file`, `ensure-directories-exist`, `directory`,
+  `ext:delete-directory` and `ext:save-image`
+- pathnames: `pathname`, `make-pathname`, `parse-namestring`,
+  `merge-pathnames`, `namestring` and the rest of the pathname functions,
+  except `pathnamep`, which returns NIL for every object
+
+Reading `#P"..."` signals an error. String streams, `read-sequence` and
+`write-sequence` remain. The foreign function interface is also left out.
 
 ## Supplying memory
 

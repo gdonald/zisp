@@ -36,11 +36,13 @@ fn evaluator(p: *anyopaque) *Evaluator {
 pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORMAT", &formatFn);
     _ = try ev.defineNative("%FORMAT-TAIL", &formatTailFn);
-    _ = try ev.defineNative("LOAD", &loadFn);
-    _ = try ev.defineNative("COMPILE-FILE", &compileFileFn);
-    _ = try ev.defineNative("TRUENAME", &truenameFn);
-    _ = try ev.defineNative("PROBE-FILE", &probeFileFn);
-    _ = try ev.defineNative("FILE-WRITE-DATE", &fileWriteDateFn);
+    if (fs.available) {
+        _ = try ev.defineNative("LOAD", &loadFn);
+        _ = try ev.defineNative("COMPILE-FILE", &compileFileFn);
+        _ = try ev.defineNative("TRUENAME", &truenameFn);
+        _ = try ev.defineNative("PROBE-FILE", &probeFileFn);
+        _ = try ev.defineNative("FILE-WRITE-DATE", &fileWriteDateFn);
+    }
     _ = try ev.defineNative("PRIN1-TO-STRING", toStringFn(.escape));
     _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(.plain));
     _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(.current));

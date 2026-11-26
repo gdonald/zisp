@@ -16,6 +16,7 @@ const hash_tables = @import("hash_tables.zig");
 const streams = @import("streams.zig");
 const system = @import("system.zig");
 const reader_mod = @import("../reader.zig");
+const fs = @import("fs.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -64,8 +65,10 @@ fn refTo(index: u32) u64 {
 }
 
 pub fn register(ev: *Evaluator) !void {
-    const save = try ev.interner.internExtension("SAVE-IMAGE");
-    symbol_mod.symbol(save).function_cell = try ev.makeNative("SAVE-IMAGE", &saveImageFn);
+    if (fs.available) {
+        const save = try ev.interner.internExtension("SAVE-IMAGE");
+        symbol_mod.symbol(save).function_cell = try ev.makeNative("SAVE-IMAGE", &saveImageFn);
+    }
     const walk = try ev.interner.internExtension("%WALK-HEAP");
     const walker = try ev.makeNative("%WALK-HEAP", &walkHeapFn);
     function.asFunction(walker).preserves_values = true;
@@ -632,7 +635,7 @@ fn saveImageFn(p: *anyopaque, args: []const Value) Error!Value {
     defer ev.allocator.free(path);
     const bytes = try saveSession(ev, ev.allocator);
     defer ev.allocator.free(bytes);
-    try @import("fs.zig").writeFile(io, path, bytes);
+    try fs.writeFile(io, path, bytes);
     return value.T;
 }
 

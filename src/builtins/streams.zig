@@ -27,7 +27,10 @@ fn evaluator(p: *anyopaque) *Evaluator {
 }
 
 pub fn registerStreams(ev: *Evaluator) !void {
-    _ = try ev.defineNative("OPEN", &openFn);
+    if (fs.available) {
+        _ = try ev.defineNative("OPEN", &openFn);
+        _ = try ev.defineNative("FILE-LENGTH", &fileLengthFn);
+    }
     _ = try ev.defineNative("CLOSE", &closeFn);
     _ = try ev.defineNative("STREAMP", &streampFn);
     _ = try ev.defineNative("INPUT-STREAM-P", directionFn(.input));
@@ -50,7 +53,6 @@ pub fn registerStreams(ev: *Evaluator) !void {
     _ = try ev.defineNative("FORCE-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("FINISH-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("CLEAR-OUTPUT", &noOpStreamFn);
-    _ = try ev.defineNative("FILE-LENGTH", &fileLengthFn);
     _ = try ev.defineNative("FILE-POSITION", &filePositionFn);
     _ = try ev.defineNative("LISTEN", &listenFn);
 
@@ -363,7 +365,7 @@ fn closeFn(p: *anyopaque, args: []const Value) Error!Value {
     const s = try expectStream(args[0]);
     if (!s.is_open) return value.NIL;
     s.is_open = false;
-    if (s.kind != .file) return value.T;
+    if (!fs.available or s.kind != .file) return value.T;
     if (s.direction == .output or s.direction == .io) try writeBack(ev, s);
     if (heap.isString(s.delete_on_close)) {
         const io = ev.io orelse return Error.FileError;

@@ -53,5 +53,6 @@ of the address runs the demo when the page loads.
 
 `src/wasm.zig` holds the exports the page calls, and
 `examples/wasm-repl/zisp.js` is the loader. A freestanding build has no
-file system: `open`, `load` and the rest signal `file-error`.
+file system, so `open`, `load` and the other file functions are not
+defined there. [docs/embedding.md](embedding.md) lists what is left out.
 `docs/wasm-interop.md` covers `js:call`.

@@ -1,4 +1,4 @@
-;;;; Files and directories, and reading and writing whole sequences.
+;;;; Files and directories.
 
 (in-package "COMMON-LISP")
 
@@ -89,25 +89,6 @@
                  (when file (push file found))))))
     (sort (remove-duplicates found :test #'equal :key #'namestring) #'string< :key #'namestring)))
 
-(defun %character-stream-p (stream)
-  (subtypep (stream-element-type stream) 'character))
-
-(defun read-sequence (sequence stream &key (start 0) end)
-  (let ((end (or end (length sequence)))
-        (characters (%character-stream-p stream)))
-    (do ((index start (1+ index)))
-        ((>= index end) index)
-      (let ((item (if characters (read-char stream nil :eof) (read-byte stream nil :eof))))
-        (when (eq item :eof) (return index))
-        (setf (elt sequence index) item)))))
-
-(defun write-sequence (sequence stream &key (start 0) end)
-  (let ((items (subseq sequence start end)))
-    (if (%character-stream-p stream)
-        (map nil (lambda (c) (write-char c stream)) items)
-        (map nil (lambda (b) (write-byte b stream)) items))
-    sequence))
-
-(export '(delete-file rename-file ensure-directories-exist directory read-sequence write-sequence))
+(export '(delete-file rename-file ensure-directories-exist directory))
 
 (in-package "COMMON-LISP-USER")

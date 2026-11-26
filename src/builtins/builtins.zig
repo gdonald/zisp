@@ -11,6 +11,7 @@ pub const registerSystem = system.registerSystem;
 pub const packages = @import("packages.zig");
 pub const pathnames = @import("pathnames.zig");
 const files = @import("files.zig");
+const fs = @import("fs.zig");
 pub const strings = @import("strings.zig");
 pub const sequences = @import("sequences.zig");
 pub const arrays = @import("arrays.zig");
@@ -182,7 +183,7 @@ pub fn registerNatives(ev: *Evaluator) !void {
 
     try packages.registerPackages(ev);
     try pathnames.registerPathnames(ev);
-    try files.registerFiles(ev);
+    if (fs.available) try files.registerFiles(ev);
     try gc.registerGc(ev);
     try strings.registerStrings(ev);
     try sequences.registerSequences(ev);
@@ -217,7 +218,8 @@ pub fn loadBootSources(ev: *Evaluator) !void {
     try system.evalSource(ev, clos_source);
     try system.evalSource(ev, conditions_source);
     try system.evalSource(ev, types_source);
-    try system.evalSource(ev, files_source);
+    try system.evalSource(ev, streams_source);
+    if (fs.available) try system.evalSource(ev, files_source);
     try system.evalSource(ev, debugger_source);
     try system.evalSource(ev, ffi_source);
     try system.evalSource(ev, zig_source);
@@ -605,6 +607,7 @@ const lists_source = @embedFile("../lisp/lists.lisp");
 const loop_source = @embedFile("../lisp/loop.lisp");
 const sequences_source = @embedFile("../lisp/sequences.lisp");
 const files_source = @embedFile("../lisp/files.lisp");
+const streams_source = @embedFile("../lisp/streams.lisp");
 const clos_source = @embedFile("../lisp/clos.lisp");
 const conditions_source = @embedFile("../lisp/conditions.lisp");
 const types_source = @embedFile("../lisp/types.lisp");

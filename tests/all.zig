@@ -10,6 +10,7 @@ comptime {
     _ = @import("runtime/sweep_test.zig");
     _ = @import("runtime/stack_test.zig");
     _ = @import("runtime/host_allocator_test.zig");
+    _ = @import("builtins/file_system_absent_test.zig");
     _ = @import("eval/collect_test.zig");
     _ = @import("eval/gc_copy_corpus_test.zig");
     _ = @import("eval/gc_nursery_off_test.zig");
