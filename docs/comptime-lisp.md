@@ -10,8 +10,6 @@ Three things are built on that:
 - checking a function's arithmetic against Zig's typing rules at
   macroexpansion time.
 
-This document is the design. No code for it exists yet.
-
 ## Surface API
 
 The names are exported from a new package, `ZISP-ZIG`, nicknamed `ZIG`.
@@ -19,10 +17,10 @@ The Lisp side lives in `src/lisp/zig.lisp`.
 
 | Name | Kind | Signature and result |
 | --- | --- | --- |
-| `*zig-program*` | variable | The Zig compiler to run. Initially the value of the environment variable `ZISP_ZIG` when it is set, otherwise `"zig"`, found on `PATH` |
-| `*zig-cache-directory*` | variable | Where generator files and their results are kept. Initially `$XDG_CACHE_HOME/zisp/zig/`, or `~/.cache/zisp/zig/` when `XDG_CACHE_HOME` is unset |
-| `(comptime-eval zig-expression &key imports)` | function | `zig-expression` is a string holding one Zig expression. `imports` is a list of `(name path)` pairs, each made available to the expression as `const name = @import("path");`. `std` is always imported. Returns the Lisp form the expression's value prints as (see the table below) |
-| `(define-cstruct-from-zig name zig-type)` | macro | `zig-type` is a string naming a Zig struct type, such as `"std.c.timespec"`. Expands to a `defcstruct` named `name` with the fields, field types and offsets Zig gives that type |
+| `*zig-program*` | variable | The Zig compiler to run. NIL, its initial value, means the value of the environment variable `ZISP_ZIG` when it is set, otherwise `"zig"`, found on `PATH` |
+| `*zig-cache-directory*` | variable | Where generator files and their results are kept. NIL, its initial value, means `$XDG_CACHE_HOME/zisp/zig/`, or `~/.cache/zisp/zig/` when `XDG_CACHE_HOME` is unset |
+| `(comptime-eval zig-expression &key imports)` | function | `zig-expression` is a string holding one Zig expression. `imports` is a list of `(name path)` pairs, each naming a Zig file the expression reaches as `name`. `std` is always imported. Returns the Lisp form the expression's value prints as (see the table below) |
+| `(define-cstruct-from-zig name zig-type &key imports)` | macro | `zig-type` is a string naming a Zig struct type, such as `"std.c.timespec"`, and `imports` is as for `comptime-eval`. Expands to a `defcstruct` named `name` with the fields, field types and offsets Zig gives that type |
 | `(extern-struct-source &rest structure-names)` | function | A string of Zig source declaring an `extern struct` for each named Lisp `defstruct` |
 | `(write-zig-structs path &rest structure-names)` | function | Writes `(extern-struct-source structure-names...)` to `path` and returns `path` |
 | `(defun-checked name ((parameter type)...) result-type &body body)` | macro | Translates the function into Zig, has Zig type-check it, and expands to a `defun` with the same parameters and type declarations, or signals `zig-type-error` |
@@ -30,6 +28,9 @@ The Lisp side lives in `src/lisp/zig.lisp`.
 | `zig-not-found` | condition, a `zig-error` | `*zig-program*` could not be started |
 | `zig-comptime-error` | condition, a `zig-error` | Zig rejected a `comptime-eval` expression |
 | `zig-type-error` | condition, a `zig-error` | Zig rejected a `defun-checked` body. Adds slots `function-name`, `form` (the Lisp form the first error points at) and `message` (Zig's first error line) |
+
+Each slot has a reader named after the condition and the slot, such as
+`zig-error-output` and `zig-type-error-form`.
 
 `comptime-eval` is an ordinary function, so any `defmacro` can call it
 while expanding. That is the whole mechanism for a macro that calls into
@@ -75,7 +76,7 @@ the file is:
 ```zig
 const std = @import("std");
 const lisp = @import("zisp_lisp.zig");
-const name = @import("path");          // one line per import
+const name = @import("name");          // one line per import
 
 const form = lisp.print(E);
 
@@ -94,20 +95,23 @@ Zig compile error, reported by Zig.
 using `@typeInfo`, `@offsetOf`, `@sizeOf`, `@alignOf` and
 `std.fmt.comptimePrint`. It is kept in the zisp tree as
 `src/zig/zisp_lisp.zig`, built into the zisp binary with `@embedFile`,
-and written to `*zig-cache-directory*` when the copy there is missing or
-differs.
+and written to `*zig-cache-directory*` before each Zig run.
 
 **Running it.** These steps happen in order.
 
-1. The key is the SHA-256 of three strings joined with NUL bytes: the
-   output of `zig version`, the printer's source and the generator's
-   source. `zig version` is run once per process and remembered.
+1. The key is the SHA-256 of these strings joined with NUL characters:
+   the output of `zig version`, the printer's source, the generator's
+   source, and each import's name and file contents. `zig version` is
+   run once per process and remembered.
 2. If `<key>.lisp` exists in the cache directory, its one form is read
    and returned. Zig is not run.
 3. Otherwise the generator is written to `<key>.zig`, and zisp runs
-   `*zig-program*` with the arguments `run --cache-dir <cache>/zig-cache
-   <key>.zig`, in the cache directory, with no shell, capturing standard
-   output and standard error.
+   `*zig-program*` with the arguments `run --cache-dir zig-cache`, then
+   `--dep name` for each import, `-Mroot=<key>.zig`, and `-Mname=path`
+   for each import with its absolute path. It runs in the cache
+   directory, with no shell, capturing standard output and standard
+   error. Each import is a Zig module, since Zig refuses an `@import` of
+   a file outside the generator's directory.
 4. A program that cannot be started signals `zig-not-found`. A nonzero
    exit signals `zig-comptime-error` with Zig's standard error as
    `output`.
@@ -118,11 +122,12 @@ differs.
    returned.
 
 zisp has no way to run a program today. The bridge adds one native,
-`(%run-program program arguments &key directory)`, in
-`src/builtins/system.zig`, returning three values: the exit code, the
-standard output string and the standard error string. It uses
-`std.process.Child` and is left out of freestanding and WASM builds, where
-`comptime-eval` signals `zig-not-found`.
+`(%run-program program arguments directory)`, in `src/builtins/zig.zig`,
+returning three values: the exit code, the standard output string and
+the standard error string. A program that cannot be started returns NIL
+and the reason as the third value. It uses `std.process.run` and is left
+out of freestanding and WASM builds, where `comptime-eval` signals
+`zig-not-found`.
 
 **Cost.** Measured on macOS aarch64 with Zig 0.17.1, for the worked
 example below: 2.5 s with an empty Zig cache, 58 ms when Zig's cache
@@ -149,11 +154,11 @@ a `defcstruct`.
 **Macroexpansion.** `define-cstruct-from-zig` is:
 
 ```lisp
-(defmacro define-cstruct-from-zig (name zig-type)
-  (cstruct-form name (comptime-eval zig-type)))
+(defmacro define-cstruct-from-zig (name zig-type &key imports)
+  (%cstruct-form name (comptime-eval zig-type :imports imports)))
 ```
 
-`cstruct-form` is an internal function of `ZISP-ZIG`. Expanding the
+`%cstruct-form` is internal to zisp. Expanding the
 macro calls `(comptime-eval "std.c.timespec")`, which writes this
 generator:
 
@@ -178,7 +183,7 @@ type. The program writes, on aarch64 macOS:
 (:STRUCT :SIZE 16 :ALIGNMENT 8 (:SEC :OFFSET 0 :TYPE (:SIGNED 64)) (:NSEC :OFFSET 8 :TYPE (:SIGNED 64)))
 ```
 
-**Emitted code.** `cstruct-form` turns each field's type form into an
+**Emitted code.** `%cstruct-form` turns each field's type form into an
 FFI type: `(:SIGNED n)` into `:int8`, `:int16`, `:int32` or `:int64`,
 `(:UNSIGNED n)` into `:uint8` through `:uint64`, `(:FLOAT 32)` into
 `:float`, `(:FLOAT 64)` into `:double` and `:POINTER` into `:pointer`.
@@ -190,7 +195,7 @@ It interns each field name in the current package. The expansion is:
   (nsec :int64))
 ```
 
-`cstruct-form` then lays this `defcstruct` out with the FFI's rules and
+`%cstruct-form` then lays this `defcstruct` out with the FFI's rules and
 compares each offset and the size with what Zig printed. A mismatch,
 such as from a field with an `align` attribute, signals an error naming
 the field, instead of producing a structure C would read differently.
@@ -230,7 +235,8 @@ pub const Sample = extern struct {
 
 which `zig build-obj shapes.zig` compiles. The structure name becomes
 the Zig name by capitalizing each `-`-separated part and dropping the
-`-`, and a slot name by downcasing it and turning `-` into `_`. Fields
+`-`, and a slot name by downcasing it and turning `-` into `_`. A name
+that is a Zig keyword, such as `error`, is written `@"error"`. Fields
 are in slot order.
 
 | Slot `:type` | Zig field type |
@@ -279,34 +285,51 @@ so the macro signals `zig-type-error` with `function-name` `SCALE`,
 form on its own line and records which form each line came from, which
 is how a line number in Zig's error leads back to a form.
 
-When Zig accepts the function, the expansion is a plain `defun`:
+When Zig accepts a function, the expansion is a plain `defun`, after a
+form that records the function's Zig signature so later checked
+functions can call it, at compile time too:
 
 ```lisp
-(defun scale (x factor)
-  (declare (type (signed-byte 32) x) (type single-float factor))
-  (the (signed-byte 32) (* x factor)))
+(defun-checked sum-squares ((x fixnum) (y fixnum)) fixnum
+  (+ (* x x) (* y y)))
+```
+
+expands to
+
+```lisp
+(progn
+  (eval-when (:compile-toplevel :load-toplevel :execute)
+    (setf (gethash 'sum-squares *%checked-functions*) '(("i61" "i61") "i61")))
+  (defun sum-squares (x y)
+    (declare (type fixnum x) (type fixnum y))
+    (the fixnum (progn (+ (* x x) (* y y))))))
 ```
 
 The function runs as Lisp. Zig only checks it.
 
 **Types.** As in the structure table, except that `fixnum` is `i61`,
-the range a zisp fixnum holds, and that a type with no Zig equivalent,
-such as `integer` or `t`, signals an error naming the parameter.
+the range a zisp fixnum holds, `boolean` is `bool`, and a type with no
+Zig equivalent, such as `integer` or `t`, signals an error naming the
+parameter.
 
 **Forms the translator accepts.**
 
 | Lisp | Zig |
 | --- | --- |
-| a parameter or `let` variable | the same name, `-` turned into `_` |
+| a parameter or `let` variable | the same name, `-` turned into `_`, with a numbered suffix when an enclosing variable already has the name, since Zig refuses shadowing |
 | an integer or float literal | the literal |
 | `(+ a b ...)`, `(- a b ...)`, `(* a b ...)` | the operator between the operands, left to right |
 | `(- a)` | `-a` |
 | `(truncate a b)` | `@divTrunc(a, b)` |
 | `(< a b)`, `(> a b)`, `(<= a b)`, `(>= a b)`, `(= a b)` | the comparison |
-| `(if test then else)` | `if (test) then else` |
-| `(let ((var value)...) body...)` | a labeled block with a `const` per variable |
+| `(if test then else)` | `if (test) then else`, or in tail position an `if` statement returning from each branch |
+| `(let ((var value)...) body...)` | a labeled block with a `const` per variable, or in tail position a block of `const` statements |
 | `(the type form)` | `@as(T, form)` |
 | a call to a function already defined with `defun-checked` | a call, with that function declared in the same file from its recorded signature |
+
+Every body form but the last, in the function and in a `let`, is
+evaluated and discarded with `_ =`, and so is a parameter or variable
+the body does not mention, since Zig refuses unused locals.
 
 Anything else signals an error naming the form. The rules are Zig's, and
 they are stricter than Common Lisp's: Zig has no contagion from integer
@@ -334,4 +357,4 @@ and so is returning an `i64` sum from a function declared `(signed-byte
 
 ## Sign-off
 
-- [ ] Approved
+- [x] Approved

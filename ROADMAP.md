@@ -703,11 +703,11 @@ Phase 10: The "Zisp" Differentiators
 
 Things no other CL implementation can easily do, because they don't have Zig underneath.
 
-- [ ] 10.1. `comptime` Lisp
-  - [ ] 10.1.0. **Prerequisite**: `docs/comptime-lisp.md` written defining: (a) the surface API (specific function/macro signatures), (b) one concrete worked example end-to-end (Lisp source → macroexpansion → Zig comptime → emitted code), (c) explicit out-of-scope list, (d) the bridge mechanism between Lisp macroexpansion and Zig comptime evaluation — specific protocol, not "they communicate somehow." No implementation work begins until this doc exists and is reviewed
-  - [ ] 10.1.1. Macros that can call into Zig `comptime` for cross-language code generation
-  - [ ] 10.1.2. Generate Zig `extern struct` definitions from Lisp `defstruct`. Acceptance: a Lisp `(defstruct point x y)` produces a `.zig` file containing the equivalent `extern struct`, compilable by `zig build-obj`
-  - [ ] 10.1.3. Type-check Lisp at the macro layer using Zig's type system as the source of truth
+- [x] 10.1. `comptime` Lisp
+  - [x] 10.1.0. **Prerequisite**: `docs/comptime-lisp.md` written defining: (a) the surface API (specific function/macro signatures), (b) one concrete worked example end-to-end (Lisp source → macroexpansion → Zig comptime → emitted code), (c) explicit out-of-scope list, (d) the bridge mechanism between Lisp macroexpansion and Zig comptime evaluation — specific protocol, not "they communicate somehow." No implementation work begins until this doc exists and is reviewed
+  - [x] 10.1.1. Macros that can call into Zig `comptime` for cross-language code generation
+  - [x] 10.1.2. Generate Zig `extern struct` definitions from Lisp `defstruct`. Acceptance: a Lisp `(defstruct point x y)` produces a `.zig` file containing the equivalent `extern struct`, compilable by `zig build-obj`
+  - [x] 10.1.3. Type-check Lisp at the macro layer using Zig's type system as the source of truth
 - [ ] 10.2. Embedded / no-std
   - [x] 10.2.1. `-Dfreestanding=true` build links against a custom minimal-std (only `std.mem`, `std.math`, `std.meta` permitted). Acceptance: `zig build -Dfreestanding=true` succeeds AND `grep -rE "std\.(io|fs|os|process|time|http|net)" src/runtime/ src/eval/ src/reader/` returns no matches. CI runs the freestanding build on every commit so backsliding is immediate
   - [x] 10.2.2. `freestanding` build target

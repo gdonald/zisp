@@ -131,6 +131,19 @@ test "C structures" {
     try testing.expectEqual(@as(u32, 14), checked);
 }
 
+test "Zig expressions evaluated at Zig compile time" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const text = try std.fmt.allocPrint(
+        testing.allocator,
+        "(progn (setq zisp-zig:*zig-cache-directory* \".zig-cache/tmp/{s}/\") t)\n{s}",
+        .{ tmp.sub_path, @embedFile("lisp/zig-comptime.lisp") },
+    );
+    defer testing.allocator.free(text);
+    const checked = try runCorpus("zig-comptime", text);
+    try testing.expectEqual(@as(u32, 44), checked);
+}
+
 test "files and file streams" {
     const checked = try runCorpus("file-streams", @embedFile("lisp/file-streams.lisp"));
     try testing.expectEqual(@as(u32, 23), checked);

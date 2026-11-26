@@ -1,5 +1,7 @@
 ;;;; Files and directories, and reading and writing whole sequences.
 
+(in-package "COMMON-LISP")
+
 (defmacro %signaling-file-error ((pathname) &body body)
   `(handler-case (progn ,@body)
      (file-error () (error 'file-error :pathname ,pathname))))
@@ -105,3 +107,7 @@
         (map nil (lambda (c) (write-char c stream)) items)
         (map nil (lambda (b) (write-byte b stream)) items))
     sequence))
+
+(export '(delete-file rename-file ensure-directories-exist directory read-sequence write-sequence))
+
+(in-package "COMMON-LISP-USER")
