@@ -61,6 +61,7 @@ zig build -Dfreestanding=true       # leave out the file system and the FFI
 - [docs/ffi.md](docs/ffi.md) - calling C functions
 - [docs/wasm.md](docs/wasm.md) - the WebAssembly builds
 - [docs/wasm-interop.md](docs/wasm-interop.md) - calling JavaScript from Lisp
+- [docs/embedding.md](docs/embedding.md) - starting a session from Zig and supplying its memory
 
 ## License
 

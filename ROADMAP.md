@@ -711,7 +711,7 @@ Things no other CL implementation can easily do, because they don't have Zig und
 - [ ] 10.2. Embedded / no-std
   - [x] 10.2.1. `-Dfreestanding=true` build links against a custom minimal-std (only `std.mem`, `std.math`, `std.meta` permitted). Acceptance: `zig build -Dfreestanding=true` succeeds AND `grep -rE "std\.(io|fs|os|process|time|http|net)" src/runtime/ src/eval/ src/reader/` returns no matches. CI runs the freestanding build on every commit so backsliding is immediate
   - [x] 10.2.2. `freestanding` build target
-  - [ ] 10.2.3. Minimal allocator interface (so user supplies their own on a microcontroller)
+  - [x] 10.2.3. Minimal allocator interface (so user supplies their own on a microcontroller)
   - [ ] 10.2.4. Strip out the file/stream/pathname code paths in `freestanding` builds
   - [ ] 10.2.5. Specific board chosen and committed: Raspberry Pi Pico (RP2040, Cortex-M0+). Acceptance: zisp cross-compiles for `thumbv6m-freestanding`, image fits in 64KB, blinks the on-board LED via a `gpio` builtin. Demo committed to `examples/blink-pico/` with build instructions
   - [ ] 10.2.6. ESP32 follow-up — same shape as 10.2.5

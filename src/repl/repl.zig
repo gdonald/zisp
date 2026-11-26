@@ -63,7 +63,7 @@ pub const Repl = struct {
         self.* = .{
             .gpa = gpa,
             .arena = std.heap.ArenaAllocator.init(gpa),
-            .interner = try symbol_mod.Interner.init(gpa),
+            .interner = undefined,
             .heap = undefined,
             .ev = undefined,
             .out = out,
@@ -75,9 +75,13 @@ pub const Repl = struct {
             .star2 = value.NIL,
             .star3 = value.NIL,
         };
+        errdefer self.arena.deinit();
+        self.interner = try symbol_mod.Interner.init(gpa);
+        errdefer self.interner.deinit();
         try symbol_mod.initStandardSymbols(&self.interner);
         self.heap = heap_mod.Heap.init(self.arena.allocator());
         self.ev = Evaluator.init(gpa, &self.heap, &self.interner);
+        errdefer self.ev.deinit();
         self.ev.out = out;
         self.ev.io = io;
         try eval_pkg.registerStandardSpecialForms(&self.ev);
