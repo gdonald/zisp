@@ -613,3 +613,12 @@ test "disassemble lists a function compiled with debug 3 as the golden file does
     _ = try fx.evalStr("(disassemble 'golden-sample)");
     try testing.expectEqualStrings(@embedFile("../disassemble-golden/sample.expected"), fx.aw.written());
 }
+
+test "disassemble lists a typed loop with fixnum instructions as the golden file does" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try zisp.builtins.system.loadPath(&fx.ev, "tests/disassemble-golden/sum-below.lisp");
+    fx.aw.clearRetainingCapacity();
+    _ = try fx.evalStr("(disassemble 'sum-below)");
+    try testing.expectEqualStrings(@embedFile("../disassemble-golden/sum-below.expected"), fx.aw.written());
+}

@@ -122,27 +122,29 @@ time is the fastest of the three.
 
 ## Recommendation
 
-LLVM through `zig cc`, for `compile-file`, with bytecode kept for
-`compile` and as the fallback wherever no Zig toolchain is found.
+The hand-rolled backend, for x86_64 and aarch64, used by both `compile`
+and `compile-file`, with bytecode kept as the fallback for any form the
+backend does not yet handle.
 
-It is the only option with measured output quality, and that quality is
-the best of the three: TAK runs 25 times as fast as bytecode with
-tagged values and 34 times with unboxed ones. It needs one emitter for
-both targets, and debug information comes with it.
+zisp then depends on Zig to build and on nothing at run time. Native
+code is bytes zisp writes into its own heap, so a saved image carries it
+like any other object, and `compile` at the REPL starts no external
+process.
 
 What that costs:
 
-- native compilation at run time needs a 250 MB toolchain present;
-- each compilation unit takes about 100 ms to build, which rules it out
-  for compiling every form at a REPL;
-- native code lives in shared libraries, so a saved image has to find
-  and load those libraries again, or carry their contents and write
-  them back out, when it starts.
+- two instruction encoders, a register allocator, both calling
+  conventions, unwind information and executable-memory handling
+  (`MAP_JIT` on macOS) are zisp's own code to write and test;
+- output quality is unmeasured. The `zig cc` figures above (25 and 34
+  times bytecode on TAK) are the target to measure the backend against
+  with `tests/run-codegen-tak.sh`;
+- debug information beyond unwind tables is further work.
 
-Cranelift would remove the first two at the price of a Rust build
-dependency, and the hand-rolled backend would remove all three at the
-price of the largest implementation effort.
+LLVM through `zig cc` was not chosen because of its 250 MB run-time
+toolchain and 100 ms per unit, and Cranelift because of its Rust build
+dependency.
 
 ## Sign-off
 
-- [ ] Approved, with the backend named here: ______ (initials)
+- [x] Approved, with the backend named here: hand-rolled

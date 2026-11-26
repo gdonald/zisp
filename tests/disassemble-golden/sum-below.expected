@@ -1,0 +1,25 @@
+Disassembly of SUM-BELOW
+1 required, 0 optional, 4 locals
+    0  SAVE_STATE 1
+    1  LOAD_FIXNUM 0
+    2  LOAD_FIXNUM 0
+    3  STORE_LOCAL 3  ; I
+    4  STORE_LOCAL 4  ; SUM
+    5  LOAD_LOCAL 3  ; I
+    6  LOAD_LOCAL 0  ; LIMIT
+    7  GREATER_EQUAL_FIXNUMS
+    8  JUMP_IF_NIL 12
+    9  LOAD_LOCAL 4  ; SUM
+   10  RETURN
+   11  JUMP 12
+   12  LOAD_LOCAL 4  ; SUM
+   13  LOAD_LOCAL 3  ; I
+   14  ADD_FIXNUMS
+   15  STORE_LOCAL 4  ; SUM
+   16  LOAD_LOCAL 3  ; I
+   17  INC_FIXNUM
+   18  STORE_LOCAL 3  ; I
+   19  JUMP 5
+   20  LOAD_NIL
+   21  RETURN
+Constants:
