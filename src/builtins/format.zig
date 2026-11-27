@@ -97,19 +97,27 @@ fn printCase(ev: *Evaluator) printer.Case {
 /// caller: `prin1` and `princ` differ over that one alone.
 fn printerSettings(ev: *Evaluator, escaping: bool) printer.Settings {
     const base = count(ev, "*PRINT-BASE*") orelse 10;
+    const readably = flag(ev, "*PRINT-READABLY*", false);
     return .{
         .escape = escaping,
-        .readably = flag(ev, "*PRINT-READABLY*", false),
+        .readably = readably,
         .base = if (base >= 2 and base <= 36) @intCast(base) else 10,
         .radix = flag(ev, "*PRINT-RADIX*", false),
         .case = printCase(ev),
         .default_float = defaultFloatMarker(ev),
-        .level = count(ev, "*PRINT-LEVEL*"),
-        .length = count(ev, "*PRINT-LENGTH*"),
+        .level = abbreviation(ev, "*PRINT-LEVEL*", readably),
+        .length = abbreviation(ev, "*PRINT-LENGTH*", readably),
         .gensym = flag(ev, "*PRINT-GENSYM*", true),
         .current_package = ev.interner.currentPackage(),
         .hook = instances.objectHook(ev),
     };
+}
+
+/// A limit on what is printed, which printing readably ignores
+/// (CLHS `*print-readably*`).
+fn abbreviation(ev: *Evaluator, name: []const u8, readably: bool) ?u32 {
+    if (readably) return null;
+    return count(ev, name);
 }
 
 /// `prin1` and `~S` escape whatever `*print-escape*` says.
@@ -638,16 +646,17 @@ fn runCaseBlock(r: *Runner, block: CaseBlock, args: *Args) Error!Flow {
 
     var at_word_start = true;
     var seen_word = false;
-    for (text) |byte| {
-        const alphanumeric = std.ascii.isAlphanumeric(byte);
-        const converted: u8 = if (directiveUpcases(block.directive))
-            std.ascii.toUpper(byte)
+    var codepoints = (std.unicode.Utf8View.init(text) catch return Error.TypeError).iterator();
+    while (codepoints.nextCodepoint()) |c| {
+        const alphanumeric = character.isAlphanumeric(c);
+        const converted = if (directiveUpcases(block.directive))
+            character.upcase(c)
         else if (block.directive.colon)
-            (if (at_word_start) std.ascii.toUpper(byte) else std.ascii.toLower(byte))
+            (if (at_word_start) character.upcase(c) else character.downcase(c))
         else if (block.directive.at)
-            (if (at_word_start and !seen_word) std.ascii.toUpper(byte) else std.ascii.toLower(byte))
+            (if (at_word_start and !seen_word) character.upcase(c) else character.downcase(c))
         else
-            std.ascii.toLower(byte);
+            character.downcase(c);
         try r.out.writeChar(converted);
         if (alphanumeric) seen_word = true;
         at_word_start = !alphanumeric;
@@ -793,7 +802,7 @@ fn writeCircleLabel(r: *Runner, object: Value) Error!void {
 /// `*print-length*`, at a tail that is not a list, and at a tail that is
 /// shared structure, which is printed as a back-reference.
 fn collectBlockItems(r: *Runner, list: Value, items: *std.ArrayList(Value)) Error!?BlockTail {
-    const limit = count(r.ev, "*PRINT-LENGTH*");
+    const limit = abbreviation(r.ev, "*PRINT-LENGTH*", flag(r.ev, "*PRINT-READABLY*", false));
     var rest = list;
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
         if (items.items.len > 0) {
@@ -1105,6 +1114,7 @@ fn runConditional(r: *Runner, conditional: Conditional, args: *Args) Error!Flow 
     const selector = switch (directive.params[0]) {
         .absent => blk: {
             const v = try args.next();
+            if (heap.isBignum(v)) break :blk -1;
             if (!v.isFixnum()) return Error.TypeError;
             break :blk v.toFixnum();
         },
@@ -1496,12 +1506,12 @@ fn scaled(real: Real, k: i64) Real {
 /// shortest run that reads back as `x` when `precision` is null. The sign
 /// is not included.
 fn decimalDigits(r: *Runner, real: Real, precision: ?usize) Error![]const u8 {
+    if (precision) |places| return shiftedFixed(r, real, 0, places);
     var buf: [4096]u8 = undefined;
-    const options: std.fmt.float.Options = .{ .mode = .decimal, .precision = precision };
-    // A count of places asks for the value's own digits, which the double
-    // an f32 widens to holds exactly. Without one the shortest run that
-    // reads back is wanted, and for an f32 that is shorter.
-    const rendered = if (real.single and precision == null)
+    const options: std.fmt.float.Options = .{ .mode = .decimal };
+    // The shortest run that reads back, which for an f32 is shorter than
+    // for the double it widens to.
+    const rendered = if (real.single)
         std.fmt.float.render(&buf, @as(f32, @floatCast(@abs(real.x))), options) catch
             return Error.ProgramError
     else
@@ -1512,6 +1522,117 @@ fn decimalDigits(r: *Runner, real: Real, precision: ?usize) Error![]const u8 {
         try text.append(r.allocator, '.');
     }
     return text.items;
+}
+
+/// `|x| / 10^power` with `places` digits after the point, rounded from the
+/// exact binary value of `x` rather than from its shortest digits, which
+/// would round twice.
+fn shiftedFixed(r: *Runner, real: Real, power: i64, places: usize) Error![]const u8 {
+    const shift = @as(i64, @intCast(places)) - power;
+    const integer = try roundedScaled(r.allocator, @abs(real.x), shift);
+    return placePoint(r, integer, @as(i64, @intCast(integer.len)) - @as(i64, @intCast(places)), places);
+}
+
+/// The power of ten of the leading digit of `x`'s shortest digits.
+fn decimalExponent(real: Real) Error!i64 {
+    if (real.x == 0) return 0;
+    var buf: [64]u8 = undefined;
+    return (try shortestScientific(&buf, real)).exponent;
+}
+
+const Scientific = struct { mantissa: []const u8, exponent: i64 };
+
+/// `|x|` in the fewest digits that read back, as `d.ddd` and a power of ten.
+fn shortestScientific(buf: *[64]u8, real: Real) Error!Scientific {
+    const options: std.fmt.float.Options = .{ .mode = .scientific };
+    const rendered = if (real.single)
+        std.fmt.float.render(buf, @as(f32, @floatCast(@abs(real.x))), options) catch
+            return Error.ProgramError
+    else
+        std.fmt.float.render(buf, @abs(real.x), options) catch return Error.ProgramError;
+    const marker = std.mem.indexOfScalar(u8, rendered, 'e') orelse return Error.ProgramError;
+    return .{
+        .mantissa = rendered[0..marker],
+        .exponent = std.fmt.parseInt(i64, rendered[marker + 1 ..], 10) catch return Error.ProgramError,
+    };
+}
+
+/// `|x| / 10^power` in the fewest digits that read back as `x`.
+fn shiftedShortest(r: *Runner, real: Real, power: i64) Error![]const u8 {
+    var buf: [64]u8 = undefined;
+    const shortest = try shortestScientific(&buf, real);
+    var digits: std.ArrayList(u8) = .empty;
+    for (shortest.mantissa) |c| {
+        if (c != '.') try digits.append(r.allocator, c);
+    }
+    const before = shortest.exponent - power + 1;
+    const fraction: i64 = @as(i64, @intCast(digits.items.len)) - before;
+    return placePoint(r, digits.items, before, @intCast(@max(fraction, 0)));
+}
+
+/// `digits` with the point after the first `before` of them, padded with
+/// zeros to `places` digits after the point. A value below one shows a
+/// zero before the point.
+fn placePoint(r: *Runner, digits: []const u8, before: i64, places: usize) Error![]const u8 {
+    var text: std.ArrayList(u8) = .empty;
+    if (before <= 0) {
+        try text.appendSlice(r.allocator, "0.");
+        try text.appendNTimes(r.allocator, '0', @intCast(-before));
+        try text.appendSlice(r.allocator, digits);
+    } else if (before >= digits.len) {
+        try text.appendSlice(r.allocator, digits);
+        try text.appendNTimes(r.allocator, '0', @intCast(before - @as(i64, @intCast(digits.len))));
+        try text.append(r.allocator, '.');
+    } else {
+        const point: usize = @intCast(before);
+        try text.appendSlice(r.allocator, digits[0..point]);
+        try text.append(r.allocator, '.');
+        try text.appendSlice(r.allocator, digits[point..]);
+    }
+    const point = std.mem.indexOfScalar(u8, text.items, '.').?;
+    const shown = text.items.len - point - 1;
+    if (shown < places) try text.appendNTimes(r.allocator, '0', places - shown);
+    return text.items;
+}
+
+/// The decimal digits of `x * 10^shift` rounded to an integer, ties to
+/// even, computed exactly from the bits of `x`.
+fn roundedScaled(allocator: std.mem.Allocator, x: f64, shift: i64) Error![]const u8 {
+    if (x == 0) return "0";
+    const Big = std.math.big.int.Managed;
+    const bits: u64 = @bitCast(x);
+    const biased: i64 = @intCast((bits >> 52) & 0x7ff);
+    const fraction = bits & ((@as(u64, 1) << 52) - 1);
+    const significand = if (biased == 0) fraction else fraction | (@as(u64, 1) << 52);
+    const binary_exponent = (if (biased == 0) @as(i64, 1) else biased) - 1075;
+
+    var numerator = try Big.initSet(allocator, significand);
+    defer numerator.deinit();
+    var denominator = try Big.initSet(allocator, 1);
+    defer denominator.deinit();
+    if (binary_exponent >= 0) {
+        try numerator.shiftLeft(&numerator, @intCast(binary_exponent));
+    } else {
+        try denominator.shiftLeft(&denominator, @intCast(-binary_exponent));
+    }
+    var ten_power = try Big.initSet(allocator, 10);
+    defer ten_power.deinit();
+    try ten_power.pow(&ten_power, @intCast(@abs(shift)));
+    if (shift >= 0) {
+        try numerator.mul(&numerator, &ten_power);
+    } else {
+        try denominator.mul(&denominator, &ten_power);
+    }
+
+    var quotient = try Big.init(allocator);
+    defer quotient.deinit();
+    var remainder = try Big.init(allocator);
+    defer remainder.deinit();
+    try quotient.divFloor(&remainder, &numerator, &denominator);
+    try remainder.shiftLeft(&remainder, 1);
+    const half = remainder.order(denominator);
+    if (half == .gt or (half == .eq and quotient.isOdd())) try quotient.addScalar(&quotient, 1);
+    return quotient.toString(allocator, 10, .lower) catch return Error.OutOfMemory;
 }
 
 /// Sign, digits, then padding to `width` — the shape `~F`, `~E` and `~$`
@@ -1668,28 +1789,15 @@ fn exponentialText(
     marker: u21,
     room: ?i64,
 ) Error![]const u8 {
-    const magnitude = @abs(x.x);
-    var exponent: i64 = 0;
-    if (magnitude != 0) {
-        exponent = @intFromFloat(@floor(@log10(magnitude)));
-        // The logarithm can land either side of a power of ten, so the
-        // mantissa is checked against its range and stepped into it.
-        while (magnitude / std.math.pow(f64, 10, @floatFromInt(exponent)) >= 10) exponent += 1;
-        while (magnitude / std.math.pow(f64, 10, @floatFromInt(exponent)) < 1) exponent -= 1;
-    }
+    const exponent = try decimalExponent(x);
     const shift = scale - 1;
     var printed_exponent = exponent - shift;
-    var mantissa = Real{
-        .x = magnitude / std.math.pow(f64, 10, @floatFromInt(printed_exponent)),
-        .single = x.single,
-    };
 
-    var digits = try mantissaDigits(r, mantissa, places, scale);
+    var digits = try mantissaDigits(r, x, printed_exponent, places, scale);
     // Rounding can carry the mantissa up to the next power of ten.
     if (mantissaOverflowed(digits, scale)) {
         printed_exponent += 1;
-        mantissa.x = magnitude / std.math.pow(f64, 10, @floatFromInt(printed_exponent));
-        digits = try mantissaDigits(r, mantissa, places, scale);
+        digits = try mantissaDigits(r, x, printed_exponent, places, scale);
     }
 
     var exponent_text: std.ArrayList(u8) = .empty;
@@ -1706,7 +1814,7 @@ fn exponentialText(
 
     if (places == null) {
         const left = if (room) |w| w - @as(i64, @intCast(utf8Count(exponent_text.items))) else null;
-        digits = try fitMantissa(r, mantissa, digits, left);
+        digits = try fitMantissa(r, x, printed_exponent, digits, left);
     }
 
     var text: std.ArrayList(u8) = .empty;
@@ -1715,21 +1823,22 @@ fn exponentialText(
     return text.items;
 }
 
-fn mantissaDigits(r: *Runner, mantissa: Real, places: ?i64, scale: i64) Error![]const u8 {
-    const d = places orelse return decimalDigits(r, mantissa, null);
+/// The digits of `x / 10^power`, the mantissa of an exponential form.
+fn mantissaDigits(r: *Runner, x: Real, power: i64, places: ?i64, scale: i64) Error![]const u8 {
+    const d = places orelse return shiftedShortest(r, x, power);
     const before: i64 = @max(scale, 1);
-    return decimalDigits(r, mantissa, @intCast(@max(d - before + 1, 0)));
+    return shiftedFixed(r, x, power, @intCast(@max(d - before + 1, 0)));
 }
 
 /// Round the mantissa to what the width leaves it, and show one zero
 /// after the point where there is space for it.
-fn fitMantissa(r: *Runner, mantissa: Real, shortest: []const u8, room: ?i64) Error![]const u8 {
+fn fitMantissa(r: *Runner, x: Real, power: i64, shortest: []const u8, room: ?i64) Error![]const u8 {
     const w = room orelse return withFraction(r, shortest);
     const point: i64 = @intCast(std.mem.indexOfScalar(u8, shortest, '.').?);
     const fraction: i64 = @as(i64, @intCast(shortest.len)) - point - 1;
     const wanted = @max(w - point - 1, 0);
     const digits = if (wanted < fraction)
-        try decimalDigits(r, mantissa, @intCast(wanted))
+        try shiftedFixed(r, x, power, @intCast(wanted))
     else
         shortest;
     if (digits[digits.len - 1] != '.') return digits;
@@ -1740,8 +1849,9 @@ fn fitMantissa(r: *Runner, mantissa: Real, shortest: []const u8, room: ?i64) Err
 /// Whether rounding pushed the mantissa to or past the next power of ten.
 fn mantissaOverflowed(digits: []const u8, scale: i64) bool {
     const point = std.mem.indexOfScalar(u8, digits, '.') orelse digits.len;
-    const wanted: usize = @intCast(@max(scale, 1));
-    return point > wanted;
+    // A scale of zero or below leaves only a zero before the point.
+    if (scale <= 0) return point > 1 or digits[0] != '0';
+    return point > @as(usize, @intCast(scale));
 }
 
 fn appendChar(r: *Runner, text: *std.ArrayList(u8), c: u21) Error!void {

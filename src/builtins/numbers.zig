@@ -190,12 +190,13 @@ fn asF64(v: Value) f64 {
 }
 
 fn boxFloat(ev: *Evaluator, comptime T: type, x: T) Error!Value {
+    if (std.math.isInf(x)) return Error.FloatingPointOverflow;
     if (T == f32) return Value.fromSingleFloat(x);
     return ev.heap.allocDoubleFloat(x);
 }
 
-fn expectInteger(v: Value) Error!void {
-    if (!bignum.isInteger(v)) return Error.TypeError;
+fn expectInteger(p: *anyopaque, v: Value) Error!void {
+    if (!bignum.isInteger(v)) return evaluator(p).typeMismatch(v, "INTEGER");
 }
 
 fn allFixnums(args: []const Value) bool {
@@ -287,7 +288,12 @@ fn applyFloat(comptime T: type, op: BinaryOp, a: T, b: T) T {
 
 fn foldFloat(ev: *Evaluator, op: BinaryOp, comptime T: type, seed: T, args: []const Value) Error!Value {
     var acc: T = seed;
-    for (args) |a| acc = applyFloat(T, op, acc, @floatCast(asF64(a)));
+    for (args) |a| {
+        const operand: T = @floatCast(asF64(a));
+        const before = acc;
+        acc = applyFloat(T, op, acc, operand);
+        if (op == .mul and acc == 0 and before != 0 and operand != 0) return Error.FloatingPointUnderflow;
+    }
     return boxFloat(ev, T, acc);
 }
 
@@ -335,7 +341,13 @@ fn subFloat(ev: *Evaluator, comptime T: type, args: []const Value) Error!Value {
 fn divideFloat(ev: *Evaluator, comptime T: type, args: []const Value) Error!Value {
     var acc: T = if (args.len == 1) 1 else @floatCast(asF64(args[0]));
     const divisors = if (args.len == 1) args else args[1..];
-    for (divisors) |a| acc /= @as(T, @floatCast(asF64(a)));
+    for (divisors) |a| {
+        const divisor: T = @floatCast(asF64(a));
+        if (divisor == 0) return Error.DivisionByZero;
+        const before = acc;
+        acc /= divisor;
+        if (acc == 0 and before != 0) return Error.FloatingPointUnderflow;
+    }
     return boxFloat(ev, T, acc);
 }
 
@@ -534,9 +546,8 @@ fn signPred(comptime want: enum { zero, plus, minus }) function.NativeFn {
 fn parityPred(comptime want_even: bool) function.NativeFn {
     return struct {
         fn f(p: *anyopaque, args: []const Value) Error!Value {
-            _ = p;
             if (args.len != 1) return Error.WrongArgCount;
-            try expectInteger(args[0]);
+            try expectInteger(p, args[0]);
             var scratch = bignum.Scratch{};
             return boolv(scratch.view(args[0]).isEven() == want_even);
         }
@@ -694,7 +705,7 @@ fn gcdFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     var acc = ZERO;
     for (args) |a| {
-        try expectInteger(a);
+        try expectInteger(p, a);
         acc = try bignum.gcd(ev.heap, acc, a);
     }
     return acc;
@@ -709,7 +720,7 @@ fn lcmFn(p: *anyopaque, args: []const Value) Error!Value {
     try held.push(acc);
     try held.push(ZERO);
     for (args) |a| {
-        try expectInteger(a);
+        try expectInteger(p, a);
         if (bignum.isZero(a) or bignum.isZero(acc)) {
             acc = ZERO;
             continue;
@@ -748,7 +759,7 @@ fn bitwiseFn(comptime op: BitwiseOp) function.NativeFn {
             const allocator = ev.heap.allocator;
             var acc = try Managed.initSet(allocator, identityFor(op));
             for (args) |a| {
-                try expectInteger(a);
+                try expectInteger(p, a);
                 var scratch = bignum.Scratch{};
                 var operand = try scratch.view(a).toManaged(allocator);
                 var next = try Managed.init(allocator);
@@ -764,7 +775,7 @@ fn bitwiseFn(comptime op: BitwiseOp) function.NativeFn {
 fn lognotFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    try expectInteger(args[0]);
+    try expectInteger(p, args[0]);
     const negated = try bignum.negate(ev.heap, args[0]);
     return bignum.sub(ev.heap, negated, ONE);
 }
@@ -774,7 +785,7 @@ fn lognotFn(p: *anyopaque, args: []const Value) Error!Value {
 fn ashFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
-    try expectInteger(args[0]);
+    try expectInteger(p, args[0]);
     if (!args[1].isFixnum()) return Error.TypeError;
     const count = args[1].toFixnum();
 
@@ -795,7 +806,7 @@ fn ashFn(p: *anyopaque, args: []const Value) Error!Value {
 fn integerLengthFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    try expectInteger(args[0]);
+    try expectInteger(p, args[0]);
     const subject = if (bignum.isNegative(args[0]))
         try lognotFn(ev.asOpaque(), args)
     else
@@ -1027,6 +1038,14 @@ fn boxReal(ev: *Evaluator, kind: Contagion, x: f64) Error!Value {
     return boxFloat(ev, f32, @floatCast(x));
 }
 
+/// A result whose exact value is not zero, so a zero means the exponent
+/// underflowed.
+fn boxNonzeroReal(ev: *Evaluator, kind: Contagion, x: f64) Error!Value {
+    const boxed = try boxReal(ev, kind, x);
+    if (asF64(boxed) == 0) return Error.FloatingPointUnderflow;
+    return boxed;
+}
+
 /// Box a complex result, narrowing to a real when the imaginary part
 /// vanished and the argument was real to begin with.
 fn boxComplex(ev: *Evaluator, kind: Contagion, z: Cf64) Error!Value {
@@ -1148,7 +1167,10 @@ fn unaryFn(comptime kind: UnaryKind) function.NativeFn {
             const format = try resultFormat(args);
             if (!heap.isComplex(args[0])) {
                 const x = asF64(args[0]);
-                if (realDomainHolds(kind, x)) return boxReal(ev, format, realUnary(kind, x));
+                if (realDomainHolds(kind, x)) {
+                    if (kind == .exp) return boxNonzeroReal(ev, format, realUnary(kind, x));
+                    return boxReal(ev, format, realUnary(kind, x));
+                }
             }
             return boxComplex(ev, format, complexUnary(kind, try asCf64(ev, args[0])));
         }
@@ -1211,7 +1233,7 @@ fn phaseFn(p: *anyopaque, args: []const Value) Error!Value {
 fn isqrtFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    try expectInteger(args[0]);
+    try expectInteger(p, args[0]);
     if (bignum.isNegative(args[0])) return Error.TypeError;
     if (bignum.isZero(args[0])) return ZERO;
 
@@ -1248,7 +1270,7 @@ fn exptFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!heap.isComplex(args[0]) and !heap.isComplex(args[1])) {
         const b = asF64(args[0]);
         const e = asF64(args[1]);
-        if (b > 0) return boxReal(ev, format, std.math.pow(f64, b, e));
+        if (b > 0) return boxNonzeroReal(ev, format, std.math.pow(f64, b, e));
         if (b == 0) {
             // Zero to a positive power is zero; to anything else undefined.
             if (e > 0) return boxReal(ev, format, 0);
@@ -1347,7 +1369,7 @@ fn randomFn(p: *anyopaque, args: []const Value) Error!Value {
         const draw = random.float(f64) * bound;
         return boxReal(ev, if (heap.isDoubleFloat(limit)) .double else .single, draw);
     }
-    try expectInteger(limit);
+    try expectInteger(p, limit);
     if (!bignum.isNegative(limit) and bignum.isZero(limit)) return Error.TypeError;
     if (bignum.isNegative(limit)) return Error.TypeError;
     if (limit.isFixnum()) {
@@ -1404,6 +1426,12 @@ fn randomStatePFn(p: *anyopaque, args: []const Value) Error!Value {
     return boolv(heap.isRandomState(args[0]));
 }
 
+/// A sum of 1 and exactly half an ulp rounds back to 1 under ties to even,
+/// so the smallest epsilon that changes 1 is the float just above that half.
+fn epsilonAbove(comptime T: type, half_ulp: T) T {
+    return std.math.nextAfter(T, half_ulp, std.math.inf(T));
+}
+
 /// The float limits CLHS names. `short-float` is this implementation's
 /// single-float and `long-float` its double-float, so those names alias.
 fn registerFloatConstants(ev: *Evaluator) !void {
@@ -1414,8 +1442,8 @@ fn registerFloatConstants(ev: *Evaluator) !void {
         .{ .name = "LEAST-NEGATIVE-SINGLE-FLOAT", .v = -std.math.floatTrueMin(f32) },
         .{ .name = "LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT", .v = std.math.floatMin(f32) },
         .{ .name = "LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT", .v = -std.math.floatMin(f32) },
-        .{ .name = "SINGLE-FLOAT-EPSILON", .v = std.math.floatEps(f32) / 2 },
-        .{ .name = "SINGLE-FLOAT-NEGATIVE-EPSILON", .v = std.math.floatEps(f32) / 4 },
+        .{ .name = "SINGLE-FLOAT-EPSILON", .v = epsilonAbove(f32, std.math.floatEps(f32) / 2) },
+        .{ .name = "SINGLE-FLOAT-NEGATIVE-EPSILON", .v = epsilonAbove(f32, std.math.floatEps(f32) / 4) },
     };
     const doubles = [_]struct { name: []const u8, v: f64 }{
         .{ .name = "MOST-POSITIVE-DOUBLE-FLOAT", .v = std.math.floatMax(f64) },
@@ -1424,8 +1452,8 @@ fn registerFloatConstants(ev: *Evaluator) !void {
         .{ .name = "LEAST-NEGATIVE-DOUBLE-FLOAT", .v = -std.math.floatTrueMin(f64) },
         .{ .name = "LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT", .v = std.math.floatMin(f64) },
         .{ .name = "LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT", .v = -std.math.floatMin(f64) },
-        .{ .name = "DOUBLE-FLOAT-EPSILON", .v = std.math.floatEps(f64) / 2 },
-        .{ .name = "DOUBLE-FLOAT-NEGATIVE-EPSILON", .v = std.math.floatEps(f64) / 4 },
+        .{ .name = "DOUBLE-FLOAT-EPSILON", .v = epsilonAbove(f64, std.math.floatEps(f64) / 2) },
+        .{ .name = "DOUBLE-FLOAT-NEGATIVE-EPSILON", .v = epsilonAbove(f64, std.math.floatEps(f64) / 4) },
     };
     for (singles) |c| {
         const sym = try ev.interner.intern(c.name);

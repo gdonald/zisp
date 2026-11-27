@@ -333,8 +333,9 @@ Where it knows every argument is a single-float, it uses
 `num_equal_single_floats`, which work on the float bits a single-float
 value holds. An integer constant whose single-float is exact counts as
 that single-float. `1+` and `1-` of a single-float are an add or
-subtract of 1.0. A result that overflows goes to the standard function,
-which signals the error.
+subtract of 1.0. A result that overflows, and a product of nonzero
+floats that comes to zero, go to the standard function, which signals
+the error.
 
 `check_type` k signals `type-error` unless the value on top of the stack
 is of the type in constant k, leaving the value where it is. It is what

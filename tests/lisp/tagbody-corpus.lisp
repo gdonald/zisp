@@ -46,3 +46,6 @@ NIL (tagbody)
 
 ;; go inside an if exits the loop at a terminating tag: 5 + 4 + 3 + 2 + 1
 15 (let ((n 5) (sum 0)) (tagbody loop (if (zerop n) (go done) nil) (setq sum (+ sum n)) (setq n (1- n)) (go loop) done) sum)
+
+;; a tag past the fixnums is matched eql, so a second copy of it finds the first
+8 (let ((x 0)) (tagbody (go 1152921504606846976) (setq x 99) 1152921504606846976 (setq x 8)) x)

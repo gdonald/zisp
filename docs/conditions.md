@@ -117,6 +117,12 @@ before anything unwinds. A handler that declines leaves it to
 `handler-case` or `ignore-errors` further out, which receive the same
 condition object.
 
+Float arithmetic signals rather than producing an infinity: a result too
+large for its format is a `floating-point-overflow`, a product, quotient,
+`exp` or `expt` that rounds to zero when its exact value is not zero a
+`floating-point-underflow`, and a float divided by zero a
+`division-by-zero`.
+
 ## Restarts
 
 A restart is a named way to carry on from a point in the program. A

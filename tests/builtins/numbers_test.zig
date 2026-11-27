@@ -1112,3 +1112,44 @@ test "a product of many fixnums past the 128-bit range is exact" {
     try fx.expectT("(= (+ most-positive-fixnum most-positive-fixnum most-positive-fixnum) (* 3 most-positive-fixnum))");
     try fx.expectT("(= (- (- most-positive-fixnum) most-positive-fixnum most-positive-fixnum) (* -3 most-positive-fixnum))");
 }
+
+test "each float epsilon is the smallest that changes 1 when added or subtracted" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectT("(/= 1.0 (+ 1.0 single-float-epsilon))");
+    try fx.expectT("(= 1.0 (+ 1.0 (/ single-float-epsilon 2)))");
+    try fx.expectT("(/= 1.0 (- 1.0 single-float-negative-epsilon))");
+    try fx.expectT("(= 1.0 (- 1.0 (/ single-float-negative-epsilon 2)))");
+    try fx.expectT("(/= 1.0d0 (+ 1.0d0 double-float-epsilon))");
+    try fx.expectT("(= 1.0d0 (+ 1.0d0 (/ double-float-epsilon 2)))");
+    try fx.expectT("(/= 1.0d0 (- 1.0d0 double-float-negative-epsilon))");
+    try fx.expectT("(= 1.0d0 (- 1.0d0 (/ double-float-negative-epsilon 2)))");
+}
+
+test "a float result too large for its format signals floating-point-overflow" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.FloatingPointOverflow, "(* most-positive-double-float 2)");
+    try fx.expectErr(Error.FloatingPointOverflow, "(+ most-positive-single-float most-positive-single-float)");
+    try fx.expectErr(Error.FloatingPointOverflow, "(expt most-positive-single-float 2)");
+    try fx.expectErr(Error.FloatingPointOverflow, "(exp 1000d0)");
+    try fx.expectErr(Error.FloatingPointOverflow, "(exp 100.0)");
+}
+
+test "a nonzero float result too small for its format signals floating-point-underflow" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.FloatingPointUnderflow, "(* least-positive-double-float 0.5d0)");
+    try fx.expectErr(Error.FloatingPointUnderflow, "(/ least-positive-single-float 4)");
+    try fx.expectErr(Error.FloatingPointUnderflow, "(expt least-positive-double-float 2)");
+    try fx.expectErr(Error.FloatingPointUnderflow, "(exp -1000d0)");
+    try fx.expectErr(Error.FloatingPointUnderflow, "(expt 2.0 -200.5)");
+    try fx.expectFix("(floor (* 0.0 least-positive-double-float))", 0);
+}
+
+test "dividing a float by zero signals division-by-zero" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectErr(Error.DivisionByZero, "(/ 1.0 0.0)");
+    try fx.expectErr(Error.DivisionByZero, "(/ 0.0d0)");
+}

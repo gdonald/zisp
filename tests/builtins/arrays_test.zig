@@ -211,6 +211,13 @@ test ":fill-pointer accepts t or an index in range" {
     try fx.expectErr(Error.TypeError, "(make-array '(2 2) :fill-pointer 1)");
 }
 
+test ":fill-pointer nil makes an array with no fill pointer" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectNil("(array-has-fill-pointer-p (make-array 3 :fill-pointer nil))");
+    try fx.expectFix("(array-rank (make-array '(2 2) :fill-pointer nil))", 2);
+}
+
 // --- element access ---
 
 test "aref indexes by subscript and row-major-aref by offset" {

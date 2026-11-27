@@ -177,6 +177,12 @@
               '(-2 :none)))
 
 ;; tagbody and go
+(eq (funcall (compile nil '(lambda ()
+                             (block done
+                               (tagbody (go around)
+                                  1152921504606846976 (return-from done 'good)
+                                  around (go 1152921504606846976))))))
+    'good)
 (eql (funcall (compile nil '(lambda ()
                               (let ((n 0))
                                 (tagbody

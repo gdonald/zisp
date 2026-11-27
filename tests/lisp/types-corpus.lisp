@@ -65,6 +65,11 @@
      (typep '(1 . a) '(cons integer *)))
 (and (typep #(1 2) '(vector t 2)) (not (typep #(1 2) '(vector t 3))))
 (and (typep "abc" '(string 3)) (not (typep "abc" '(string 4))))
+(and (typep #(1 2) '(simple-vector 2)) (not (typep #(1 2) '(simple-vector 3)))
+     (typep #(1 2) '(simple-vector *)))
+(and (typep #*101 '(simple-bit-vector 3)) (not (typep #*101 '(bit-vector 2))))
+(and (typep "ab" '(simple-string 2)) (not (typep "ab" '(simple-base-string 3)))
+     (not (typep #(1 2) '(simple-string 2))))
 (and (typep (make-array '(2 3)) '(array t (2 3)))
      (not (typep (make-array '(2 3)) '(array t (3 2)))))
 

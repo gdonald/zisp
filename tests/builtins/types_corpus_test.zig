@@ -64,5 +64,5 @@ test "every form in the types corpus evaluates to T" {
             return error.TestUnexpectedResult;
         }
     }
-    try testing.expectEqual(@as(u32, 85), checked);
+    try testing.expectEqual(@as(u32, 88), checked);
 }

@@ -408,6 +408,8 @@ or `warn`, the restarts are associated with the condition it signals."
     (:|ProgramError| . program-error)
     (:|DivisionByZero| . division-by-zero)
     (:|ArithmeticError| . arithmetic-error)
+    (:|FloatingPointOverflow| . floating-point-overflow)
+    (:|FloatingPointUnderflow| . floating-point-underflow)
     (:|FileError| . file-error)
     (:|NoOutputStream| . stream-error)
     (:|NoSuchPackage| . package-error)

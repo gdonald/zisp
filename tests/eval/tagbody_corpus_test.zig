@@ -142,5 +142,5 @@ test "tagbody corpus evaluates to SBCL values" {
         }
         checked += 1;
     }
-    try std.testing.expectEqual(@as(u32, 8), checked);
+    try std.testing.expectEqual(@as(u32, 9), checked);
 }

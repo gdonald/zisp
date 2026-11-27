@@ -10,6 +10,8 @@
 (string= (format nil "~@(hello world~)") "Hello world")
 (string= (format nil "~:@(~S~)" 'ab) "AB")
 (string= (format nil "~(~S ~S~)" 'ab 'cd) "ab cd")
+(string= (format nil "~(~c~)" (code-char 192)) (string (code-char 224)))
+(string= (format nil "~:@(~c~)" (code-char 233)) (string (code-char 201)))
 (string= (format nil "a~<~%~:; ~>b") "a b")
 ;; `~@<` hands the block the rest of the argument list, where `~<`
 ;; would take one list argument.
@@ -58,3 +60,10 @@
 (string= (let ((*print-length* 2)) (format nil "~:<~@{~A~^ ~}~:>" '(1 2 3 4))) "(1 2 ...)")
 (string= (format nil "~:<~@{~A~^ ~}~:>" '(1 2)) "(1 2)")
 (eq (handler-case (format nil "~:<~A ~A~:>" '(1)) (program-error () :rejected)) :rejected)
+
+;; ~E without places prints the digits prin1 would, and with places rounds
+;; the float's exact value, carrying into the exponent when it has to.
+(string= (format nil "~e" 3.203065743926539d302) "3.203065743926539e+302")
+(string= (format nil "~,15,,0e" 2.312817657618136d264) "0.231281765761814e+265")
+(string= (format nil "~,1,,0e" 9.72754625450142d-19) "0.1e-17")
+(string= (format nil "~,2f" 2.675d0) "2.67")

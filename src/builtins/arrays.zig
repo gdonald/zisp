@@ -182,7 +182,7 @@ fn parseMakeArrayOptions(ev: *Evaluator, args: []const Value) Error!MakeArrayOpt
         } else if (try keywordIs(ev, args[i], "ADJUSTABLE")) {
             options.adjustable = !given.equalsRaw(value.NIL);
         } else if (try keywordIs(ev, args[i], "FILL-POINTER")) {
-            options.fill_pointer = given;
+            options.fill_pointer = if (given.equalsRaw(value.NIL)) null else given;
         } else if (try keywordIs(ev, args[i], "DISPLACED-TO")) {
             options.displaced_to = if (given.equalsRaw(value.NIL)) null else given;
         } else if (try keywordIs(ev, args[i], "DISPLACED-INDEX-OFFSET")) {

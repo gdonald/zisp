@@ -24,6 +24,14 @@
 ;; A `princ` that must read back is escaped anyway.
 (check (string= "\"hi\"" (let ((*print-readably* t)) (princ-to-string "hi"))))
 
+;; Printing that must read back ignores the length and depth limits.
+(check (string= "(1 (2 (3)))"
+                (let ((*print-readably* t) (*print-level* 1) (*print-length* 1))
+                  (prin1-to-string '(1 (2 (3)))))))
+(check (string= "#2A((#\\a #\\a) (#\\a #\\a))"
+                (let ((*print-readably* t) (*print-level* 0))
+                  (prin1-to-string (make-array '(2 2) :initial-element #\a)))))
+
 ;; Integers print in the base asked for, with the radix marker where one
 ;; is wanted.
 (check (string= "FF" (let ((*print-base* 16)) (prin1-to-string 255))))

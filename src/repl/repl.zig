@@ -188,9 +188,9 @@ pub const Repl = struct {
         var tokenizer = reader_mod.Tokenizer.init(source);
         var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
         rd.read_eval = .{ .context = @ptrCast(&self.ev), .call = &eval_pkg.Evaluator.readEval };
-        readtables.install(&self.ev, &rd);
         while (true) {
             try collect_mod.maybeCollect(&self.ev);
+            readtables.install(&self.ev, &rd);
             const form = rd.read() catch return Error.ProgramError;
             const f = form orelse break;
             self.rotateInput(f);

@@ -40,7 +40,9 @@ before the point goes instead.
 `~E` prints a float in exponential format, taking
 `w,d,e,k,overflowchar,padchar,exponentchar`. `e` is how many digits the
 exponent takes and `k` how many digits stand before the point, one by
-default. `~G` picks between the two by the size of the value, and `~$`
+default. Without `d` or `w` the mantissa has the digits `prin1` would
+print. A count of places in `~F` or `~E` rounds the float's exact binary
+value, ties to even. `~G` picks between the two by the size of the value, and `~$`
 prints a fixed two places after the point, taking `d,n,w,padchar`.
 
 `~P` writes the plural suffix for its argument: `s` unless the argument

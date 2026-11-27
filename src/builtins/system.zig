@@ -241,9 +241,10 @@ fn readFromStringFn(p: *anyopaque, args: []const Value) Error!Value {
     rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
     readtables.install(ev, &rd);
     const form = rd.read() catch return Error.ProgramError;
+    const characters_read = std.unicode.utf8CountCodepoints(source[0..tokenizer.idx]) catch return Error.TypeError;
     return ev.setValues(&.{
         form orelse return Error.ProgramError,
-        Value.fromFixnum(@intCast(tokenizer.idx)),
+        Value.fromFixnum(@intCast(characters_read)),
     });
 }
 
@@ -463,11 +464,11 @@ pub fn evalSourceRecorded(ev: *Evaluator, source: []const u8, file: []const u8) 
 
 fn evalForms(ev: *Evaluator, rd: *reader_mod.Reader) Error!void {
     rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
-    readtables.install(ev, rd);
     while (true) {
         // Between top-level forms nothing but the evaluator's own state
         // holds a value, which is what makes a collection safe here.
         try collect_mod.maybeCollect(ev);
+        readtables.install(ev, rd);
         const form = rd.read() catch |e| return switch (e) {
             error.OutOfMemory => Error.OutOfMemory,
             else => Error.ProgramError,
@@ -604,8 +605,8 @@ pub fn compileSourceNamed(ev: *Evaluator, source: []const u8, file: []const u8, 
         try ev.keepSourceName(file),
     );
     rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
-    readtables.install(ev, &rd);
     while (true) {
+        readtables.install(ev, &rd);
         const form = rd.read() catch return Error.ProgramError;
         const f = form orelse break;
         try compileToplevel(ev, f, false, out);

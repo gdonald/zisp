@@ -6,16 +6,12 @@
 //! reader for the `tests/lisp/float-literal-corpus.lisp` corpus.
 //!
 //! Exponent marker → result type:
-//!   no marker      → single (per `*read-default-float-format*` default)
-//!   `e` / `E`      → single (default float format)
+//!   no marker      → the default format the caller passes
+//!   `e` / `E`      → the default format the caller passes
 //!   `s` / `S`      → single (short — Lisp permits short = single)
 //!   `f` / `F`      → single
 //!   `d` / `D`      → double
 //!   `l` / `L`      → double (long — Lisp permits long = double)
-//!
-//! `*read-default-float-format*` is fixed at `single-float` for now.
-//! User code will be able to rebind it later; this parser will read that
-//! variable when the dynamic-bindings substrate lands.
 
 const std = @import("std");
 
@@ -43,6 +39,12 @@ const MAX_LEXEME: usize = 128;
 /// trimming). The function copies into a stack buffer so it can rewrite
 /// the exponent marker to `e` for `std.fmt.parseFloat`.
 pub fn parseFloatLexeme(text: []const u8) Error!FloatValue {
+    return parseFloatLexemeAs(text, .single);
+}
+
+/// Parse a float lexeme, reading one with no marker or an `e` marker as
+/// `default`, which is what `*read-default-float-format*` names.
+pub fn parseFloatLexemeAs(text: []const u8, default: FloatType) Error!FloatValue {
     if (text.len == 0 or text.len > MAX_LEXEME) return Error.BadFloatLexeme;
 
     var buf: [MAX_LEXEME]u8 = undefined;
@@ -52,13 +54,14 @@ pub fn parseFloatLexeme(text: []const u8) Error!FloatValue {
     // permitted inside a float). Anything before the marker is mantissa
     // material the std parser handles directly. Anything after is the
     // signed-integer exponent.
-    var float_type: FloatType = .single;
+    var float_type: FloatType = default;
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         const c = text[i];
         if (std.ascii.isAlphabetic(c)) {
             float_type = switch (c) {
-                'e', 'E', 's', 'S', 'f', 'F' => .single,
+                'e', 'E' => default,
+                's', 'S', 'f', 'F' => .single,
                 'd', 'D', 'l', 'L' => .double,
                 else => return Error.BadFloatLexeme,
             };

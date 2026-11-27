@@ -14,6 +14,7 @@ const env_mod = @import("../eval/env.zig");
 const lambda_list = @import("../eval/lambda_list.zig");
 const quasiquote = @import("../eval/quasiquote.zig");
 const special_forms = @import("../eval/special_forms.zig");
+const equality = @import("../runtime/equality.zig");
 const bytecode = @import("bytecode.zig");
 
 const Value = value.Value;
@@ -1417,12 +1418,12 @@ pub const Converter = struct {
 
     fn convertGo(self: *Converter, args: Value, form: Value) Error!*Node {
         const tag = try oneArg(args);
-        if (!tag.isSymbol() and !tag.isFixnum()) return Error.TypeError;
+        if (!special_forms.isGoTag(tag)) return Error.TypeError;
         var found: ?TagEntry = null;
         var i = self.tags.items.len;
         while (i > 0) {
             i -= 1;
-            if (self.tags.items[i].tag.equalsRaw(tag)) {
+            if (equality.eql(self.tags.items[i].tag, tag)) {
                 found = self.tags.items[i];
                 break;
             }

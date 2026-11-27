@@ -65,8 +65,9 @@ none of the three algorithms addresses:
 - CLHS 22.1.3.1.3's rule for when to print in fixed-point form versus
   exponential form, based on the magnitude,
 - always emitting a decimal point, so `1.0` does not print as `1`,
-- and the `~E`, `~F`, `~G` and `~$` format directives, which specify digit
-  counts and therefore do not use the shortest form at all.
+- and the `~E`, `~F`, `~G` and `~$` format directives, which round to a
+  digit count when given one, and then from the float's exact value
+  rather than from its shortest digits.
 
 Those rules are where the round-trip requirement in 4.5.5c can be broken
 even with a correct digit generator, so the corpus checks the printed text

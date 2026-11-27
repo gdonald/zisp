@@ -176,6 +176,8 @@ pub const Reader = struct {
     read_eval: ?ReadEval = null,
     /// The active readtable's case, applied to unescaped symbol text.
     case: SymbolCase = .upcase,
+    /// The format `*read-default-float-format*` names.
+    default_float: float_parse.FloatType = .single,
     /// One-token lookahead. The reader peeks when it needs to decide
     /// between dotted-pair and final-element in a list, and to detect
     /// EOF without consuming.
@@ -813,7 +815,7 @@ pub const Reader = struct {
     }
 
     fn parseFloatAt(self: *Reader, text: []const u8, p: Position) Error!Value {
-        const fv = float_parse.parseFloatLexeme(text) catch return self.errAt(p, Error.BadToken);
+        const fv = float_parse.parseFloatLexemeAs(text, self.default_float) catch return self.errAt(p, Error.BadToken);
         return switch (fv) {
             .single => |x| Value.fromSingleFloat(x),
             .double => |x| try self.heap.allocDoubleFloat(x),

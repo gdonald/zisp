@@ -368,7 +368,7 @@ cannot overflow, and has no overflow path in native code.
 
 | Op | Operands | Result | Raises |
 | --- | --- | --- | --- |
-| `sf_add`, `sf_sub`, `sf_mul` | `%a: sf`, `%b: sf` | `sf` | on overflow, through the standard function |
+| `sf_add`, `sf_sub`, `sf_mul` | `%a: sf`, `%b: sf` | `sf` | on overflow or underflow, through the standard function |
 | `sf_less`, `sf_greater`, `sf_less_equal`, `sf_greater_equal`, `sf_num_equal` | `%a: sf`, `%b: sf` | `bool` | no |
 
 ### Conversions and checks

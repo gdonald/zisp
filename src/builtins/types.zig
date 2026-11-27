@@ -464,6 +464,7 @@ fn typepCompound(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     {
         return arrayType(ev, v, spec, name);
     }
+    if (isSizedVectorName(name)) return sizedVectorType(ev, v, spec);
     if (try instances.classNamed(ev, spec)) |class| {
         if (try instances.isClassObject(ev, class)) return instances.classTypep(ev, v, class);
     }
@@ -535,6 +536,26 @@ fn arrayType(ev: *Evaluator, v: Value, spec: Value, name: []const u8) Error!bool
         return rankOf(v) == 1 and dimensionAt(v, 0) == @as(u64, @intCast(dims.toFixnum()));
     }
     return dimensionsMatch(v, dims);
+}
+
+const sized_vector_names = [_][]const u8{
+    "SIMPLE-VECTOR", "BIT-VECTOR", "SIMPLE-BIT-VECTOR", "BASE-STRING", "SIMPLE-STRING", "SIMPLE-BASE-STRING",
+};
+
+fn isSizedVectorName(name: []const u8) bool {
+    for (sized_vector_names) |sized| {
+        if (std.mem.eql(u8, name, sized)) return true;
+    }
+    return false;
+}
+
+/// `(simple-vector 3)` and its kin: the type the head names, with a length.
+fn sizedVectorType(ev: *Evaluator, v: Value, spec: Value) Error!bool {
+    if (!try typep(ev, v, heap.car(spec))) return false;
+    const size = nthArg(spec, 0);
+    if (size.equalsRaw(value.NIL) or isWildcard(size)) return true;
+    if (!size.isFixnum()) return Error.ProgramError;
+    return dimensionAt(v, 0) == @as(u64, @intCast(size.toFixnum()));
 }
 
 fn isWildcard(v: Value) bool {

@@ -11,6 +11,7 @@ const lambda_list = @import("lambda_list.zig");
 const vm_mod = @import("../compiler/vm.zig");
 const compiler_mod = @import("../compiler/compiler.zig");
 const bytecode = @import("../compiler/bytecode.zig");
+const equality = @import("../runtime/equality.zig");
 
 const Value = value.Value;
 const Heap = heap_mod.Heap;
@@ -504,7 +505,7 @@ pub const Evaluator = struct {
             var cur = self.tagbody_stack.items[i].body;
             while (cur.isCons()) {
                 const elem = heap_mod.car(cur);
-                if (!elem.isCons() and elem.equalsRaw(tag)) {
+                if (!elem.isCons() and equality.eql(elem, tag)) {
                     return .{ .id = self.tagbody_stack.items[i].id, .pos = heap_mod.cdr(cur) };
                 }
                 cur = heap_mod.cdr(cur);

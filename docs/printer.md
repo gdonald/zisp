@@ -16,7 +16,8 @@ symbol outside the current package carries its package prefix. `prin1`
 prints with it on and `princ` with it off, whatever the variable holds.
 
 `*print-readably*` says the output must read back as the same object. It
-escapes whatever `*print-escape*` would have left bare.
+escapes whatever `*print-escape*` would have left bare, and prints the
+whole object whatever `*print-level*` and `*print-length*` hold.
 
 `*print-base*` is the radix integers and ratios print in, between 2 and
 36. `*print-radix*` adds the marker that says which radix it was: `#b`,
@@ -62,6 +63,10 @@ the report, `prin1` and `~S` the type.
 
 `*read-base*`, `*read-eval*`, `*read-suppress*` and
 `*read-default-float-format*` are defined and hold their standard values.
+A float with no exponent marker, or with `e`, reads as the type
+`*read-default-float-format*` names. `load` and `compile-file` look at it
+again before each top-level form, so a form that sets it at compile time
+changes how the forms after it read.
 
 ## Standard syntax
 

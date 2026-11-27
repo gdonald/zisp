@@ -143,6 +143,9 @@
 (equal (handler-case (format nil "~{~A~}" 'a)
          (type-error (c) (list (type-error-datum c) (type-error-expected-type c))))
        '(a list))
+(equal (handler-case (integer-length 1.5)
+         (type-error (c) (list (type-error-datum c) (type-error-expected-type c))))
+       '(1.5 integer))
 
 ;; One that recorded nothing leaves both unset, even right after one that
 ;; did.

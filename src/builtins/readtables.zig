@@ -49,11 +49,22 @@ pub fn active(ev: *Evaluator) ?*heap.HeapReadtable {
     return heap.asReadtable(bound);
 }
 
-/// Point a fresh reader at the active readtable and its case.
+/// Point a fresh reader at the active readtable and its case, and at the
+/// float format `*read-default-float-format*` names.
 pub fn install(ev: *Evaluator, rd: *reader_mod.Reader) void {
+    rd.default_float = defaultFloat(ev);
     const rt = active(ev) orelse return;
     rd.readtable = @ptrCast(@alignCast(rt.handlers));
     rd.case = @fromBackingInt(@intCast(rt.case));
+}
+
+fn defaultFloat(ev: *Evaluator) reader_mod.FloatType {
+    const found = ev.interner.cl.findPresent("*READ-DEFAULT-FLOAT-FORMAT*") orelse return .single;
+    const format = symbol_mod.symbol(found.sym).value_cell;
+    if (!format.isSymbol()) return .single;
+    const name = symbol_mod.symbol(format).name;
+    if (std.mem.eql(u8, name, "DOUBLE-FLOAT") or std.mem.eql(u8, name, "LONG-FLOAT")) return .double;
+    return .single;
 }
 
 fn expectReadtable(v: Value) Error!*heap.HeapReadtable {

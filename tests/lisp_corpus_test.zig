@@ -83,7 +83,7 @@ fn modeLabel(compile: bool) []const u8 {
 
 test "compile corpus" {
     const checked = try runCorpus("compile", @embedFile("lisp/compile-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 107), checked);
+    try testing.expectEqual(@as(u32, 108), checked);
 }
 
 test "constant pools" {
@@ -156,7 +156,7 @@ test "files and file streams" {
 
 test "inferred types in compiled code" {
     const checked = try runCorpus("type-inference", @embedFile("lisp/type-inference.lisp"));
-    try testing.expectEqual(@as(u32, 11), checked);
+    try testing.expectEqual(@as(u32, 12), checked);
 }
 
 test "tail calls keep the frame count" {
@@ -216,12 +216,12 @@ test "closure capture corpus" {
 
 test "format directives corpus" {
     const checked = try runCorpus("format", @embedFile("lisp/format-directives-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 42), checked);
+    try testing.expectEqual(@as(u32, 48), checked);
 }
 
 test "reader syntax corpus" {
     const checked = try runCorpus("reader-syntax", @embedFile("lisp/reader-syntax-corpus.lisp"));
-    try testing.expectEqual(@as(u32, 26), checked);
+    try testing.expectEqual(@as(u32, 28), checked);
 }
 
 test "displaced string corpus" {
@@ -236,7 +236,7 @@ test "condition class corpus" {
 
 test "handler search corpus" {
     const checked = try runCorpus("handler-search", @embedFile("lisp/handler-search.lisp"));
-    try testing.expectEqual(@as(u32, 21), checked);
+    try testing.expectEqual(@as(u32, 22), checked);
 }
 
 test "macrolet corpus" {

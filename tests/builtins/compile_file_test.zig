@@ -426,6 +426,28 @@ fn loadForm(path: []const u8) ![]u8 {
     return std.fmt.allocPrint(testing.allocator, "(load \"{s}\")", .{path});
 }
 
+test "a form reads with the float format the forms before it in the file set" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "float-format.lisp",
+        \\(eval-when (:compile-toplevel :load-toplevel :execute)
+        \\  (setq *read-default-float-format* 'double-float))
+        \\(setq float-format-marker (type-of 1.5))
+    );
+    defer testing.allocator.free(path);
+
+    const load_form = try std.fmt.allocPrint(testing.allocator, "(let ((*read-default-float-format* 'single-float)) (load \"{s}\") float-format-marker)", .{path});
+    defer testing.allocator.free(load_form);
+    try testing.expect((try fx.evalStr(load_form)).equalsRaw(try fx.evalStr("'double-float")));
+
+    _ = try fx.evalStr("(setq float-format-marker nil)");
+    const compile_form = try std.fmt.allocPrint(testing.allocator, "(let ((*read-default-float-format* 'single-float)) (load (compile-file \"{s}\")) float-format-marker)", .{path});
+    defer testing.allocator.free(compile_form);
+    try testing.expect((try fx.evalStr(compile_form)).equalsRaw(try fx.evalStr("'double-float")));
+}
+
 test "a binary fasl gives back what its source defines" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);

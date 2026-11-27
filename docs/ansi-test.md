@@ -43,8 +43,8 @@ suite only, and the ansi-test suite is run locally.
 `tests/run-ansi.sh <category>` runs one category the same way in a zisp
 of its own: `gclload1.lsp`, then that category's `load.lsp`, through
 `tests/lisp/ansi-category.lisp`. The categories are the 24 that
-`gclload2.lsp` loads, in its order. Both runs switch off the tests noted
-`:nil-vectors-are-strings`, for the reason given below.
+`gclload2.lsp` loads, in its order. Both runs switch off the notes listed
+under "Notes switched off".
 
 `zig build -Dansi-tests=true` folds the ansi-test run into the default
 build — useful for "run everything before I push" but too slow for
@@ -69,9 +69,7 @@ A slice is a driver at `tests/lisp/ansi-<name>.lisp` naming the files it
 wants. `tests/lisp/ansi-rt.lisp` brings the framework up ahead of it,
 with the suite's `universe.lsp` and `cl-symbol-names.lsp`, which the
 auxiliary files and many tests read. It also loads the suite's
-`notes.lsp` and switches off the tests noted
-`:nil-vectors-are-strings`: an array of element type `nil` upgrades to
-`bit` in zisp, so no `(vector nil)` is a string.
+`notes.lsp` and switches off the notes listed under "Notes switched off".
 
 `subtypep` is also compared with SBCL's, call by call:
 
@@ -98,6 +96,21 @@ initialization and loop corpora:
 tests/run-corpus-sbcl.sh tests/lisp/unwind-protect-corpus.lisp \
   tests/lisp/init-protocol.lisp tests/lisp/loop-corpus.lisp
 ```
+
+## Notes switched off
+
+A test the suite tags with a note runs only while the note is on. zisp
+switches a note off only where the standard permits the behavior the
+note's tests reject:
+
+- `:nil-vectors-are-strings`: an array of element type `nil` upgrades to
+  `bit` in zisp. CLHS 15.1.2.1 permits an upgraded element type that is
+  any supertype of the one asked for, and the STRING entry in CLHS 16.2
+  makes a string a vector specialized to `character` or a subtype of it,
+  so a `(vector nil)` stored as bits is not a string.
+
+`tests/ansi_notes_test.zig` fails when this list and the notes the
+harness files switch off differ.
 
 ## Layout
 

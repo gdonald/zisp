@@ -745,9 +745,13 @@ fn tagbody(ev: *Evaluator, args: Value) Error!Value {
     return ev.set1(value.NIL);
 }
 
+pub fn isGoTag(tag: Value) bool {
+    return tag.isSymbol() or tag.isFixnum() or heap.isBignum(tag);
+}
+
 fn goForm(ev: *Evaluator, args: Value) Error!Value {
     const tag = try expectOneArg(args);
-    if (!tag.isSymbol() and tag.tag() != .fixnum) return Error.TypeError;
+    if (!isGoTag(tag)) return Error.TypeError;
     const target = ev.findTagbody(tag) orelse return Error.ControlError;
     ev.go_id = target.id;
     ev.go_target = target.pos;

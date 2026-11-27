@@ -34,3 +34,13 @@
 (eq (handler-case (read-from-string "(#3#)") (error () :unlabeled)) :unlabeled)
 (eq (handler-case (read-from-string "(#4=a #4=b)") (error () :twice)) :twice)
 (equal (read-from-string "#+(or) #5=(a #5#) done") 'done)
+
+;; The position read-from-string returns counts characters, not bytes.
+(equal (multiple-value-list (read-from-string (concatenate 'string "#| " (string (code-char 233)) " |#1")))
+       '(1 8))
+
+;; A float with no marker or an e marker reads as *read-default-float-format*.
+(let ((*read-default-float-format* 'double-float))
+  (and (typep (read-from-string "1.5e-50") 'double-float)
+       (typep (read-from-string "1.5") 'double-float)
+       (typep (read-from-string "1.5f0") 'single-float)))

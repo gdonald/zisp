@@ -1511,7 +1511,7 @@ pub const VM = struct {
         }
         if (x.isSingleFloat() and y.isSingleFloat()) {
             const f = x.toSingleFloat() * y.toSingleFloat();
-            if (std.math.isFinite(f)) {
+            if (std.math.isFinite(f) and !productUnderflowed(f, x.toSingleFloat(), y.toSingleFloat())) {
                 run.stack[run.sp - 2] = Value.fromSingleFloat(f);
                 run.sp -= 1;
                 return .next;
@@ -1520,6 +1520,10 @@ pub const VM = struct {
         run.stack[run.sp - 2] = try run.vm.fallback(run.ev, .mul, run.stack[run.sp - 2 .. run.sp]);
         run.sp -= 1;
         return .next;
+    }
+
+    fn productUnderflowed(product: f32, x: f32, y: f32) bool {
+        return product == 0 and x != 0 and y != 0;
     }
 
     fn fixnumProduct(x: i64, y: i64) ?i64 {
@@ -1540,8 +1544,8 @@ pub const VM = struct {
     }
 
     /// `+`, `-` and `*` of two values the compiler knows are single-floats.
-    /// A result that overflows goes through the standard function, which
-    /// signals the error.
+    /// A result that overflows or underflows goes through the standard
+    /// function, which signals the error.
     inline fn opArithSingleFloats(run: *Run, w: u32) Error!Flow {
         const x = run.stack[run.sp - 2].toSingleFloat();
         const y = run.stack[run.sp - 1].toSingleFloat();
@@ -1551,7 +1555,8 @@ pub const VM = struct {
             .sub_single_floats => x - y,
             else => x * y,
         };
-        if (std.math.isFinite(f)) {
+        const underflowed = op == .mul_single_floats and productUnderflowed(f, x, y);
+        if (std.math.isFinite(f) and !underflowed) {
             run.stack[run.sp - 2] = Value.fromSingleFloat(f);
         } else {
             const which: Fallback = switch (op) {

@@ -33,6 +33,8 @@ pub const NativeError = error{
     ProgramError,
     DivisionByZero,
     ArithmeticError,
+    FloatingPointOverflow,
+    FloatingPointUnderflow,
     FileError,
     NoOutputStream,
     Quit,

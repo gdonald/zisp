@@ -255,6 +255,13 @@ test "a tilde colon semicolon clause is the fallback" {
     try fx.expectFormat("(format nil \"~[zero~;one~:;many~]\" 0)", "zero");
 }
 
+test "an index past the fixnums selects the fallback clause" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFormat("(format nil \"~[a~]\" (1+ most-positive-fixnum))", "");
+    try fx.expectFormat("(format nil \"~[a~:;b~]\" (1- most-negative-fixnum))", "b");
+}
+
 test "tilde colon bracket chooses between a false and a true clause" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);

@@ -34,6 +34,18 @@
        (not (inferred-mentions 'inferred-float "ADD"))
        (eql (inferred-float 1.5) 6.25)))
 
+;; A product of declared single-floats too small for the format signals
+;; the underflow the standard function does.
+(progn
+  (defun inferred-float-product (x y)
+    (declare (type single-float x y))
+    (* x y))
+  (and (inferred-mentions 'inferred-float-product "MUL_SINGLE_FLOATS")
+       (eq (handler-case (inferred-float-product least-positive-single-float 0.25)
+             (floating-point-underflow () :underflow))
+           :underflow)
+       (eql (inferred-float-product 0.0 least-positive-single-float) 0.0)))
+
 ;; A variable nothing assigns has the type of its initial value: y is an
 ;; integer from 1 to 1001, so its square is a fixnum product.
 (progn
