@@ -263,11 +263,12 @@ pub fn build(b: *std.Build) void {
     const suite_dir: std.Build.InstallDir = .{ .custom = "suite" };
     const suite_install = b.addInstallArtifact(suite_exe, .{ .dest_dir = .{ .override = suite_dir } });
 
-    // `zig build ansi-test` shells out to the harness in tests/run-ansi.sh,
-    // passing ZISP=... so the script doesn't have to guess the path.
+    // `zig build ansi-test` runs the whole suite the way its doit.lsp
+    // does, through tests/run-ansi-suite.sh, passing ZISP=... so the
+    // script doesn't have to guess the path.
     const ansi_run = b.addSystemCommand(&.{"env"});
     ansi_run.addPrefixedFileArg("ZISP=", suite_exe.getEmittedBin());
-    ansi_run.addArgs(&.{ "bash", "tests/run-ansi.sh" });
+    ansi_run.addArgs(&.{ "bash", "tests/run-ansi-suite.sh" });
     ansi_run.step.dependOn(&suite_install.step);
     const ansi_step = b.step("ansi-test", "Run the ANSI Common Lisp test suite");
     ansi_step.dependOn(&ansi_run.step);

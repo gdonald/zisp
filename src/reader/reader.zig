@@ -360,6 +360,7 @@ pub const Reader = struct {
             .uninterned => ReadStep{ .value = try self.parseUninternedAt(t.text, t.pos) },
             .hash_label_define => ReadStep{ .value = try self.readLabelDefinition(t) },
             .hash_label_reference => ReadStep{ .value = try self.readLabelReference(t) },
+            .hash_array => ReadStep{ .value = try self.readArray(t) },
             .eof => self.errAt(t.pos, Error.EndOfInput),
             // Reader-macro kinds without a handler shouldn't reach here —
             // the standard readtable populates them. A null means user code
@@ -507,6 +508,62 @@ pub const Reader = struct {
             }
         }
         return tree;
+    }
+
+    /// `#nA contents`: an array of rank n whose dimensions are the lengths
+    /// of the first sequence at each level of `contents`.
+    fn readArray(self: *Reader, t: Token) Error!Value {
+        const rank = std.fmt.parseInt(usize, t.text, 10) catch return self.errAt(t.pos, Error.BadToken);
+        if (rank >= heap_mod.ARRAY_RANK_LIMIT) return self.errAt(t.pos, Error.BadToken);
+        const contents = try self.readForm();
+        const sizes = try self.heap.allocator.alloc(usize, rank);
+        defer self.heap.allocator.free(sizes);
+        var level = contents;
+        for (sizes) |*size| {
+            size.* = sequenceLength(level) orelse return self.errAt(t.pos, Error.BadToken);
+            if (size.* > 0) level = sequenceElement(level, 0);
+        }
+        const result = try self.heap.allocArray(sizes, .t);
+        var elements: std.ArrayList(Value) = .empty;
+        defer elements.deinit(self.heap.allocator);
+        if (!try flattenArrayContents(self.heap.allocator, contents, sizes, &elements)) return self.errAt(t.pos, Error.BadToken);
+        @memcpy(heap_mod.arrayElements(result), elements.items);
+        return result;
+    }
+
+    fn flattenArrayContents(allocator: std.mem.Allocator, contents: Value, sizes: []const usize, out: *std.ArrayList(Value)) !bool {
+        if (sizes.len == 0) {
+            try out.append(allocator, contents);
+            return true;
+        }
+        if (sequenceLength(contents) != sizes[0]) return false;
+        for (0..sizes[0]) |index| {
+            if (!try flattenArrayContents(allocator, sequenceElement(contents, index), sizes[1..], out)) return false;
+        }
+        return true;
+    }
+
+    fn sequenceLength(v: Value) ?usize {
+        if (v.equalsRaw(value.NIL)) return 0;
+        if (v.isCons()) {
+            var count: usize = 0;
+            var rest = v;
+            while (rest.isCons()) : (rest = heap_mod.cdr(rest)) count += 1;
+            return if (rest.equalsRaw(value.NIL)) count else null;
+        }
+        if (heap_mod.isString(v)) return heap_mod.asString(v).slice().len;
+        if (heap_mod.isArray(v) and heap_mod.asArray(v).rank == 1) return heap_mod.arrayElements(v).len;
+        return null;
+    }
+
+    fn sequenceElement(v: Value, index: usize) Value {
+        if (v.isCons()) {
+            var rest = v;
+            for (0..index) |_| rest = heap_mod.cdr(rest);
+            return heap_mod.car(rest);
+        }
+        if (heap_mod.isString(v)) return Value.fromChar(@intCast(heap_mod.asString(v).slice()[index]));
+        return heap_mod.arrayElements(v)[index];
     }
 
     /// `#P"..."` reads the following string and wraps it in a pathname.

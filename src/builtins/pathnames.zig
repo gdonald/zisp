@@ -55,6 +55,10 @@ pub fn registerPathnames(ev: *Evaluator) !void {
     _ = try ev.defineNative("TRANSLATE-PATHNAME", &translatePathnameFn);
     _ = try ev.defineNative("TRANSLATE-LOGICAL-PATHNAME", &translateLogicalPathnameFn);
 
+    const defaults = try ev.interner.intern("*DEFAULT-PATHNAME-DEFAULTS*");
+    symbol_mod.symbol(defaults).value_cell = try ev.heap.allocPathname(emptyPathname());
+    symbol_mod.symbol(defaults).special = true;
+
     // The component markers, interned before any source can create them
     // in another package.
     for ([_][]const u8{
@@ -130,6 +134,15 @@ fn componentsOf(ev: *Evaluator, v: Value) Error!heap.Pathname {
         return parseText(ev, text);
     }
     return Error.TypeError;
+}
+
+/// The namestring the file system is given for a pathname designator:
+/// the designator merged with `*default-pathname-defaults*`.
+pub fn hostNamestring(ev: *Evaluator, v: Value) Error![]const u8 {
+    if (heap.isPathname(v) and heap.asPathname(v).is_logical) return namestringOf(ev.heap.allocator, v);
+    const defaults = symbol_mod.symbol(try ev.interner.intern("*DEFAULT-PATHNAME-DEFAULTS*")).value_cell;
+    const merged = try mergePathnamesFn(@ptrCast(ev), &.{ v, defaults });
+    return namestringOf(ev.heap.allocator, merged);
 }
 
 /// A pathname from namestring text, for the callers that already hold

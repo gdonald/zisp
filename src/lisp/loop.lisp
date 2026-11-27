@@ -193,6 +193,9 @@ TYPE is one type for them all, or a tree of types shaped like PATTERN."
                  (t (return-from prepositions))))
          (go next)))
     (unless start-p (push (list counter 0) bindings))
+    ;; The variable starts at the counter's first value, where the forms
+    ;; of a later clause can see it.
+    (when variable (push (list variable counter) bindings))
     (let* ((by (or step 1))
            (test (case end-kind
                    ((:to :upto) (if down `(< ,counter ,end) `(> ,counter ,end)))
@@ -334,9 +337,12 @@ TYPE is one type for them all, or a tree of types shaped like PATTERN."
                        (%loop-for-arithmetic pattern))
                       (t (%loop-error "LOOP: ~S is not how a FOR clause goes on." (%loop-peek))))))
       ;; The variable's own binding comes after the hidden ones, which
-      ;; hold what the clause's forms evaluate to.
-      (list (append (car spec) (%loop-bindings-for pattern type))
-            (cadr spec) (caddr spec)))))
+      ;; hold what the clause's forms evaluate to. An arithmetic clause
+      ;; binds its variable itself.
+      (let ((own (%loop-bindings-for pattern type)))
+        (if (and pattern (assoc pattern (car spec)))
+            (list (car spec) (cadr spec) (caddr spec) own)
+            (list (append (car spec) own) (cadr spec) (caddr spec)))))))
 
 (defun %loop-emit-phase (specs which)
   "The forms of one phase of a group of FOR clauses: each clause's own
@@ -368,6 +374,16 @@ the clauses were joined by AND."
          (push (%loop-for-one) specs)
          (go next)))
     (setq specs (nreverse specs))
+    ;; Clauses joined by AND are bound in parallel, where an arithmetic
+    ;; variable cannot start at its counter, so it takes its default.
+    (when (cdr specs)
+      (setq specs (mapcar (lambda (spec)
+                            (if (fourth spec)
+                                (list (append (remove (car (first (fourth spec))) (car spec) :key #'car)
+                                              (fourth spec))
+                                      (cadr spec) (caddr spec))
+                                spec))
+                          specs)))
     (%loop-add-group (cdr specs) (mapcan (lambda (spec) (copy-list (car spec))) specs))
     (setq *%loop-first* (append (reverse (%loop-emit-phase specs 1)) *%loop-first*))
     (setq *%loop-steps* (append (reverse (%loop-emit-phase specs 2)) *%loop-steps*))))

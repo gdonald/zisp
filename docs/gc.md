@@ -58,8 +58,11 @@ cards, the roots, and whatever the copies themselves point at, rather
 than the whole live heap.
 
 An object the collected heap does not own is followed all the same. A
-closure comes off the host allocator rather than out of a region, so it
-sits on no card and nothing else would record what it captured.
+function `defun`, `defmacro` or a saved image made comes off the host
+allocator rather than out of a region, so it sits on no card and nothing
+else would record what it captured. A closure `lambda`, `flet` or
+`labels` makes is allocated in the collected heap like a compiled
+function, since a program can make any number of them.
 
 Two things are keyed on an address and are fixed up afterwards: the
 source-position table, whose entries move with the cons they describe,
@@ -142,7 +145,19 @@ cleared as the walk passes them.
 
 A dead object's payload arrays (string characters, array storage, bignum
 limbs, hash table entries, stream buffers) go back to the host allocator
-through a finalizer before the block is reclaimed.
+through a finalizer before the block is reclaimed. They come from the
+heap's storage allocator, which is the session's own allocator, kept
+apart from the arena natives use for scratch, so what a dead object held
+is given back while the session runs. An evacuation finalizes every
+object it left in the nursery uncopied before the nursery is reset, and
+tearing the heap down finalizes everything still live.
+
+A major collection also gives back the frames closures captured that it
+did not reach. They go on the environment's list of free frames, and the
+next scope that pushes one reuses it.
+
+Finding the region an address belongs to is a binary search of every
+region by address, after a check of the region the last lookup found.
 
 ## Weak pointers
 

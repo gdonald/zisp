@@ -304,6 +304,9 @@ pub const Allocator = struct {
     cons_regions: ?*Region = null,
     /// The region the last address looked up belonged to.
     last_region: ?*Region = null,
+    /// Every region, in address order, for finding the one an address
+    /// falls in.
+    by_address: std.ArrayListUnmanaged(*Region) = .empty,
     tenured_free: FreeLists = .{},
     nursery_free: FreeLists = .{},
     stats: Stats = .{},
@@ -326,6 +329,7 @@ pub const Allocator = struct {
         self.freeRegions(self.nursery_conses);
         self.freeRegions(self.regions);
         self.freeRegions(self.cons_regions);
+        self.by_address.deinit(self.backing);
         self.nursery_objects = null;
         self.nursery_conses = null;
         self.last_region = null;
@@ -534,6 +538,18 @@ pub const Allocator = struct {
         @memset(region.marks, 0);
     }
 
+    /// Run the finalizer on every object block the nursery holds. The
+    /// finalizer passes over the ones an evacuation copied.
+    pub fn finalizeNursery(self: *Allocator, finalizer: Finalizer) void {
+        const region = self.nursery_objects orelse return;
+        var offset: usize = 0;
+        while (offset < region.used) {
+            const header: *BlockHeader = @ptrCast(@alignCast(region.memory.ptr + offset));
+            if (!header.isFree()) finalizer.run(finalizer.context, header.payload());
+            offset += BLOCK_HEADER_BYTES + header.size();
+        }
+    }
+
     /// Give the nursery back to its bump pointers. Everything still
     /// wanted has been copied out by the time this runs.
     pub fn resetNursery(self: *Allocator) void {
@@ -713,6 +729,10 @@ pub const Allocator = struct {
         };
         @memset(region.marks, 0);
         @memset(region.cards, 0);
+        const base = @intFromPtr(memory.ptr);
+        var position: usize = self.by_address.items.len;
+        while (position > 0 and @intFromPtr(self.by_address.items[position - 1].memory.ptr) > base) position -= 1;
+        try self.by_address.insert(self.backing, position, region);
         self.stats.region_bytes += bytes;
         return region;
     }
@@ -750,26 +770,22 @@ pub const Allocator = struct {
     ///
     /// A mark phase asks this of every object it reaches, and the
     /// objects it reaches in a row were mostly allocated in a row, so
-    /// the region the last one was in is tried first. Without that the
-    /// walk is linear in the number of regions and a heap of a few
-    /// hundred of them spends all its time here.
+    /// the region the last one was in is tried first, ahead of a binary
+    /// search of every region by address.
     fn regionOf(self: *Allocator, address: usize) ?*Region {
         if (self.last_region) |current| {
             if (current.owns(address)) return current;
         }
-        for ([_]?*Region{ self.nursery_objects, self.nursery_conses }) |maybe| {
-            const current = maybe orelse continue;
-            if (current.owns(address)) return self.remember(current);
+        const regions = self.by_address.items;
+        var low: usize = 0;
+        var high: usize = regions.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (@intFromPtr(regions[middle].memory.ptr) <= address) low = middle + 1 else high = middle;
         }
-        var region = self.regions;
-        while (region) |current| : (region = current.next) {
-            if (current.owns(address)) return self.remember(current);
-        }
-        region = self.cons_regions;
-        while (region) |current| : (region = current.next) {
-            if (current.owns(address)) return self.remember(current);
-        }
-        return null;
+        if (low == 0) return null;
+        const candidate = regions[low - 1];
+        return if (candidate.owns(address)) self.remember(candidate) else null;
     }
 
     fn remember(self: *Allocator, region: *Region) *Region {
@@ -896,8 +912,10 @@ pub const Allocator = struct {
     }
 
     /// Forget every card. A collection that has read them all starts the
-    /// next round from clean.
+    /// next round from clean, and the next card scan reads only what is
+    /// dirtied from here on.
     pub fn clearCards(self: *Allocator) void {
+        self.card_scan_bytes = 0;
         for ([_]?*Region{ self.regions, self.cons_regions }) |first| {
             var region = first;
             while (region) |current| : (region = current.next) {

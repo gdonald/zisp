@@ -26,7 +26,6 @@ const Evaluator = eval_mod.Evaluator;
 const Error = function.NativeError;
 
 /// Namestring behind a pathname designator: a string, or a pathname.
-const namestringOf = pathnames.namestringOf;
 const fs = @import("fs.zig");
 
 fn evaluator(p: *anyopaque) *Evaluator {
@@ -297,7 +296,7 @@ fn readFn(p: *anyopaque, args: []const Value) Error!Value {
 fn loadFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    try loadPath(ev, try resolveLoadPath(ev, try namestringOf(ev.heap.allocator, args[0])));
+    try loadPath(ev, try resolveLoadPath(ev, try pathnames.hostNamestring(ev, args[0])));
     return value.T;
 }
 
@@ -370,7 +369,7 @@ fn truenameFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const io = ev.io orelse return Error.FileError;
-    const path = try namestringOf(ev.heap.allocator, args[0]);
+    const path = try pathnames.hostNamestring(ev, args[0]);
     const resolved = truenameOf(ev, io, path) catch return Error.FileError;
     defer ev.allocator.free(resolved);
     return pathnames.parsed(ev, resolved);
@@ -380,7 +379,7 @@ fn probeFileFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const io = ev.io orelse return Error.FileError;
-    const path = try namestringOf(ev.heap.allocator, args[0]);
+    const path = try pathnames.hostNamestring(ev, args[0]);
     const resolved = truenameOf(ev, io, path) catch return value.NIL;
     defer ev.allocator.free(resolved);
     return pathnames.parsed(ev, resolved);
@@ -393,7 +392,7 @@ fn fileWriteDateFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
     const io = ev.io orelse return Error.FileError;
-    const path = try namestringOf(ev.heap.allocator, args[0]);
+    const path = try pathnames.hostNamestring(ev, args[0]);
     const mtime = try fs.modified(io, path);
     const seconds: i64 = @intCast(@divFloor(mtime.nanoseconds, std.time.ns_per_s));
     return Value.fromFixnum(seconds + UNIX_EPOCH_UNIVERSAL_TIME);
@@ -469,7 +468,10 @@ fn evalForms(ev: *Evaluator, rd: *reader_mod.Reader) Error!void {
         // Between top-level forms nothing but the evaluator's own state
         // holds a value, which is what makes a collection safe here.
         try collect_mod.maybeCollect(ev);
-        const form = rd.read() catch return Error.ProgramError;
+        const form = rd.read() catch |e| return switch (e) {
+            error.OutOfMemory => Error.OutOfMemory,
+            else => Error.ProgramError,
+        };
         const f = form orelse break;
         // The form is fresh structure nothing else holds.
         var held = ev.heap.protect();
@@ -617,7 +619,7 @@ pub fn compileSourceNamed(ev: *Evaluator, source: []const u8, file: []const u8, 
 fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len % 2 == 0) return Error.WrongArgCount;
-    const path = try namestringOf(ev.heap.allocator, args[0]);
+    const path = try pathnames.hostNamestring(ev, args[0]);
     var output_file: ?[]const u8 = null;
     var key_index: usize = 1;
     while (key_index < args.len) : (key_index += 2) {
@@ -625,7 +627,7 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
         if (std.mem.eql(u8, symbol_mod.symbol(args[key_index]).name, "OUTPUT-FILE") and
             !args[key_index + 1].equalsRaw(value.NIL))
         {
-            output_file = try namestringOf(ev.heap.allocator, args[key_index + 1]);
+            output_file = try pathnames.hostNamestring(ev, args[key_index + 1]);
         }
     }
 

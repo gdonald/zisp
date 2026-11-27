@@ -72,15 +72,21 @@ test "a host allocator that grows a buffer is asked for new memory each time" {
 }
 
 test "a host allocator that runs out at any point in booting fails the session and gets all its memory back" {
+    // What a booted session holds at once, which every limit below has
+    // too little for. The peak is larger, and a collection that finds no
+    // memory for its work is skipped rather than failing the session.
     var unlimited: CountingHeap = .{};
     const unlimited_host = unlimited.host();
     var output = std.Io.Writer.Allocating.init(testing.allocator);
     defer output.deinit();
-    try evaluate(unlimited_host.allocator(), "(+ 1 2)", &output);
+    const repl = try zisp.repl.Repl.init(unlimited_host.allocator(), &output.writer, null);
+    try repl.run("(+ 1 2)");
+    const held_bytes = unlimited.live_bytes;
+    repl.deinit();
 
     var eighths: usize = 0;
     while (eighths < 8) : (eighths += 1) {
-        var counting: CountingHeap = .{ .limit = unlimited.peak_bytes * eighths / 8 };
+        var counting: CountingHeap = .{ .limit = held_bytes * eighths / 8 };
         const host = counting.host();
         try testing.expectError(error.OutOfMemory, evaluate(host.allocator(), "(+ 1 2)", &output));
         try testing.expectEqual(@as(usize, 0), counting.live_bytes);

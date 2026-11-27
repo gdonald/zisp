@@ -143,12 +143,17 @@ fn pushCapturedFrames(marker: *mark_mod.Marker, ev: *Evaluator) !void {
 /// Keep only the captured frames a full mark reached. The rest belong to
 /// closures nothing can call again, and what they hold has been swept, so
 /// no later collection may treat them as roots.
+/// Drop the captured frames nothing reached, and hand them back for the
+/// next scope to reuse.
 fn pruneCapturedFrames(marker: *const mark_mod.Marker, ev: *Evaluator) void {
     var kept: usize = 0;
     for (ev.env.captured_frames.items) |frame| {
         if (marker.visited_frames.contains(@intFromPtr(frame))) {
             ev.env.captured_frames.items[kept] = frame;
             kept += 1;
+        } else {
+            frame.captured = false;
+            ev.env.releaseFrame(frame);
         }
     }
     ev.env.captured_frames.shrinkRetainingCapacity(kept);
@@ -260,6 +265,7 @@ fn evacuateNursery(ev: *Evaluator) !void {
     // Nothing points into the nursery any more, so nothing is recorded
     // against the tenured space either.
     ev.heap.objects.clearCards();
+    ev.heap.finalizeNursery();
     ev.heap.objects.resetNursery();
     ev.heap.objects.stats.promoted = e.copied;
 }

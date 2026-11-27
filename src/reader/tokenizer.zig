@@ -502,6 +502,12 @@ pub const Tokenizer = struct {
                 };
             }
         }
+        if (self.peek()) |marker| {
+            if (marker == 'a' or marker == 'A') {
+                self.advance();
+                return .{ .kind = .hash_array, .pos = start_pos, .text = label_digits };
+            }
+        }
         if (too_large or radix < 2) return Error.BadRadix;
         const r_marker = self.peek() orelse return Error.BadNumericLiteral;
         if (r_marker != 'r' and r_marker != 'R') return Error.BadNumericLiteral;

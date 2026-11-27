@@ -79,7 +79,8 @@ pub const Repl = struct {
         self.interner = try symbol_mod.Interner.init(gpa);
         errdefer self.interner.deinit();
         try symbol_mod.initStandardSymbols(&self.interner);
-        self.heap = heap_mod.Heap.init(self.arena.allocator());
+        self.heap = heap_mod.Heap.initSplit(self.arena.allocator(), gpa);
+        errdefer self.heap.deinit();
         self.ev = Evaluator.init(gpa, &self.heap, &self.interner);
         errdefer self.ev.deinit();
         self.ev.out = out;
@@ -109,6 +110,7 @@ pub const Repl = struct {
 
     pub fn deinit(self: *Repl) void {
         self.ev.deinit();
+        self.heap.deinit();
         self.interner.deinit();
         self.arena.deinit();
         self.gpa.destroy(self);

@@ -735,6 +735,52 @@ Things no other CL implementation can easily do, because they don't have Zig und
 
 ---
 
+Phase 11: Full ansi-test Compliance
+
+Every test the suite's own driver runs passes, interpreted and compiled. The per-category harness reports 13597 of 17055 passing at the start of this phase. It also leaves out `environment/`, `files/`, `misc/` and `system-construction/`, about 1100 tests, and it loads a category's files without the auxiliary files that category's `load.lsp` loads first, so some of its failures are files that never loaded.
+
+- [ ] 11.1. Run the suite the way it runs itself
+  - [x] 11.1.1. `zig build ansi-test` runs `doit.lsp` in a fasl-free copy of the suite: `init.lsp`, `gclload1.lsp`, `gclload2.lsp`, then `(regression-test:do-tests)`. It prints the total, the failure count and every failing test name, and exits non-zero on any failure. Acceptance: the total it prints equals `(length (regression-test::pending-tests))` before the run, and the four categories the old harness left out are in it
+  - [ ] 11.1.2. `tests/run-ansi.sh <category>` loads that category's own `load.lsp` after `gclload1.lsp`, so per-category counts add up to the full run's. Acceptance: the sum over all 24 categories equals the total from 11.1.1
+  - [ ] 11.1.3. `MODE=compile` runs the full suite with `ext:*evaluator-mode*` set to `:compile`, so every test runs as bytecode
+  - [ ] 11.1.4. Record the failing test names in `tests/ansi-failures.txt`, which rt reads as its expected failures. The harness fails when a test not in the file fails, and when a test in the file passes, so the file shrinks with each fix and never grows. Acceptance: fixing one test without removing its name from the file fails the run
+- [ ] 11.2. Implementation-dependent tests
+  - [ ] 11.2.1. Every note zisp disables (such as `:nil-vectors-are-strings`) is listed in `docs/ansi-test.md` with the CLHS section that permits zisp's behavior. A note is not disabled to hide a failure the standard does not permit. Acceptance: the notes `tests/lisp/ansi-rt.lisp` disables and the notes in the doc are the same list
+  - [ ] 11.2.2. Tests whose result depends on an implementation limit (fixnum width, `array-dimension-limit`, `char-code-limit`, float formats) pass against zisp's limits, not skipped
+- [ ] 11.3. Syntax
+  - [ ] 11.3.1. `reader/`: 0 failures
+  - [ ] 11.3.2. `printer/`: 0 failures, including `print-unreadable-object`, `*print-pretty*` layout and every `format` directive
+- [ ] 11.4. Evaluation
+  - [ ] 11.4.1. `symbols/`: 0 failures
+  - [ ] 11.4.2. `packages/`: 0 failures
+  - [ ] 11.4.3. `eval-and-compile/`: 0 failures, including `compile-file` and `load` of the files it writes, `macroexpand` environments and `define-compiler-macro`
+  - [ ] 11.4.4. `data-and-control-flow/`: 0 failures
+  - [ ] 11.4.5. `environment/`: 0 failures, including `describe`, `inspect`, `time`, `room`, `ed`, `dribble`, `apropos` and the `decode-universal-time` family
+- [ ] 11.5. Data types
+  - [ ] 11.5.1. `cons/`: 0 failures
+  - [ ] 11.5.2. `sequences/`: 0 failures
+  - [ ] 11.5.3. `arrays/`: 0 failures, including displaced, adjustable and fill-pointer arrays of every specialized element type
+  - [ ] 11.5.4. `strings/`: 0 failures
+  - [ ] 11.5.5. `characters/`: 0 failures
+  - [ ] 11.5.6. `hash-tables/`: 0 failures
+  - [ ] 11.5.7. `numbers/`: 0 failures, including float printing and reading round trips, `rational` and `rationalize`, and the irrational functions on complex arguments and branch cuts
+  - [ ] 11.5.8. `structures/`: 0 failures
+  - [ ] 11.5.9. `types-and-classes/`: 0 failures
+- [ ] 11.6. Files and streams
+  - [ ] 11.6.1. `pathnames/`: 0 failures
+  - [ ] 11.6.2. `files/`: 0 failures
+  - [ ] 11.6.3. `streams/`: 0 failures, including broadcast, concatenated, echo, synonym and two-way streams, and binary streams of every element type
+- [ ] 11.7. The rest of the suite
+  - [ ] 11.7.1. `conditions/`, `objects/` and `iteration/` still have 0 failures in the full run, with their auxiliary files loaded by `gclload1.lsp`
+  - [ ] 11.7.2. `system-construction/`: 0 failures
+  - [ ] 11.7.3. `misc/`: 0 failures
+- [ ] 11.8. Hold the line
+  - [ ] 11.8.1. `tests/ansi-failures.txt` is empty, and the harness no longer reads it
+  - [ ] 11.8.2. `doit.lsp` reports no failures interpreted and with `MODE=compile`
+  - [ ] 11.8.3. GitHub CI runs the full suite on every commit, so a change that breaks an ansi-test fails CI
+
+---
+
 Compliance Tracking
 
 The ansi-test suite is roughly 720 `.lsp` files across 22 category directories. Per-phase targets, grounded in which categories are expected to pass:

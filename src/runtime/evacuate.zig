@@ -348,16 +348,16 @@ pub const Evacuator = struct {
         for (self.rehash.items) |v| {
             const table = heap.asHashTable(v);
             var buckets = table.buckets.valueIterator();
-            while (buckets.next()) |bucket| bucket.deinit(self.heap.allocator);
+            while (buckets.next()) |bucket| bucket.deinit(self.heap.storage);
             table.buckets.clearRetainingCapacity();
             for (table.entries.items, 0..) |entry, index| {
                 if (!entry.live) continue;
                 const slot = try table.buckets.getOrPut(
-                    self.heap.allocator,
+                    self.heap.storage,
                     equality.hash(table.hash_test, entry.key),
                 );
                 if (!slot.found_existing) slot.value_ptr.* = .empty;
-                try slot.value_ptr.append(self.heap.allocator, @intCast(index));
+                try slot.value_ptr.append(self.heap.storage, @intCast(index));
             }
         }
     }

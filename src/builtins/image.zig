@@ -994,7 +994,7 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
             },
             .readtable => blk: {
                 const case = try l.r.int(u64);
-                const bytes = try ev.heap.allocator.alignedAlloc(u8, std.mem.Alignment.of(reader_mod.Readtable).max(.of(u64)), @sizeOf(reader_mod.Readtable));
+                const bytes = try ev.heap.storage.alignedAlloc(u8, std.mem.Alignment.of(reader_mod.Readtable).max(.of(u64)), @sizeOf(reader_mod.Readtable));
                 const table: *reader_mod.Readtable = @ptrCast(bytes.ptr);
                 table.* = reader_mod.reader.defaultReadtable().*;
                 break :blk try ev.heap.allocReadtable(bytes, case);
@@ -1040,6 +1040,8 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
                 const offset = try l.r.int(u64);
                 if (!heap.isString(to)) return Error.FileError;
                 const s = heap.asString(target);
+                // A displaced string owns no storage of its own.
+                if (!s.isDisplaced()) ev.heap.storage.free(s.allocated());
                 s.displaced_to = to;
                 s.codes = heap.asString(to).codes + @as(usize, @intCast(offset));
                 s.len = len;
@@ -1075,11 +1077,7 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
                     if (!heap.isArray(to)) return Error.FileError;
                     a.displaced_to = to;
                     a.displaced_offset = offset;
-                    a.storage = heap.asArray(to).storage + @as(usize, @intCast(offset));
                     @memcpy(a.dims[0..rank], dims);
-                    var total: u64 = 1;
-                    for (dims) |d| total *= d;
-                    a.storage_len = total;
                     heap.writeBarrier(ev.heap, target, to);
                 } else {
                     const n: usize = @intCast(try l.r.int(u64));

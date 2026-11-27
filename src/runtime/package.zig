@@ -178,6 +178,22 @@ pub const Registry = struct {
         try pkg.nicknames.append(self.allocator, owned);
     }
 
+    /// Give a package a new name and replace its nicknames. A name
+    /// another package holds is refused, and the package keeps its old
+    /// names.
+    pub fn rename(self: *Registry, pkg: *Package, new_name: []const u8, nicknames: []const []const u8) Error!void {
+        if (self.table.get(new_name)) |existing| if (existing != pkg) return Error.PackageExists;
+        for (nicknames) |name| {
+            if (self.table.get(name)) |existing| if (existing != pkg) return Error.PackageExists;
+        }
+        _ = self.table.remove(pkg.name);
+        for (pkg.nicknames.items) |nick| _ = self.table.remove(nick);
+        pkg.nicknames.clearRetainingCapacity();
+        pkg.name = try self.dupeName(new_name);
+        try self.table.put(self.allocator, pkg.name, pkg);
+        for (nicknames) |name| try self.addNickname(pkg, name);
+    }
+
     /// Drops the package from name resolution and severs its use links. The
     /// object itself stays allocated so symbols keep a valid home pointer.
     pub fn delete(self: *Registry, pkg: *Package) void {

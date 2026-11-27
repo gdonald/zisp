@@ -283,7 +283,7 @@ fn openFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1) return Error.WrongArgCount;
     const options = try parseOpenOptions(ev, args[1..]);
-    const path = try pathnames.namestringOf(ev.heap.allocator, args[0]);
+    const path = try pathnames.hostNamestring(ev, args[0]);
     const existing = try readWholeFile(ev, path);
 
     if (existing == null) {
@@ -333,12 +333,12 @@ fn prepareOutput(
     if (existing == null) return;
 
     if (try keywordIs(ev, clash, "APPEND")) {
-        try stream.output.appendSlice(ev.heap.allocator, existing.?);
+        try stream.output.appendSlice(ev.heap.storage, existing.?);
         stream.write_position = stream.output.items.len;
         return;
     }
     if (try keywordIs(ev, clash, "OVERWRITE")) {
-        try stream.output.appendSlice(ev.heap.allocator, existing.?);
+        try stream.output.appendSlice(ev.heap.storage, existing.?);
         stream.write_position = 0;
         return;
     }
@@ -550,7 +550,7 @@ pub fn emitBytes(ev: *Evaluator, s: *Stream, bytes: []const u8) Error!void {
         if (s.write_position < s.output.items.len) {
             s.output.items[s.write_position] = b;
         } else {
-            try s.output.append(ev.heap.allocator, b);
+            try s.output.append(ev.heap.storage, b);
         }
         s.write_position += 1;
     }

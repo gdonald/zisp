@@ -1,4 +1,5 @@
 const std = @import("std");
+const cl_symbols = @import("cl_symbols.zig");
 const value = @import("value.zig");
 const package = @import("package.zig");
 const heap = @import("heap.zig");
@@ -256,6 +257,7 @@ pub fn initStandardSymbols(interner: *Interner) !void {
     interner.package_symbol = try interner.intern("*PACKAGE*");
     symbol(interner.package_symbol).special = true;
     interner.setCurrentPackage(interner.cl_user);
+    for (cl_symbols.names) |standard_name| _ = try interner.intern(standard_name);
 
     // Lambda-list keywords and core special forms
     inline for (&[_][]const u8{

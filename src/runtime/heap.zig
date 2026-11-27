@@ -127,6 +127,9 @@ pub const ElementType = enum(u8) { t = 0, character = 1, bit = 2, unsigned_byte_
 /// indirectly so `adjust-array` can resize either without moving the
 /// object. A displaced array has no storage of its own and indexes into
 /// its target, which may itself be displaced.
+/// The value of `array-rank-limit`.
+pub const ARRAY_RANK_LIMIT: i64 = 128;
+
 pub const HeapArray = extern struct {
     header: HeapHeader,
     rank: u32,
@@ -384,9 +387,13 @@ pub const Collector = struct {
 };
 
 pub const Heap = struct {
-    /// Payload arrays (string characters, array storage, bignum limbs)
-    /// and the collections objects own come from here.
+    /// Scratch space for work a native does while it runs, which is not
+    /// given back one allocation at a time.
     allocator: std.mem.Allocator,
+    /// Payload arrays (string characters, array storage, bignum limbs)
+    /// and the collections objects own come from here, and go back when
+    /// the object that owns them is reclaimed.
+    storage: std.mem.Allocator,
     /// Objects themselves come from here, so a sweep can walk them.
     objects: gc.Allocator,
     /// Set once an evaluator is driving this heap.
@@ -402,10 +409,17 @@ pub const Heap = struct {
     stack: stack_mod.Stack,
 
     pub fn init(allocator: std.mem.Allocator) Heap {
+        return initSplit(allocator, allocator);
+    }
+
+    /// A heap whose scratch space and object storage come from different
+    /// allocators.
+    pub fn initSplit(scratch: std.mem.Allocator, storage: std.mem.Allocator) Heap {
         return .{
-            .allocator = allocator,
-            .objects = gc.Allocator.init(allocator),
-            .stack = stack_mod.Stack.init(allocator),
+            .allocator = scratch,
+            .storage = storage,
+            .objects = gc.Allocator.init(scratch),
+            .stack = stack_mod.Stack.init(scratch),
         };
     }
 
@@ -452,8 +466,18 @@ pub const Heap = struct {
     }
 
     pub fn deinit(self: *Heap) void {
+        // With nothing marked, the sweep finalizes every object and gives
+        // back the storage each one owns.
+        self.objects.clearMarks();
+        self.objects.sweep(.everything, .{ .context = self, .run = finalizeObject });
         self.stack.deinit();
         self.objects.deinit();
+    }
+
+    /// Give back the storage of every object in the nursery that the
+    /// evacuation did not copy, ahead of the nursery being reset.
+    pub fn finalizeNursery(self: *Heap) void {
+        self.objects.finalizeNursery(.{ .context = self, .run = finalizeObject });
     }
 
     /// Space for one object of type `T`, taken from the object regions.
@@ -574,7 +598,7 @@ pub const Heap = struct {
     /// fills in.
     pub fn allocStringWithCapacity(self: *Heap, len: usize, capacity: usize) !Value {
         const obj = try self.create(HeapString);
-        const codes = try self.allocator.alloc(u32, capacity);
+        const codes = try self.storage.alloc(u32, capacity);
         obj.* = .{
             .header = .{ .type_tag = .string, .size = @sizeOf(HeapString) },
             .len = len,
@@ -597,11 +621,13 @@ pub const Heap = struct {
     /// value already points at.
     pub fn resizeString(self: *Heap, v: Value, capacity: usize) !void {
         const s = asString(v);
-        const codes = try self.allocator.alloc(u32, capacity);
+        const codes = try self.storage.alloc(u32, capacity);
         const keep = @min(s.capacity, capacity);
         @memcpy(codes[0..keep], s.codes[0..keep]);
+        if (!s.isDisplaced()) self.storage.free(s.allocated());
         s.codes = codes.ptr;
         s.capacity = capacity;
+        s.displaced_to = .{ .raw = 0 };
     }
 
     pub fn allocDoubleFloat(self: *Heap, x: f64) !Value {
@@ -681,13 +707,13 @@ pub const Heap = struct {
     /// left as NIL.
     pub fn allocArray(self: *Heap, sizes: []const usize, element_type: ElementType) !Value {
         const obj = try self.create(HeapArray);
-        const dims = try self.allocator.alloc(u64, sizes.len);
+        const dims = try self.storage.alloc(u64, sizes.len);
         var total: usize = 1;
         for (sizes, dims) |size, *d| {
             d.* = size;
             total *= size;
         }
-        const storage = try self.allocator.alloc(Value, total);
+        const storage = try self.storage.alloc(Value, total);
         @memset(storage, value.NIL);
         obj.* = .{
             .header = .{ .type_tag = .vector, .size = @sizeOf(HeapArray) },
@@ -709,18 +735,20 @@ pub const Heap = struct {
     /// fit in row-major order.
     pub fn resizeArray(self: *Heap, v: Value, sizes: []const usize) !void {
         const a = asArray(v);
-        const dims = try self.allocator.alloc(u64, sizes.len);
+        const dims = try self.storage.alloc(u64, sizes.len);
         var total: usize = 1;
         for (sizes, dims) |size, *d| {
             d.* = size;
             total *= size;
         }
-        const storage = try self.allocator.alloc(Value, total);
+        const storage = try self.storage.alloc(Value, total);
         @memset(storage, value.NIL);
         if (a.displaced_to.equalsRaw(value.NIL)) {
             const keep = @min(a.storage_len, total);
             @memcpy(storage[0..keep], a.storage[0..keep]);
         }
+        self.storage.free(a.dims[0..a.rank]);
+        self.storage.free(a.storage[0..@intCast(a.storage_len)]);
         a.rank = @intCast(sizes.len);
         a.dims = dims.ptr;
         a.storage = storage.ptr;
@@ -729,12 +757,15 @@ pub const Heap = struct {
         a.displaced_offset = 0;
     }
 
-    /// Wrap a `Const` whose limbs the heap allocator already owns.
+    /// A bignum holding a copy of `n`'s limbs. The copy is made before
+    /// the object is, since making it can reclaim the bignum `n` reads.
     pub fn allocBignum(self: *Heap, n: std.math.big.int.Const) !Value {
+        const limbs = try self.storage.dupe(std.math.big.Limb, n.limbs);
+        errdefer self.storage.free(limbs);
         const obj = try self.create(HeapBignum);
         obj.* = .{
             .header = .{ .type_tag = .bignum, .size = @sizeOf(HeapBignum) },
-            .limbs = n.limbs.ptr,
+            .limbs = limbs.ptr,
             .len = n.limbs.len,
             .positive = n.positive,
         };
@@ -841,40 +872,42 @@ pub const Heap = struct {
 fn finalizeObject(context: *anyopaque, object: [*]align(gc.ALIGNMENT) u8) void {
     const self: *Heap = @ptrCast(@alignCast(context));
     const obj: *HeapObject = @ptrCast(@alignCast(object));
+    // A copy the evacuation made owns the storage now.
+    if (obj.header.forwarded) return;
     switch (obj.header.type_tag) {
         .string => {
             const text: *HeapString = @ptrCast(obj);
             // A displaced string borrows its target's storage.
-            if (!text.isDisplaced()) self.allocator.free(text.allocated());
+            if (!text.isDisplaced()) self.storage.free(text.allocated());
         },
         .readtable => {
             const table: *HeapReadtable = @ptrCast(@alignCast(obj));
             const bytes: [*]align(8) u8 = @ptrCast(@alignCast(table.handlers));
-            self.allocator.free(bytes[0..@intCast(table.handlers_size)]);
+            self.storage.free(bytes[0..@intCast(table.handlers_size)]);
         },
         .vector => {
             const array: *HeapArray = @ptrCast(obj);
-            self.allocator.free(array.dims[0..array.rank]);
-            self.allocator.free(array.storage[0..@intCast(array.storage_len)]);
+            self.storage.free(array.dims[0..array.rank]);
+            self.storage.free(array.storage[0..@intCast(array.storage_len)]);
         },
         .bignum => {
             const big: *HeapBignum = @ptrCast(obj);
-            self.allocator.free(@constCast(big.limbs[0..@intCast(big.len)]));
+            self.storage.free(@constCast(big.limbs[0..@intCast(big.len)]));
         },
         .hash_table => {
             const table: *HeapHashTable = @ptrCast(@alignCast(obj));
             var buckets = table.buckets.valueIterator();
-            while (buckets.next()) |bucket| bucket.deinit(self.allocator);
-            table.buckets.deinit(self.allocator);
-            table.entries.deinit(self.allocator);
+            while (buckets.next()) |bucket| bucket.deinit(self.storage);
+            table.buckets.deinit(self.storage);
+            table.entries.deinit(self.storage);
         },
         .stream => {
             const stream: *HeapStream = @ptrCast(@alignCast(obj));
-            stream.output.deinit(self.allocator);
-            stream.tokens.deinit(self.allocator);
+            stream.output.deinit(self.storage);
+            stream.tokens.deinit(self.storage);
             if (stream.circle) |state| {
-                state.deinit(self.allocator);
-                self.allocator.destroy(state);
+                state.deinit(self.storage);
+                self.storage.destroy(state);
             }
         },
         else => {},

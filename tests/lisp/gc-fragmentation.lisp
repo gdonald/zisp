@@ -73,12 +73,15 @@
 (gc)
 
 ;; Nothing could merge, so the free blocks are many.
-(> (room-value :free-blocks) 100)
+(progn
+  (defparameter *gc-interleaved-blocks* (room-value :free-blocks))
+  (> *gc-interleaved-blocks* 100))
 
 (progn (setq *gc-survivors* nil) (gc))
 
-;; With the survivors gone, each region collapses to a single free block.
-(<= (room-value :free-blocks) 100)
+;; With the survivors gone, the runs between what the heap still holds
+;; merge, and the free blocks are far fewer.
+(<= (room-value :free-blocks) (floor *gc-interleaved-blocks* 10))
 
 ;; What is left is a handful of large blocks rather than many small
 ;; ones, which is what merging the runs bought.

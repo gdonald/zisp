@@ -196,8 +196,8 @@ fn lambda(ev: *Evaluator, args: Value) Error!Value {
     const body = heap.cdr(args);
     try validateParams(ev, params);
     try ev.env.captureCurrent();
-    return ev.set1(try function.allocClosure(
-        ev.heap.allocator,
+    return ev.set1(try function.allocHeapClosure(
+        ev.heap,
         null,
         params,
         body,
@@ -241,8 +241,8 @@ fn localFunctions(ev: *Evaluator, args: Value, recursive: bool) Error!Value {
         const fn_body = try blockBody(ev, blockName(given), heap.cdr(after_name));
         try ev.env.retainChain(ev.env.top_value);
         try ev.env.retainChain(captured_fenv);
-        const closure = try function.allocClosure(
-            ev.heap.allocator,
+        const closure = try function.allocHeapClosure(
+            ev.heap,
             symbol_mod.symbol(name).name,
             params,
             fn_body,

@@ -30,6 +30,7 @@ pub const TokenKind = enum {
     hash_dot, // #.   — read-time evaluation
     hash_label_define, // #n= — text holds the digits
     hash_label_reference, // #n# — text holds the digits
+    hash_array, // #nA — text holds the rank's digits
 
     // Literals
     integer, // text holds the digit run (with optional sign / radix prefix)

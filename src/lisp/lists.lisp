@@ -285,8 +285,19 @@ one, and with the entry added at the front where it does not."
                (subst new old (cdr tree) :test test :test-not test-not :key key)))
         (t tree)))
 
+(defun nsubst-if (new predicate tree &key key)
+  (cond ((funcall predicate (%key-of key tree)) new)
+        ((consp tree)
+         (setf (car tree) (nsubst-if new predicate (car tree) :key key)
+               (cdr tree) (nsubst-if new predicate (cdr tree) :key key))
+         tree)
+        (t tree)))
+
+(defun nsubst-if-not (new predicate tree &key key)
+  (nsubst-if new (lambda (element) (not (funcall predicate element))) tree :key key))
+
 (defun nsubst (new old tree &key test test-not key)
-  (subst new old tree :test test :test-not test-not :key key))
+  (nsubst-if new (lambda (element) (%test-satisfied old element test test-not nil)) tree :key key))
 
 (defun subst-if (new predicate tree &key key)
   (cond ((funcall predicate (%key-of key tree)) new)

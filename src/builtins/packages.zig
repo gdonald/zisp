@@ -52,6 +52,7 @@ pub fn registerPackages(ev: *Evaluator) !void {
     _ = try ev.defineNative("%PACKAGE-SYMBOLS", &packageSymbolsFn);
     _ = try ev.defineNative("%ALL-SYMBOLS", &allSymbolsFn);
     _ = try ev.defineNative("%ADD-NICKNAMES", &addNicknamesFn);
+    _ = try ev.defineNative("RENAME-PACKAGE", &renamePackageFn);
 
     function.asFunction(ev.env.lookupFunction(try ev.interner.intern("INTERN")).?).preserves_values = true;
     function.asFunction(ev.env.lookupFunction(try ev.interner.intern("FIND-SYMBOL")).?).preserves_values = true;
@@ -118,6 +119,30 @@ fn addNicknamesFn(p: *anyopaque, args: []const Value) Error!Value {
         ev.interner.registry.addNickname(pkg, text) catch return Error.PackageError;
     }
     return value.NIL;
+}
+
+/// `(rename-package package new-name &optional new-nicknames)`.
+fn renamePackageFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
+    const pkg = try special_forms.resolvePackage(ev, args[0]);
+    const new_name = if (package_mod.isPackage(args[1]))
+        package_mod.asPackage(args[1]).name
+    else
+        try special_forms.stringDesignator(ev.heap.allocator, args[1]);
+    var nicknames: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer nicknames.deinit(ev.heap.allocator);
+    if (args.len == 3) {
+        var rest = args[2];
+        while (rest.isCons()) : (rest = heap.cdr(rest)) {
+            try nicknames.append(ev.heap.allocator, try special_forms.stringDesignator(ev.heap.allocator, heap.car(rest)));
+        }
+    }
+    ev.interner.registry.rename(pkg, new_name, nicknames.items) catch |err| return switch (err) {
+        error.OutOfMemory => Error.OutOfMemory,
+        else => Error.PackageError,
+    };
+    return pkg.toValue();
 }
 
 fn findPackageFn(p: *anyopaque, args: []const Value) Error!Value {

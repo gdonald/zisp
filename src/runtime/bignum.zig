@@ -37,7 +37,8 @@ pub fn fromI128(h: *Heap, n: i128) !Value {
     if (n >= value.FIXNUM_MIN and n <= value.FIXNUM_MAX) {
         return Value.fromFixnum(@intCast(n));
     }
-    var managed = try Managed.initSet(h.allocator, n);
+    var managed = try Managed.initSet(h.storage, n);
+    defer managed.deinit();
     return h.allocBignum(managed.toConst());
 }
 
@@ -106,9 +107,12 @@ fn binary(h: *Heap, op: Op, a: Value, b: Value) Error!Value {
     }
     var lhs_scratch = Scratch{};
     var rhs_scratch = Scratch{};
-    var lhs = try lhs_scratch.view(a).toManaged(h.allocator);
-    var rhs = try rhs_scratch.view(b).toManaged(h.allocator);
-    var out = try Managed.init(h.allocator);
+    var lhs = try lhs_scratch.view(a).toManaged(h.storage);
+    defer lhs.deinit();
+    var rhs = try rhs_scratch.view(b).toManaged(h.storage);
+    defer rhs.deinit();
+    var out = try Managed.init(h.storage);
+    defer out.deinit();
     switch (op) {
         .add => try out.add(&lhs, &rhs),
         .sub => try out.sub(&lhs, &rhs),
@@ -160,10 +164,14 @@ pub fn divTrunc(h: *Heap, a: Value, b: Value) Error!Value {
     }
     var lhs_scratch = Scratch{};
     var rhs_scratch = Scratch{};
-    var lhs = try lhs_scratch.view(a).toManaged(h.allocator);
-    var rhs = try rhs_scratch.view(b).toManaged(h.allocator);
-    var quotient = try Managed.init(h.allocator);
-    var remainder = try Managed.init(h.allocator);
+    var lhs = try lhs_scratch.view(a).toManaged(h.storage);
+    defer lhs.deinit();
+    var rhs = try rhs_scratch.view(b).toManaged(h.storage);
+    defer rhs.deinit();
+    var quotient = try Managed.init(h.storage);
+    defer quotient.deinit();
+    var remainder = try Managed.init(h.storage);
+    defer remainder.deinit();
     try quotient.divTrunc(&remainder, &lhs, &rhs);
     return normalize(h, quotient.toConst());
 }
@@ -186,9 +194,12 @@ pub fn gcd(h: *Heap, a: Value, b: Value) Error!Value {
     if (isZero(b)) return absOf(h, a);
     var lhs_scratch = Scratch{};
     var rhs_scratch = Scratch{};
-    var lhs = try lhs_scratch.view(a).abs().toManaged(h.allocator);
-    var rhs = try rhs_scratch.view(b).abs().toManaged(h.allocator);
-    var out = try Managed.init(h.allocator);
+    var lhs = try lhs_scratch.view(a).abs().toManaged(h.storage);
+    defer lhs.deinit();
+    var rhs = try rhs_scratch.view(b).abs().toManaged(h.storage);
+    defer rhs.deinit();
+    var out = try Managed.init(h.storage);
+    defer out.deinit();
     try out.gcd(&lhs, &rhs);
     return normalize(h, out.toConst());
 }
@@ -206,15 +217,25 @@ pub fn makeRatio(h: *Heap, num_in: Value, den_in: Value) Error!Value {
     if (isZero(den_in)) return Error.DivisionByZero;
     if (isZero(num_in)) return Value.fromFixnum(0);
 
+    // Each step allocates while the values of the others are still wanted.
+    var held = h.protect();
+    defer held.close();
+    try held.push(num_in);
+    try held.push(den_in);
     var num = num_in;
     var den = den_in;
     if (isNegative(den)) {
         num = try negate(h, num);
+        held.setItem(0, num);
         den = try negate(h, den);
+        held.setItem(1, den);
     }
     const divisor = try gcd(h, num, den);
+    try held.push(divisor);
     num = try divTrunc(h, num, divisor);
+    held.setItem(0, num);
     den = try divTrunc(h, den, divisor);
+    held.setItem(1, den);
     if (compare(den, Value.fromFixnum(1)) == .eq) return num;
     return h.allocRatio(num, den);
 }
@@ -260,6 +281,9 @@ pub fn fromFloat(h: *Heap, x: f64) Error!Value {
     if (exponent >= 0) {
         return shiftLeft(h, num, @intCast(exponent));
     }
+    var held = h.protect();
+    defer held.close();
+    try held.push(num);
     const den = try shiftLeft(h, Value.fromFixnum(1), @intCast(-exponent));
     num = try makeRatio(h, num, den);
     return num;
@@ -268,8 +292,10 @@ pub fn fromFloat(h: *Heap, x: f64) Error!Value {
 /// `n * 2^count`.
 pub fn shiftLeft(h: *Heap, n: Value, count: usize) Error!Value {
     var scratch = Scratch{};
-    var operand = try scratch.view(n).toManaged(h.allocator);
-    var out = try Managed.init(h.allocator);
+    var operand = try scratch.view(n).toManaged(h.storage);
+    defer operand.deinit();
+    var out = try Managed.init(h.storage);
+    defer out.deinit();
     try out.shiftLeft(&operand, count);
     return normalize(h, out.toConst());
 }

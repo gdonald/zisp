@@ -9,14 +9,17 @@
 #         tests/run-ansi.sh --read-only            # all categories
 #         tests/run-ansi.sh --read-only reader     # one category
 #
-#   2. Full eval: bring up the rt framework, load every .lsp under a
-#      category, run its tests, and count how many pass.
+#   2. Full eval: load each category the way the suite's gclload2.lsp
+#      does, gclload1.lsp and then the category's load.lsp, run its
+#      tests, and count how many pass. tests/run-ansi-suite.sh runs the
+#      whole suite in one session instead.
 #         tests/run-ansi.sh                        # all categories
 #         tests/run-ansi.sh cons numbers           # selected categories
 #
 # Common options:
 #   VERBOSE=1 tests/run-ansi.sh ...               # show the rt output
 #   ZISP=/path/to/zisp tests/run-ansi.sh ...      # override binary path
+#   MODE=compile tests/run-ansi.sh ...            # every test runs as bytecode
 #
 # Output:
 #   Per-category pass/fail counts plus an overall percentage.
@@ -26,8 +29,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZISP="${ZISP:-$ROOT/zig-out/bin/zisp}"
 SUITE="$ROOT/vendor/ansi-test"
-PRELUDE="$ROOT/tests/lisp/ansi-rt.lisp"
+DRIVER="$ROOT/tests/lisp/ansi-category.lisp"
 VERBOSE="${VERBOSE:-0}"
+MODE="${MODE:-interpret}"
 
 READ_ONLY=0
 if [[ "${1:-}" == "--read-only" ]]; then
@@ -35,30 +39,32 @@ if [[ "${1:-}" == "--read-only" ]]; then
   shift
 fi
 
-# Categories are subdirectories of vendor/ansi-test. Each contains many .lsp
-# files; running a category means loading all of them and then (do-tests).
-# Ordered so partial runs are meaningful early.
+# The categories the suite's gclload2.lsp loads, in its order.
 CATEGORIES=(
-  reader
-  printer
-  cons
   symbols
   eval-and-compile
   data-and-control-flow
-  strings
+  iteration
+  objects
+  conditions
+  cons
   arrays
-  sequences
   hash-tables
-  numbers
-  characters
   packages
-  pathnames
-  streams
+  numbers
+  sequences
   structures
   types-and-classes
-  conditions
-  objects
-  iteration
+  strings
+  characters
+  pathnames
+  files
+  streams
+  printer
+  reader
+  system-construction
+  environment
+  misc
 )
 
 # Each category belongs to one implementation stage. The stage summary groups
@@ -66,17 +72,19 @@ CATEGORIES=(
 group_of() {
   case "$1" in
     reader|printer) echo "syntax" ;;
-    cons|symbols|eval-and-compile|data-and-control-flow) echo "evaluator" ;;
-    strings|arrays|sequences|hash-tables|numbers|characters|packages|pathnames|streams|structures|types-and-classes) echo "data types" ;;
+    cons|symbols|packages|eval-and-compile|data-and-control-flow|environment) echo "evaluator" ;;
+    strings|arrays|sequences|hash-tables|numbers|characters|structures|types-and-classes) echo "data types" ;;
+    pathnames|files|streams) echo "files and streams" ;;
     conditions) echo "conditions" ;;
     objects) echo "objects" ;;
     iteration) echo "iteration" ;;
+    system-construction|misc) echo "the rest" ;;
     *) echo "other" ;;
   esac
 }
 
 # Ordered stage labels, used to print the grouped summary in a stable order.
-STAGES=(syntax evaluator "data types" conditions objects iteration other)
+STAGES=(syntax evaluator "data types" "files and streams" conditions objects iteration "the rest" other)
 
 # Per-category results captured as the run proceeds, for the grouped summary.
 result_cats=()
@@ -119,39 +127,41 @@ die() { echo "error: $*" >&2; exit 1; }
 # made absolute first.
 ZISP="$(cd "$(dirname "$ZISP")" && pwd)/$(basename "$ZISP")"
 
+if (( ! READ_ONLY )); then
+  COPY="$(mktemp -d)"
+  trap 'rm -rf "$COPY"' EXIT
+  rsync -a --exclude '*.zfasl' --exclude '.git' "$SUITE/" "$COPY/"
+fi
+
 if (( $# > 0 )); then
   selected=("$@")
 else
   selected=("${CATEGORIES[@]}")
 fi
 
-# Eval-mode sweep: one zisp per category brings the rt framework up with
-# tests/lisp/ansi-rt.lisp, loads every .lsp under the category, runs the
-# tests they registered, and prints an `ANSI-RT` tally of passed and
-# failed tests. A file that will not load counts its tests as failed.
+# Eval-mode sweep: one zisp per category, in a copy of the suite with no
+# fasls in it, loads the category through tests/lisp/ansi-category.lisp,
+# runs the tests it registered, and prints an `ANSI-RT` tally of passed
+# and failed tests. A category that does not load or does not report
+# counts as one failure, and what it printed last is shown.
 run_category() {
   local cat="$1"
-  local dir="$SUITE/$cat"
-  [[ -d "$dir" ]] || { echo "skip $cat (no $dir)"; return; }
-
-  local files=()
-  while IFS= read -r f; do
-    files+=("\"$cat/$(basename "$f")\"")
-  done < <(find "$dir" -maxdepth 1 -name '*.lsp' | sort)
+  [[ -f "$COPY/$cat/load.lsp" ]] || { echo "skip $cat (no $cat/load.lsp)"; return; }
 
   local output
-  output="$(cd "$SUITE" && "$ZISP" --batch \
-    --load "$PRELUDE" \
-    --eval "(in-package :cl-test)" \
-    --eval "(run-ansi-files \"$cat\" (list ${files[*]}))" 2>&1)" || true
+  output="$(cd "$COPY" && "$ZISP" --batch \
+    --eval "(setf ext:*evaluator-mode* :$MODE)" \
+    --eval "(defvar cl-user::*ansi-category* \"$cat\")" \
+    --load "$DRIVER" 2>&1 | tr -d '\000')" || true
   [[ "$VERBOSE" == "1" ]] && echo "$output"
 
   local pass=0 fail=0 tally
-  tally="$(grep -E "^ANSI-RT $cat [0-9]+ [0-9]+ [0-9]+ [0-9]+$" <<<"$output" | tail -n1 || true)"
+  tally="$(grep -E "^ANSI-RT $cat [0-9]+ [0-9]+$" <<<"$output" | tail -n1 || true)"
   if [[ -n "$tally" ]]; then
-    read -r _ _ pass fail _ _ <<<"$tally"
+    read -r _ _ pass fail <<<"$tally"
   else
-    fail=${#files[@]}
+    fail=1
+    grep '^ANSI-LOAD-ERROR' <<<"$output" || tail -n 5 <<<"$output"
   fi
 
   printf "%-26s PASS=%d FAIL=%d\n" "$cat" "$pass" "$fail"

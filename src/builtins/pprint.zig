@@ -82,14 +82,14 @@ fn expectPretty(v: Value) Error!*Stream {
 /// Record a span of text in the stream's buffer and return where it went.
 fn intern(ev: *Evaluator, s: *Stream, text: []const u8) Error!heap.Span {
     const start: u32 = @intCast(s.output.items.len);
-    try s.output.appendSlice(ev.heap.allocator, text);
+    try s.output.appendSlice(ev.heap.storage, text);
     return .{ .start = start, .len = @intCast(text.len) };
 }
 
 /// Append text a pretty stream was asked to write.
 pub fn recordText(ev: *Evaluator, s: *Stream, text: []const u8) Error!void {
     const span = try intern(ev, s, text);
-    try s.tokens.append(ev.heap.allocator, .{ .text = .{ .start = span.start, .len = span.len } });
+    try s.tokens.append(ev.heap.storage, .{ .text = .{ .start = span.start, .len = span.len } });
 }
 
 fn makePrettyStreamFn(p: *anyopaque, args: []const Value) Error!Value {
@@ -170,7 +170,7 @@ fn blockStartFn(p: *anyopaque, args: []const Value) Error!Value {
     const prefix = try intern(ev, s, try textOf(ev, args[1]));
     const per_line = try intern(ev, s, try textOf(ev, args[2]));
     const suffix = try intern(ev, s, try textOf(ev, args[3]));
-    try s.tokens.append(ev.heap.allocator, .{ .block_start = .{
+    try s.tokens.append(ev.heap.storage, .{ .block_start = .{
         .prefix = prefix,
         .per_line = per_line,
         .suffix = suffix,
@@ -185,8 +185,8 @@ fn blockEndFn(p: *anyopaque, args: []const Value) Error!Value {
     const s = try expectPretty(args[0]);
     if (s.block_depth == 0) return Error.ControlError;
     const suffix = try intern(ev, s, try textOf(ev, args[1]));
-    try s.tokens.append(ev.heap.allocator, .{ .text = .{ .start = suffix.start, .len = suffix.len } });
-    try s.tokens.append(ev.heap.allocator, .{ .block_end = suffix });
+    try s.tokens.append(ev.heap.storage, .{ .text = .{ .start = suffix.start, .len = suffix.len } });
+    try s.tokens.append(ev.heap.storage, .{ .block_end = suffix });
     s.block_depth -= 1;
     return value.NIL;
 }
@@ -215,7 +215,7 @@ fn pprintNewlineFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
     const kind = try newlineKindOf(ev, args[0]);
     const s = try prettyTargetOf(ev, if (args.len == 2) args[1] else null) orelse return value.NIL;
-    try s.tokens.append(ev.heap.allocator, .{ .newline = kind });
+    try s.tokens.append(ev.heap.storage, .{ .newline = kind });
     return value.NIL;
 }
 
@@ -232,7 +232,7 @@ fn pprintIndentFn(p: *anyopaque, args: []const Value) Error!Value {
         return Error.TypeError;
     if (!args[1].isFixnum()) return Error.TypeError;
     const s = try prettyTargetOf(ev, if (args.len == 3) args[2] else null) orelse return value.NIL;
-    try s.tokens.append(ev.heap.allocator, .{
+    try s.tokens.append(ev.heap.storage, .{
         .indent = .{ .kind = kind, .amount = args[1].toFixnum() },
     });
     return value.NIL;
@@ -246,7 +246,7 @@ fn pprintTabFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len < 3 or args.len > 4) return Error.WrongArgCount;
     if (!args[1].isFixnum() or !args[2].isFixnum()) return Error.TypeError;
     const s = try prettyTargetOf(ev, if (args.len == 4) args[3] else null) orelse return value.NIL;
-    try s.tokens.append(ev.heap.allocator, .{
+    try s.tokens.append(ev.heap.storage, .{
         .indent = .{ .kind = .block, .amount = args[1].toFixnum() },
     });
     return value.NIL;
@@ -298,7 +298,7 @@ fn printList(
     style: ListStyle,
     parens: bool,
 ) Error!void {
-    const allocator = ev.heap.allocator;
+    const allocator = ev.heap.storage;
     const open = try intern(ev, s, if (parens) "(" else "");
     const empty = try intern(ev, s, "");
     try s.tokens.append(allocator, .{ .block_start = .{
@@ -364,8 +364,8 @@ fn recordValue(ev: *Evaluator, s: *Stream, v: Value) Error!void {
 /// Give a pretty stream the labels for the object it is about to lay out.
 fn attachCircle(ev: *Evaluator, s: *Stream, v: Value) Error!void {
     if (!format.circleWanted(ev)) return;
-    const state = try ev.heap.allocator.create(circle_mod.State);
-    state.* = try circle_mod.scan(ev.heap.allocator, v);
+    const state = try ev.heap.storage.create(circle_mod.State);
+    state.* = try circle_mod.scan(ev.heap.storage, v);
     s.circle = state;
 }
 

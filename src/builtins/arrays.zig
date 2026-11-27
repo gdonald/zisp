@@ -20,7 +20,7 @@ const ElementType = heap.ElementType;
 
 /// Most axes an array may have. `make-array` rejects more, which is what
 /// `array-rank-limit` promises.
-pub const RANK_LIMIT: i64 = 128;
+pub const RANK_LIMIT: i64 = heap.ARRAY_RANK_LIMIT;
 
 fn evaluator(p: *anyopaque) *Evaluator {
     return Evaluator.fromOpaque(p);
@@ -268,7 +268,7 @@ fn displacedString(
     const offset = options.displaced_index_offset;
     if (offset + size > source.capacity) return Error.TypeError;
     const result = try ev.heap.allocStringWithCapacity(0, 0);
-    ev.heap.allocator.free(heap.asString(result).allocated());
+    ev.heap.storage.free(heap.asString(result).allocated());
     const s = heap.asString(result);
     s.codes = source.codes + offset;
     s.len = size;
@@ -808,13 +808,33 @@ fn adjustString(ev: *Evaluator, v: Value, sizes: []const usize, options: MakeArr
     if (sizes.len != 1) return Error.TypeError;
     const size = sizes[0];
     const s = heap.asString(v);
-    if (!s.adjustable) {
+    const replaces_contents = options.displaced_to != null or options.initial_contents != null;
+    if (!s.adjustable or replaces_contents) {
         var fresh = options;
         fresh.element_type = .character;
+        fresh.adjustable = s.adjustable;
         const result = try makeCharacterVector(ev, size, fresh);
-        const keep = @min(s.capacity, size);
-        @memcpy(heap.asString(result).allocated()[0..keep], s.allocated()[0..keep]);
-        return result;
+        const r = heap.asString(result);
+        if (!replaces_contents) {
+            const keep = @min(s.capacity, size);
+            @memcpy(r.allocated()[0..keep], s.allocated()[0..keep]);
+        }
+        if (!s.adjustable) return result;
+        // The fresh string takes the old storage, so the collector frees
+        // it with the fresh string, and `v` keeps its identity.
+        const old_fill_pointer: ?u64 = if (s.has_fill_pointer) s.len else null;
+        std.mem.swap([*]u32, &s.codes, &r.codes);
+        std.mem.swap(u64, &s.len, &r.len);
+        std.mem.swap(u64, &s.capacity, &r.capacity);
+        std.mem.swap(Value, &s.displaced_to, &r.displaced_to);
+        std.mem.swap(bool, &s.has_fill_pointer, &r.has_fill_pointer);
+        if (options.fill_pointer == null) {
+            if (old_fill_pointer) |fp| {
+                s.has_fill_pointer = true;
+                s.len = @min(fp, size);
+            }
+        }
+        return v;
     }
     const old: usize = @intCast(s.capacity);
     try ev.heap.resizeString(v, size);

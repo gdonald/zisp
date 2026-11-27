@@ -30,7 +30,7 @@ pub fn registerFiles(ev: *Evaluator) !void {
 }
 
 fn pathArg(ev: *Evaluator, v: Value) Error![]const u8 {
-    return pathnames.namestringOf(ev.heap.allocator, v);
+    return pathnames.hostNamestring(ev, v);
 }
 
 fn deleteFileFn(p: *anyopaque, args: []const Value) Error!Value {

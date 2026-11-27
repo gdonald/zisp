@@ -355,13 +355,18 @@ fn divideExactFn(p: *anyopaque, args: []const Value) Error!Value {
     else
         try Rational.of(args[0]);
     const divisors = if (args.len == 1) args else args[1..];
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(acc.num);
+    try held.push(acc.den);
     for (divisors) |a| {
         const divisor = try Rational.of(a);
         if (bignum.isZero(divisor.num)) return Error.DivisionByZero;
-        acc = .{
-            .num = try bignum.mul(ev.heap, acc.num, divisor.den),
-            .den = try bignum.mul(ev.heap, acc.den, divisor.num),
-        };
+        const num = try bignum.mul(ev.heap, acc.num, divisor.den);
+        held.setItem(0, num);
+        const den = try bignum.mul(ev.heap, acc.den, divisor.num);
+        held.setItem(1, den);
+        acc = .{ .num = num, .den = den };
     }
     return bignum.makeRatio(ev.heap, acc.num, acc.den);
 }
@@ -414,12 +419,17 @@ fn compareIn(ev: *Evaluator, a_in: Value, b_in: Value) Error!std.math.Order {
     if (isFloat(a_in) and isFloat(b_in)) {
         return std.math.order(asF64(a_in), asF64(b_in));
     }
+    var held = ev.heap.protect();
+    defer held.close();
     const a = if (isFloat(a_in)) try bignum.fromFloat(ev.heap, asF64(a_in)) else a_in;
+    try held.push(a);
     const b = if (isFloat(b_in)) try bignum.fromFloat(ev.heap, asF64(b_in)) else b_in;
+    try held.push(b);
     if (bignum.isInteger(a) and bignum.isInteger(b)) return bignum.compare(a, b);
     const lhs = try Rational.of(a);
     const rhs = try Rational.of(b);
     const left = try bignum.mul(ev.heap, lhs.num, rhs.den);
+    try held.push(left);
     const right = try bignum.mul(ev.heap, rhs.num, lhs.den);
     return bignum.compare(left, right);
 }
@@ -694,6 +704,10 @@ fn gcdFn(p: *anyopaque, args: []const Value) Error!Value {
 fn lcmFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     var acc = ONE;
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(acc);
+    try held.push(ZERO);
     for (args) |a| {
         try expectInteger(a);
         if (bignum.isZero(a) or bignum.isZero(acc)) {
@@ -701,8 +715,11 @@ fn lcmFn(p: *anyopaque, args: []const Value) Error!Value {
             continue;
         }
         const divisor = try bignum.gcd(ev.heap, acc, a);
+        held.setItem(1, divisor);
         const product = try bignum.mul(ev.heap, acc, a);
+        held.setItem(0, product);
         acc = try bignum.absOf(ev.heap, try bignum.divTrunc(ev.heap, product, divisor));
+        held.setItem(0, acc);
     }
     return acc;
 }
@@ -1201,13 +1218,19 @@ fn isqrtFn(p: *anyopaque, args: []const Value) Error!Value {
     // Start from half the bit length, which brackets the root, then run
     // Newton's iteration until it stops decreasing.
     const bits = bignum.bitCountAbs(args[0]);
+    var held = ev.heap.protect();
+    defer held.close();
     var guess = try bignum.shiftLeft(ev.heap, ONE, bits / 2 + 1);
+    try held.push(guess);
+    try held.push(ZERO);
     while (true) {
         const quotient = try bignum.divTrunc(ev.heap, args[0], guess);
+        held.setItem(1, quotient);
         const sum = try bignum.add(ev.heap, guess, quotient);
         const next = try bignum.divTrunc(ev.heap, sum, Value.fromFixnum(2));
         if (bignum.compare(next, guess) != .lt) return guess;
         guess = next;
+        held.setItem(0, guess);
     }
 }
 

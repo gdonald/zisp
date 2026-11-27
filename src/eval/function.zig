@@ -184,6 +184,40 @@ pub fn allocClosure(
     return Value.fromHeapAddr(@intFromPtr(obj));
 }
 
+/// A closure in the collected heap, which reclaims it once nothing holds
+/// it. `lambda`, `flet` and `labels` make these, since a program can make
+/// any number of them.
+pub fn allocHeapClosure(
+    h: *heap.Heap,
+    name: ?[]const u8,
+    params: Value,
+    body: Value,
+    captured_env: ?*env_mod.Frame,
+    captured_fenv: ?*env_mod.Frame,
+) !Value {
+    var held = h.protect();
+    defer held.close();
+    try held.push(params);
+    try held.push(body);
+    const bytes = try h.allocObject(@sizeOf(HeapFunction));
+    const obj: *HeapFunction = @ptrCast(bytes.ptr);
+    obj.* = .{
+        .header = .{
+            .type_tag = .function,
+            .size = @sizeOf(HeapFunction),
+        },
+        .kind = .closure,
+        .name = name,
+        .payload = .{ .closure = .{
+            .params = params,
+            .body = body,
+            .captured_env = captured_env,
+            .captured_fenv = captured_fenv,
+        } },
+    };
+    return Value.fromHeapAddr(@intFromPtr(obj));
+}
+
 pub fn allocFuncallable(
     allocator: std.mem.Allocator,
     class: Value,

@@ -234,6 +234,38 @@ fn equalHash(v: Value, depth: u32) u64 {
     return eqlHash(v);
 }
 
+/// The hash `sxhash` gives: the same for objects `equal` holds alike, and
+/// the same through a session. An object `equal` compares by identity
+/// hashes by its type alone, because a collection can move it.
+pub fn sxhash(v: Value) u64 {
+    return sxhashAt(v, 0);
+}
+
+fn sxhashAt(v: Value, depth: u32) u64 {
+    if (v.tag() != .heap and !v.isCons()) return eqlHash(v);
+    if (v.isCons()) {
+        if (depth >= MAX_HASH_DEPTH) return 4;
+        return mix(sxhashAt(heap.car(v), depth + 1), sxhashAt(heap.cdr(v), depth + 1));
+    }
+    if (heap.isString(v)) return mix(2, hashChars(heap.asString(v).constSlice()));
+    if (heap.isPathname(v)) {
+        const path = heap.asPathname(v);
+        return mix(3, mix(
+            mix(sxhashAt(path.directory, depth + 1), sxhashAt(path.name, depth + 1)),
+            mix(sxhashAt(path.type_, depth + 1), sxhashAt(path.version, depth + 1)),
+        ));
+    }
+    if (bitVectorBits(v)) |bits| {
+        var h: u64 = 11;
+        for (bits) |bit| h = mix(h, bit.raw);
+        return h;
+    }
+    return switch (heap.heapType(v)) {
+        .double_float, .ratio, .bignum, .complex => eqlHash(v),
+        else => |kind| mix(12, @backingInt(kind)),
+    };
+}
+
 fn equalpHash(v: Value, depth: u32) u64 {
     // Numbers compare across types under equalp, so they all hash as f64.
     if (isNumber(v)) return mix(5, numberHash(v));

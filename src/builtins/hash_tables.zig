@@ -20,6 +20,7 @@ fn evaluator(p: *anyopaque) *Evaluator {
 
 pub fn registerHashTables(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAKE-HASH-TABLE", &makeHashTableFn);
+    _ = try ev.defineNative("SXHASH", &sxhashFn);
     _ = try ev.defineNative("HASH-TABLE-P", &hashTablePFn);
     _ = try ev.defineNative("%PUTHASH", &puthashFn);
     _ = try ev.defineNative("REMHASH", &remhashFn);
@@ -52,6 +53,12 @@ fn expectTable(v: Value) Error!*heap.HeapHashTable {
 // --- construction ---
 
 const DEFAULT_SIZE: u64 = 16;
+
+fn sxhashFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    return Value.fromFixnum(@intCast(equality.sxhash(args[0]) & @as(u64, @intCast(value.FIXNUM_MAX))));
+}
 
 fn testFromDesignator(v: Value) Error!HashTest {
     if (!v.isSymbol()) return Error.TypeError;
@@ -158,7 +165,7 @@ pub fn put(ev: *Evaluator, table_value: Value, key: Value, val: Value) Error!voi
         return;
     }
 
-    const allocator = ev.heap.allocator;
+    const allocator = ev.heap.storage;
     const index: u32 = @intCast(table.entries.items.len);
     try table.entries.append(allocator, .{ .key = key, .value = val, .live = true });
     heap.writeBarrier(ev.heap, table_value, key);
@@ -184,7 +191,7 @@ fn clrhashFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
     const table = try expectTable(args[0]);
     var it = table.buckets.valueIterator();
-    while (it.next()) |bucket| bucket.deinit(ev.heap.allocator);
+    while (it.next()) |bucket| bucket.deinit(ev.heap.storage);
     table.buckets.clearRetainingCapacity();
     table.entries.clearRetainingCapacity();
     table.live_count = 0;

@@ -1,23 +1,41 @@
 # ansi-test
 
 The [ansi-test](https://gitlab.common-lisp.net/ansi-test/ansi-test) suite is the
-compliance gate for zisp. `tests/run-ansi.sh` runs it and produces the numbers.
+compliance gate for zisp. `tests/run-ansi-suite.sh` runs the whole suite the
+way the suite's own `doit.lsp` does, and `tests/run-ansi.sh` runs it one
+category at a time.
 
 ## Running
 
 ```sh
-zig build ansi-test                         # all categories
-ZISP=/path/to/zisp tests/run-ansi.sh        # override binary path
-tests/run-ansi.sh cons numbers              # only listed categories
-VERBOSE=1 tests/run-ansi.sh                 # show every test
+zig build ansi-test                           # the whole suite
+ZISP=/path/to/zisp tests/run-ansi-suite.sh    # override binary path
+MODE=compile tests/run-ansi-suite.sh          # every test runs as bytecode
+LOG=run.log tests/run-ansi-suite.sh           # keep what the suite printed
+tests/run-ansi.sh                             # every category, one zisp each
+tests/run-ansi.sh cons numbers                # only listed categories
+VERBOSE=1 tests/run-ansi.sh                   # show every test
 ```
 
 `zig build ansi-test` builds a ReleaseSafe zisp into `zig-out/suite/`
-whatever `-Doptimize` says, then invokes the harness with `ZISP` set to
-it. A Debug build records a stack trace on every allocation, which turns
-a run of seconds into one of half an hour. The script exits non-zero on
-any failure. CI does not run it: it runs the Zig test suite only, and
-the ansi-test suite is run locally.
+whatever `-Doptimize` says, then runs `tests/run-ansi-suite.sh` with
+`ZISP` set to it. A Debug build records a stack trace on every
+allocation, which turns a run of minutes into one of hours.
+
+`tests/run-ansi-suite.sh` copies the suite to a directory with no fasls
+in it and loads `tests/lisp/ansi-suite.lisp` there. That loads
+`init.lsp`, which loads `gclload1.lsp` and then `gclload2.lsp`, the file
+that loads every category's `load.lsp`, and runs every test with
+`regression-test:do-tests`. An error while the suite loads ends the run
+with the file it came from. The script prints rt's list of failures and
+the count passed, and exits non-zero on any failure. CI does not run it:
+it runs the Zig test suite only, and the ansi-test suite is run locally.
+
+`tests/run-ansi.sh <category>` runs one category the same way in a zisp
+of its own: `gclload1.lsp`, then that category's `load.lsp`, through
+`tests/lisp/ansi-category.lisp`. The categories are the 24 that
+`gclload2.lsp` loads, in its order. Both runs switch off the tests noted
+`:nil-vectors-are-strings`, for the reason given below.
 
 `zig build -Dansi-tests=true` folds the ansi-test run into the default
 build — useful for "run everything before I push" but too slow for
@@ -90,30 +108,14 @@ The framework itself lives in two files at the suite root:
 - `rt-package.lsp` — package definition for `:cl-test`
 - `rt.lsp` — `deftest`, `do-tests`, `pending-tests`
 
-Per-category runs follow this shape (see `run_category` in
-`tests/run-ansi.sh`):
-
-```lisp
-(load "gclload1.lsp")                   ; sets up :cl-test
-(dolist (f (directory "<cat>/*.lsp"))   ; load each file
-  (load f))
-(in-package :cl-test)
-(let ((failed (length (pending-tests))))
-  (format t "~&PASS=~A FAIL=~A~%" pass-count failed))
-```
-
-The harness parses the trailing `PASS=N FAIL=M` line.
-
-The categories enumerated at the top of `tests/run-ansi.sh` are ordered so
-partial runs are meaningful early in the project.
+Each category's `load.lsp` compiles the auxiliary files it needs and
+loads its test files. A category run prints an `ANSI-RT <category>
+<passed> <failed>` line, which `tests/run-ansi.sh` reads.
 
 ## Status
 
-The harness drives the suite in two modes. `--read-only` parses every
-`.lsp` without evaluating and reports the parse rate. The default mode
-loads each file and counts the ones that load and run to completion; when
-a file emits a `do-tests` tally the harness accumulates those per-test
-counts instead.
+`tests/run-ansi.sh --read-only` parses every `.lsp` without evaluating
+and reports the parse rate.
 
 The framework itself runs: `rt-package.lsp` defines the package, `rt.lsp`
 defines `deftest`, `do-tests`, and the entry structure, and a test defined

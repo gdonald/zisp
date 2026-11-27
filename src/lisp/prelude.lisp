@@ -702,6 +702,46 @@ when the block will not fit before the right margin."
                  (lambda (%args)
                    (destructuring-bind ,lambda-list %args ,@body))))
 
+(defvar *%compiler-macros* (make-hash-table :test 'equal))
+
+(defun compiler-macro-function (name &optional environment)
+  (declare (ignore environment))
+  (values (gethash name *%compiler-macros*)))
+
+(defun (setf compiler-macro-function) (new-function name &optional environment)
+  (declare (ignore environment))
+  (if new-function
+      (setf (gethash name *%compiler-macros*) new-function)
+      (remhash name *%compiler-macros*))
+  new-function)
+
+;; The arguments of a (funcall #'name ...) form start one place later
+;; than those of a (name ...) form, and &whole is the form either way.
+(defmacro define-compiler-macro (name lambda-list &body body)
+  (let ((whole (gensym "WHOLE"))
+        (environment (gensym "ENVIRONMENT"))
+        (parameters '()))
+    (loop while lambda-list
+          do (let ((item (if (consp lambda-list) (pop lambda-list) (prog1 (list '&rest lambda-list) (setq lambda-list nil)))))
+               (cond ((and (consp item) (eq (car item) '&rest))
+                      (setq parameters (append (reverse item) parameters)))
+                     ((eq item '&whole) (setq whole (pop lambda-list)))
+                     ((eq item '&environment) (setq environment (pop lambda-list)))
+                     (t (push item parameters)))))
+    (setq parameters (nreverse parameters))
+    `(progn
+       (setf (compiler-macro-function ',name)
+             (lambda (,whole ,environment)
+               (declare (ignorable ,whole ,environment))
+               (destructuring-bind ,parameters
+                   (if (and (eq (car ,whole) 'funcall)
+                            (consp (cadr ,whole))
+                            (eq (car (cadr ,whole)) 'function))
+                       (cddr ,whole)
+                       (cdr ,whole))
+                 (block ,(if (consp name) (cadr name) name) ,@body))))
+       ',name)))
+
 (defun %prompt-for-value ()
   (format *query-io* "~&Enter a form to be evaluated: ")
   (finish-output *query-io*)

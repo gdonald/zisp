@@ -39,9 +39,8 @@ test "a dead array releases its dimensions and its storage" {
 test "a dead bignum releases its limbs" {
     var h = newHeap();
     defer h.deinit();
-    const limbs = try testing.allocator.alloc(std.math.big.Limb, 4);
-    @memset(limbs, 7);
-    _ = try h.allocBignum(.{ .limbs = limbs, .positive = true });
+    var limbs: [4]std.math.big.Limb = @splat(7);
+    _ = try h.allocBignum(.{ .limbs = &limbs, .positive = true });
     h.sweep(.everything);
 }
 
