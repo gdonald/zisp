@@ -79,7 +79,7 @@ process.
 
 | Function | |
 | --- | --- |
-| `(foreign-alloc type &key count initial-element initial-contents)` | `count` objects of `type` from `malloc` |
+| `(foreign-alloc type &key count initial-element initial-contents)` | `count` objects of `type` from `*foreign-allocator*` |
 | `(foreign-free pointer)` | give them back |
 | `(mem-ref pointer type &optional offset)` | the `type` at `offset` bytes past `pointer`, and `setf` of it |
 | `(mem-aref pointer type &optional index)` | the `index`th `type` from `pointer`, and `setf` of it |
@@ -88,6 +88,37 @@ process.
 | `(foreign-string-alloc string)`, `(foreign-string-to-lisp pointer)` | strings in and out of C memory |
 | `(with-foreign-string (var string) body...)` | a C copy of `string` for `body` |
 | `(make-pointer address)`, `(pointer-address pointer)`, `(null-pointer)`, `(null-pointer-p pointer)`, `(inc-pointer pointer offset)`, `(pointer-eq a b)` | pointers |
+
+## Allocators
+
+An allocator is a Zig `std.mem.Allocator` held as a Lisp object.
+`(c-allocator)` is the C heap. `(make-arena-allocator &optional parent)`
+makes an arena that takes its memory from `parent`, which defaults to the
+current allocator, and `(release-allocator arena)` gives back everything
+the arena handed out at once.
+
+| Function | What it does |
+| --- | --- |
+| `(allocator-alloc allocator size &optional (alignment 8))` | a pointer to `size` bytes, or `storage-condition` when there are none |
+| `(allocator-free allocator pointer size &optional (alignment 8))` | give the bytes back, with the size and alignment they were asked for |
+| `(allocator-live-bytes allocator)` | the bytes handed out and not given back |
+| `(release-allocator arena)` | free the arena and everything it handed out |
+| `(with-allocator (var &optional parent) body...)` | `body` with `var` and `*foreign-allocator*` bound to a new arena, released when `body` is left |
+
+`foreign-alloc` takes memory from `*foreign-allocator*`, which is NIL for
+the C heap, and `foreign-free` gives it back to the allocator it came from:
+
+```lisp
+(with-allocator (scratch)
+  (let ((cells (foreign-alloc :int :count 1000)))
+    (dotimes (index 1000) (setf (mem-aref cells :int index) index))
+    (loop for index below 1000 sum (mem-aref cells :int index))))   ; => 499500, and the cells are freed
+```
+
+An arena's own memory and its chunks count toward its parent's live
+bytes until it is released. Releasing the C heap, an arena twice, or an
+arena with unreleased arenas over it signals an error, and so does
+allocating from a released arena. An alignment must be a power of two.
 
 ## Structures
 

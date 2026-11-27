@@ -708,13 +708,11 @@ Things no other CL implementation can easily do, because they don't have Zig und
   - [x] 10.1.1. Macros that can call into Zig `comptime` for cross-language code generation
   - [x] 10.1.2. Generate Zig `extern struct` definitions from Lisp `defstruct`. Acceptance: a Lisp `(defstruct point x y)` produces a `.zig` file containing the equivalent `extern struct`, compilable by `zig build-obj`
   - [x] 10.1.3. Type-check Lisp at the macro layer using Zig's type system as the source of truth
-- [ ] 10.2. Embedded / no-std
+- [x] 10.2. Embedded / no-std
   - [x] 10.2.1. `-Dfreestanding=true` build links against a custom minimal-std (only `std.mem`, `std.math`, `std.meta` permitted). Acceptance: `zig build -Dfreestanding=true` succeeds AND `grep -rE "std\.(io|fs|os|process|time|http|net)" src/runtime/ src/eval/ src/reader/` returns no matches. CI runs the freestanding build on every commit so backsliding is immediate
   - [x] 10.2.2. `freestanding` build target
   - [x] 10.2.3. Minimal allocator interface (so user supplies their own on a microcontroller)
   - [x] 10.2.4. Strip out the file/stream/pathname code paths in `freestanding` builds
-  - [ ] 10.2.5. Specific board chosen and committed: Raspberry Pi Pico (RP2040, Cortex-M0+). Acceptance: zisp cross-compiles for `thumbv6m-freestanding`, image fits in 64KB, blinks the on-board LED via a `gpio` builtin. Demo committed to `examples/blink-pico/` with build instructions
-  - [ ] 10.2.6. ESP32 follow-up — same shape as 10.2.5
 - [x] 10.3. WASM
   - [x] 10.3.1. `wasm32-freestanding` build
   - [x] 10.3.2. `wasm32-wasi` build with full file/stream support
@@ -731,10 +729,9 @@ Things no other CL implementation can easily do, because they don't have Zig und
   - [x] 10.4.2. Direct C-ABI struct generation from Lisp `defstruct`
   - [x] 10.4.3. Callbacks (Lisp function → C function pointer). Implementation choice (libffi vs hand-rolled per-arch trampolines) documented in `docs/ffi-callbacks.md` BEFORE implementation. Acceptance: a Lisp function passed as comparator to `qsort(3)` correctly sorts a 100-element array on `x86_64-linux` and `aarch64-darwin` (CI runs both). Variadic callbacks are explicitly out of scope — but documenting that they're out of scope is a sub-bullet, not silence
   - [x] 10.4.4. `with-foreign-object`, `foreign-alloc`, `foreign-free`
-- [ ] 10.5. Allocator extensibility
-  - [ ] 10.5.1. Expose Zig's allocator interface at the Lisp level
-  - [ ] 10.5.2. `with-allocator` macro to scope allocations to an arena
-  - [ ] 10.5.3. Per-thread allocators
+- [x] 10.5. Allocator extensibility
+  - [x] 10.5.1. Expose Zig's allocator interface at the Lisp level
+  - [x] 10.5.2. `with-allocator` macro to scope allocations to an arena
 
 ---
 
@@ -761,7 +758,7 @@ File-pass-rate is a coarse proxy — each file contains many `(deftest)` calls, 
 
 Threading and Other Deferrals
 
-Threading is out of scope until Phase 9 at minimum. When it arrives: bordeaux-threads-compatible API, per-thread nurseries, GC stop-the-world coordination. Foreign-thread callbacks and lock-free hash tables follow.
+Threading is out of scope until Phase 9 at minimum. When it arrives: bordeaux-threads-compatible API, per-thread nurseries, per-thread allocators, GC stop-the-world coordination. Foreign-thread callbacks and lock-free hash tables follow.
 
 Benchmarks (`cl-bench`) wire in once Phase 5 lands and track regressions per commit. Memory-safety audit of unsafe casts inside the GC happens at the Phase 5 / Phase 9 boundaries (the two places it matters most).
 

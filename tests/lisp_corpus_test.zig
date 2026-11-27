@@ -131,6 +131,11 @@ test "C structures" {
     try testing.expectEqual(@as(u32, 14), checked);
 }
 
+test "allocators for foreign memory" {
+    const checked = try runCorpus("ffi-allocators", @embedFile("lisp/ffi-allocators.lisp"));
+    try testing.expectEqual(@as(u32, 14), checked);
+}
+
 test "Zig expressions evaluated at Zig compile time" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

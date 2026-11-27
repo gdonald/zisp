@@ -14,6 +14,7 @@ const symbol_mod = @import("../runtime/symbol.zig");
 const function = @import("../eval/function.zig");
 const eval_mod = @import("../eval/eval.zig");
 const strings = @import("strings.zig");
+const foreign_allocators = @import("foreign_allocators.zig");
 
 const Value = value.Value;
 const Evaluator = eval_mod.Evaluator;
@@ -31,13 +32,13 @@ pub fn registerFfi(ev: *Evaluator) !void {
     _ = try ev.defineNative("%FOREIGN-SYMBOL-ADDRESS", &foreignSymbolAddressFn);
     _ = try ev.defineNative("%LOAD-FOREIGN-LIBRARY", &loadForeignLibraryFn);
     _ = try ev.defineNative("%FOREIGN-CALL", &foreignCallFn);
-    _ = try ev.defineNative("%FOREIGN-ALLOC", &foreignAllocFn);
     _ = try ev.defineNative("%FOREIGN-FREE", &foreignFreeFn);
     _ = try ev.defineNative("%MEM-REF", &memRefFn);
     _ = try ev.defineNative("%MEM-SET", &memSetFn);
     _ = try ev.defineNative("%FOREIGN-STRING-TO-LISP", &foreignStringToLispFn);
     _ = try ev.defineNative("%LISP-STRING-TO-FOREIGN", &lispStringToForeignFn);
     _ = try ev.defineNative("%CALLBACK-ADDRESS", &callbackAddressFn);
+    try foreign_allocators.register(ev);
 }
 
 /// A C type, named by the keyword the Lisp side canonicalizes aliases to.
@@ -359,16 +360,6 @@ fn integerResult(ev: *Evaluator, t: CType, raw: u64) Error!Value {
         .string => lispString(ev, @intCast(raw)),
         .float, .double => unreachable,
     };
-}
-
-/// `(%foreign-alloc size)`: the address of `size` bytes from `malloc`.
-fn foreignAllocFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 1) return Error.WrongArgCount;
-    const size = try integerOf(args[0]);
-    if (size < 0 or size > std.math.maxInt(usize)) return Error.TypeError;
-    const memory = std.c.malloc(@max(@as(usize, @intCast(size)), 1)) orelse return Error.OutOfMemory;
-    return integerValue(ev, @intFromPtr(memory));
 }
 
 /// `(%foreign-free address)`.

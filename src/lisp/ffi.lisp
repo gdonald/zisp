@@ -332,12 +332,107 @@ gives for NAME. Each parameter is a list of its name and its C type."
 (defun (setf mem-aref) (new pointer type &optional (index 0))
   (setf (mem-ref pointer type (* index (foreign-type-size type))) new))
 
+;;; An allocator is a Zig `std.mem.Allocator`: the C heap, or an arena over
+;;; another allocator that gives back everything at once when released.
+(defstruct (allocator (:constructor %make-allocator (handle parent))
+                      (:predicate allocatorp)
+                      (:copier nil))
+  (handle nil :read-only t)
+  (parent nil :read-only t)
+  (arenas 0)
+  (released nil))
+
+(defmethod print-object ((allocator allocator) stream)
+  (print-unreadable-object (allocator stream :type t :identity t)
+    (format stream "~:[arena~;C heap~]~:[~; released~]"
+            (null (allocator-parent allocator)) (allocator-released allocator))))
+
+;;; The allocator, size and alignment behind each `foreign-alloc` pointer,
+;;; by address, for `foreign-free`.
+(defvar *%foreign-allocations* (make-hash-table))
+
+(defvar *%c-allocator* nil)
+
+(defun c-allocator ()
+  (or *%c-allocator* (setf *%c-allocator* (%make-allocator nil nil))))
+
+;;; The C heap's record is looked up on each use, so a saved image started
+;;; in a new process finds it at its new address.
+(defun %handle (allocator)
+  (or (allocator-handle allocator) (%c-allocator)))
+
+(defvar *foreign-allocator* nil
+  "The allocator `foreign-alloc` takes memory from. NIL is the C heap.")
+
+(defun %current-allocator ()
+  (or *foreign-allocator* (c-allocator)))
+
+(defun %live-allocator (allocator)
+  (check-type allocator allocator)
+  (when (allocator-released allocator)
+    (error "~a has been released." allocator))
+  allocator)
+
+(defun make-arena-allocator (&optional (parent (%current-allocator)))
+  (%live-allocator parent)
+  (let ((handle (%make-arena (%handle parent))))
+    (unless handle (error 'storage-condition))
+    (incf (allocator-arenas parent))
+    (%make-allocator handle parent)))
+
+(defun release-allocator (allocator)
+  "Give back everything the arena ALLOCATOR handed out, and the arena itself."
+  (%live-allocator allocator)
+  (let ((parent (allocator-parent allocator)))
+    (unless parent (error "The C heap cannot be released."))
+    (unless (zerop (allocator-arenas allocator))
+      (error "~a has arenas over it that are not released." allocator))
+    (%release-arena (%handle allocator) (%handle parent))
+    (decf (allocator-arenas parent))
+    (maphash (lambda (address allocation)
+               (when (eq (first allocation) allocator)
+                 (remhash address *%foreign-allocations*)))
+             *%foreign-allocations*)
+    (setf (allocator-released allocator) t)
+    nil))
+
+(defun allocator-alloc (allocator size &optional (alignment 8))
+  "A pointer to SIZE bytes aligned to ALIGNMENT from ALLOCATOR."
+  (%live-allocator allocator)
+  (let ((address (%allocator-alloc (%handle allocator) size alignment)))
+    (unless address (error 'storage-condition))
+    (make-pointer address)))
+
+(defun allocator-free (allocator pointer size &optional (alignment 8))
+  "Give POINTER back to ALLOCATOR, with the SIZE and ALIGNMENT it was
+asked for."
+  (%live-allocator allocator)
+  (%allocator-free (%handle allocator) (foreign-pointer-address pointer) size alignment)
+  nil)
+
+(defun allocator-live-bytes (allocator)
+  "The bytes ALLOCATOR has handed out and not had back."
+  (%allocator-live-bytes (%handle (%live-allocator allocator))))
+
+(defmacro with-allocator ((var &optional (parent '(%current-allocator))) &body body)
+  "Run BODY with VAR and `*foreign-allocator*` bound to a new arena over
+PARENT, and release the arena when BODY is left."
+  `(let* ((,var (make-arena-allocator ,parent))
+          (*foreign-allocator* ,var))
+     (unwind-protect (progn ,@body)
+       (release-allocator ,var))))
+
 (defun foreign-alloc (type &key (count 1) (initial-element nil element-p)
                                 (initial-contents nil contents-p))
-  "A pointer to COUNT objects of TYPE from malloc, which `foreign-free`
-gives back."
+  "A pointer to COUNT objects of TYPE from `*foreign-allocator*`, which
+`foreign-free` gives back."
   (let* ((count (if contents-p (length initial-contents) count))
-         (pointer (make-pointer (%foreign-alloc (* count (foreign-type-size type))))))
+         (allocator (%current-allocator))
+         (size (* count (foreign-type-size type)))
+         (alignment (foreign-type-alignment type))
+         (pointer (allocator-alloc allocator size alignment)))
+    (setf (gethash (foreign-pointer-address pointer) *%foreign-allocations*)
+          (list allocator size alignment))
     (when element-p
       (dotimes (index count) (setf (mem-aref pointer type index) initial-element)))
     (when contents-p
@@ -349,7 +444,12 @@ gives back."
     pointer))
 
 (defun foreign-free (pointer)
-  (%foreign-free (foreign-pointer-address pointer))
+  (let* ((address (foreign-pointer-address pointer))
+         (allocation (gethash address *%foreign-allocations*)))
+    (cond (allocation
+           (remhash address *%foreign-allocations*)
+           (apply #'allocator-free (first allocation) pointer (rest allocation)))
+          (t (%foreign-free address))))
   nil)
 
 (defmacro with-foreign-object ((var type &optional (count 1)) &body body)
@@ -382,7 +482,9 @@ gives back."
     with-foreign-objects foreign-string-alloc foreign-string-to-lisp with-foreign-string
     defcallback callback get-callback defcstruct foreign-slot-value foreign-slot-offset
     foreign-slot-pointer foreign-slot-names foreign-type-alignment defcstruct-from-defstruct
-    write-foreign-struct read-foreign-struct))
+    write-foreign-struct read-foreign-struct allocator allocatorp c-allocator
+    *foreign-allocator* make-arena-allocator release-allocator allocator-alloc
+    allocator-free allocator-live-bytes with-allocator))
 
 (let ((ffi (or (find-package "ZISP-FFI") (make-package "ZISP-FFI" :nicknames '("FFI") :use nil))))
   (import *%ffi-symbols* ffi)
