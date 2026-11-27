@@ -6,6 +6,7 @@
 //! operating system to keep in step.
 
 const std = @import("std");
+const arrays = @import("arrays.zig");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const character = @import("../runtime/character.zig");
@@ -50,6 +51,7 @@ pub fn registerStreams(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAKE-STRING-INPUT-STREAM", &makeStringInputStreamFn);
     _ = try ev.defineNative("MAKE-STRING-OUTPUT-STREAM", &makeStringOutputStreamFn);
     _ = try ev.defineNative("GET-OUTPUT-STREAM-STRING", &getOutputStreamStringFn);
+    _ = try ev.defineNative("%MAKE-FILL-POINTER-OUTPUT-STREAM", &makeFillPointerOutputStreamFn);
     _ = try ev.defineNative("FORCE-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("FINISH-OUTPUT", &flushStreamFn);
     _ = try ev.defineNative("CLEAR-OUTPUT", &noOpStreamFn);
@@ -546,6 +548,12 @@ pub fn emitBytes(ev: *Evaluator, s: *Stream, bytes: []const u8) Error!void {
         }
         return;
     }
+    if (s.kind == .string and !s.target.equalsRaw(value.NIL)) {
+        const view = std.unicode.Utf8View.init(bytes) catch return Error.TypeError;
+        var it = view.iterator();
+        while (it.nextCodepoint()) |c| try arrays.pushExtend(ev, s.target, Value.fromChar(c));
+        return;
+    }
     for (bytes) |b| {
         if (s.write_position < s.output.items.len) {
             s.output.items[s.write_position] = b;
@@ -723,6 +731,16 @@ fn makeStringOutputStreamFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len % 2 != 0) return Error.WrongArgCount;
     return ev.heap.allocStream(emptyStream(.string, .output));
+}
+
+/// A string output stream that writes into `string` at its fill pointer.
+fn makeFillPointerOutputStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!heap.isString(args[0]) or !heap.asString(args[0]).has_fill_pointer) return Error.TypeError;
+    var stream = emptyStream(.string, .output);
+    stream.target = args[0];
+    return ev.heap.allocStream(stream);
 }
 
 /// The text written so far, which the stream then forgets.

@@ -102,6 +102,23 @@ test "a closure keeps what it captured" {
     try testing.expectEqual(@as(i64, 42), seen.toFixnum());
 }
 
+test "a captured frame eval sets aside comes through a full collection inside it" {
+    const fx = try Fixture.init(testing.allocator);
+    defer fx.deinit(testing.allocator);
+    _ = try fx.eval(
+        \\(defun probe ()
+        \\  (let ((tail (list 1 2)))
+        \\    (funcall (lambda () tail))
+        \\    (eval '(progn (gc) (dotimes (i 200000) (list i i))))
+        \\    (eval '(let ((other 9)) (let ((more 8)) (+ other more))))
+        \\    tail))
+    );
+
+    const seen = try fx.eval("(length (probe))");
+
+    try testing.expectEqual(@as(i64, 2), seen.toFixnum());
+}
+
 test "what a finished call bound is not kept" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);

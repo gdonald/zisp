@@ -6,6 +6,7 @@
 //! that was parsed.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const stack_mod = @import("../runtime/stack.zig");
@@ -66,6 +67,20 @@ pub fn registerPathnames(ev: *Evaluator) !void {
     }) |n| {
         _ = try ev.interner.internKeyword(n);
     }
+}
+
+/// Point `*default-pathname-defaults*` at the current directory, as an
+/// absolute pathname, where the build has a file system to ask.
+pub fn setStartingDefaults(ev: *Evaluator) Error!void {
+    if (!fs.available or builtin.os.tag == .wasi) return;
+    const io = ev.io orelse return;
+    const directory = fs.realPath(io, ev.heap.allocator, ".") catch |e| switch (e) {
+        error.OutOfMemory => return Error.OutOfMemory,
+        error.FileError => return,
+    };
+    const text = try std.fmt.allocPrint(ev.heap.allocator, "{s}/", .{std.mem.trimEnd(u8, directory, "/")});
+    const defaults = try ev.interner.intern("*DEFAULT-PATHNAME-DEFAULTS*");
+    symbol_mod.symbol(defaults).value_cell = try ev.heap.allocPathname(try parseText(ev, text));
 }
 
 fn isString(v: Value) bool {
@@ -375,10 +390,10 @@ fn mergePathnamesFn(p: *anyopaque, args: []const Value) Error!Value {
 
     var parts = try componentsOf(ev, args[0]);
     try holdParts(&held, parts);
-    const defaults = if (args.len >= 2)
-        try componentsOf(ev, args[1])
+    const defaults = try componentsOf(ev, if (args.len >= 2)
+        args[1]
     else
-        emptyPathname();
+        symbol_mod.symbol(try ev.interner.intern("*DEFAULT-PATHNAME-DEFAULTS*")).value_cell);
     try holdParts(&held, defaults);
     const default_version = if (args.len == 3) args[2] else try keyword(ev, "NEWEST");
 

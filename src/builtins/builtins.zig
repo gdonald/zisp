@@ -201,7 +201,6 @@ pub fn registerNatives(ev: *Evaluator) !void {
     try image.register(ev);
     try format.registerVariables(ev);
     try pprint.registerPprint(ev);
-    try pathnames.registerPathnames(ev);
     // Ahead of the prelude: reading the prelude interns every symbol it
     // mentions in the current package, so a name the prelude uses before
     // its native exists would shadow the later definition.

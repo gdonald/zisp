@@ -94,6 +94,7 @@ pub const Repl = struct {
             try builtins.registerStandard(&self.ev);
             try builtins.registerSystem(&self.ev);
         }
+        try builtins.pathnames.setStartingDefaults(&self.ev);
 
         self.minus = try self.interner.intern("-");
         self.plus = try self.interner.intern("+");

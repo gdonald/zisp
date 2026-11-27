@@ -12,7 +12,8 @@
 # The suite writes a fasl next to each file it compiles, so it runs in a
 # copy with no fasls in it, and the checkout is not written to. The run
 # fails when a test fails that tests/ansi-failures.txt does not name, and
-# when a test it names passes.
+# when a test it names passes. MODE=compile reads
+# tests/ansi-failures-compile.txt instead.
 
 set -euo pipefail
 
@@ -20,8 +21,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZISP="${ZISP:-$ROOT/zig-out/bin/zisp}"
 SUITE="$ROOT/vendor/ansi-test"
 DRIVER="$ROOT/tests/lisp/ansi-suite.lisp"
-FAILURES="$ROOT/tests/ansi-failures.txt"
 MODE="${MODE:-interpret}"
+if [[ "$MODE" == "compile" ]]; then
+  FAILURES="$ROOT/tests/ansi-failures-compile.txt"
+else
+  FAILURES="$ROOT/tests/ansi-failures.txt"
+fi
 VERBOSE="${VERBOSE:-0}"
 LOG="${LOG:-}"
 

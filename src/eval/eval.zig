@@ -833,28 +833,30 @@ pub const Evaluator = struct {
         });
     }
 
-    pub const Chains = struct { values: ?*env_mod.Frame, functions: ?*env_mod.Frame };
+    /// Where `saveChains` set aside the chains an environment replaced.
+    pub const Chains = usize;
 
-    /// Install the chains `environment` recorded, returning the ones it
-    /// replaced. NIL is the null lexical environment.
+    /// Install the chains `environment` recorded, setting the ones it
+    /// replaced aside where a collection finds them. NIL is the null
+    /// lexical environment.
     pub fn enterEnvironment(self: *Evaluator, environment: Value) Error!Chains {
-        const previous: Chains = .{ .values = self.env.top_value, .functions = self.env.top_function };
-        if (environment.equalsRaw(value.NIL)) {
-            self.env.top_value = null;
-            self.env.top_function = null;
-            return previous;
+        var values: ?*env_mod.Frame = null;
+        var functions: ?*env_mod.Frame = null;
+        if (!environment.equalsRaw(value.NIL)) {
+            if (!heap_mod.isStructure(environment)) return Error.TypeError;
+            const obj = heap_mod.asStructure(environment);
+            if (!obj.name.equalsRaw(try self.cachedSymbol(&self.sym_environment, ENVIRONMENT_NAME))) return Error.TypeError;
+            values = frameAt(obj.slice()[0]);
+            functions = frameAt(obj.slice()[1]);
         }
-        if (!heap_mod.isStructure(environment)) return Error.TypeError;
-        const obj = heap_mod.asStructure(environment);
-        if (!obj.name.equalsRaw(try self.cachedSymbol(&self.sym_environment, ENVIRONMENT_NAME))) return Error.TypeError;
-        self.env.top_value = frameAt(obj.slice()[0]);
-        self.env.top_function = frameAt(obj.slice()[1]);
+        const previous = try self.env.saveChains();
+        self.env.top_value = values;
+        self.env.top_function = functions;
         return previous;
     }
 
     pub fn leaveEnvironment(self: *Evaluator, previous: Chains) void {
-        self.env.top_value = previous.values;
-        self.env.top_function = previous.functions;
+        self.env.restoreChains(previous);
     }
 
     const ENVIRONMENT_NAME = "%LEXICAL-ENVIRONMENT";

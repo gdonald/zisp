@@ -138,6 +138,24 @@ test "a stream knows which directions it allows" {
     try fx.expectNil("(input-stream-p (make-string-output-stream))");
 }
 
+test "with-output-to-string given a string writes into it as the body runs" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectText(
+        \\(let ((s (make-array 1 :element-type 'character :adjustable t :fill-pointer 1 :initial-element #\x)))
+        \\  (format nil "~a ~a"
+        \\          (with-output-to-string (out s) (declare (ignorable out)) (write-string "ab" out) (length s))
+        \\          s))
+    , "3 xab");
+    try fx.expectErr(Error.TypeError, "(with-output-to-string (out \"fixed\") out)");
+}
+
+test "with-output-to-string returns what its body wrote" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectText("(with-output-to-string (out nil :element-type 'character) (declare (ignorable out)) (princ 42 out))", "42");
+}
+
 test "a binary stream reports its element type" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);

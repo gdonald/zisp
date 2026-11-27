@@ -739,11 +739,11 @@ Phase 11: Full ansi-test Compliance
 
 Every test the suite's own driver runs passes, interpreted and compiled. The per-category harness reports 13597 of 17055 passing at the start of this phase. It also leaves out `environment/`, `files/`, `misc/` and `system-construction/`, about 1100 tests, and it loads a category's files without the auxiliary files that category's `load.lsp` loads first, so some of its failures are files that never loaded.
 
-- [ ] 11.1. Run the suite the way it runs itself
+- [x] 11.1. Run the suite the way it runs itself
   - [x] 11.1.1. `zig build ansi-test` runs `doit.lsp` in a fasl-free copy of the suite: `init.lsp`, `gclload1.lsp`, `gclload2.lsp`, then `(regression-test:do-tests)`. It prints the total, the failure count and every failing test name, and exits non-zero on any failure. Acceptance: the total it prints equals `(length (regression-test::pending-tests))` before the run, and the four categories the old harness left out are in it
-  - [ ] 11.1.2. `tests/run-ansi.sh <category>` loads that category's own `load.lsp` after `gclload1.lsp`, so per-category counts add up to the full run's. Acceptance: the sum over all 24 categories equals the total from 11.1.1
-  - [ ] 11.1.3. `MODE=compile` runs the full suite with `ext:*evaluator-mode*` set to `:compile`, so every test runs as bytecode
-  - [ ] 11.1.4. Record the failing test names in `tests/ansi-failures.txt`, which rt reads as its expected failures. The harness fails when a test not in the file fails, and when a test in the file passes, so the file shrinks with each fix and never grows. Acceptance: fixing one test without removing its name from the file fails the run
+  - [x] 11.1.2. `tests/run-ansi.sh <category>` loads that category's own `load.lsp` after `gclload1.lsp`, so per-category counts add up to the full run's. Acceptance: the sum over all 24 categories equals the total from 11.1.1
+  - [x] 11.1.3. `MODE=compile` runs the full suite with `ext:*evaluator-mode*` set to `:compile`, so every test runs as bytecode
+  - [x] 11.1.4. Record the failing test names in `tests/ansi-failures.txt`, which rt reads as its expected failures. The harness fails when a test not in the file fails, and when a test in the file passes, so the file shrinks with each fix and never grows. Acceptance: fixing one test without removing its name from the file fails the run
 - [ ] 11.2. Implementation-dependent tests
   - [ ] 11.2.1. Every note zisp disables (such as `:nil-vectors-are-strings`) is listed in `docs/ansi-test.md` with the CLHS section that permits zisp's behavior. A note is not disabled to hide a failure the standard does not permit. Acceptance: the notes `tests/lisp/ansi-rt.lisp` disables and the notes in the doc are the same list
   - [ ] 11.2.2. Tests whose result depends on an implementation limit (fixnum width, `array-dimension-limit`, `char-code-limit`, float formats) pass against zisp's limits, not skipped
@@ -775,7 +775,7 @@ Every test the suite's own driver runs passes, interpreted and compiled. The per
   - [ ] 11.7.2. `system-construction/`: 0 failures
   - [ ] 11.7.3. `misc/`: 0 failures
 - [ ] 11.8. Hold the line
-  - [ ] 11.8.1. `tests/ansi-failures.txt` is empty, and the harness no longer reads it
+  - [ ] 11.8.1. `tests/ansi-failures.txt` and `tests/ansi-failures-compile.txt` are empty, and the harness no longer reads them
   - [ ] 11.8.2. `doit.lsp` reports no failures interpreted and with `MODE=compile`
   - [ ] 11.8.3. GitHub CI runs the full suite on every commit, so a change that breaks an ansi-test fails CI
 

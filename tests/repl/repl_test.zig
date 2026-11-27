@@ -39,6 +39,22 @@ test "evaluates a single form and prints the value" {
     try testing.expectEqualStrings("3\n", h.output());
 }
 
+test "the default pathname starts as the absolute current directory" {
+    const h = try newHarness();
+    defer h.deinit(testing.allocator);
+    try h.run("(list (first (pathname-directory *default-pathname-defaults*)) (pathname-name *default-pathname-defaults*) (equal (namestring (truename \"build.zig\")) (namestring (merge-pathnames \"build.zig\"))))");
+    try testing.expectEqualStrings("(:ABSOLUTE NIL T)\n", h.output());
+}
+
+test "a session with no file system starts with an empty default pathname" {
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    const repl = try zisp.repl.Repl.init(testing.allocator, &aw.writer, null);
+    defer repl.deinit();
+    try repl.run("(namestring *default-pathname-defaults*)");
+    try testing.expectEqualStrings("\"\"\n", aw.written());
+}
+
 test "evaluates several forms in sequence" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);

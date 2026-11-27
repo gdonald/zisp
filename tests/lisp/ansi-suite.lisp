@@ -16,11 +16,12 @@
 (when *load-pathname*
   (mapc #'regression-test:rem-test '(cl-test::load-pathname.1 cl-test::load-truename.1)))
 
-(rt::disable-note :nil-vectors-are-strings)
-
+;; rt switches every note back on when it reads expected failures, and
+;; then off again for each keyword the file names.
 (if cl-user::*ansi-expected-failures*
     (regression-test:do-tests :expected-failures cl-user::*ansi-expected-failures*)
-    (regression-test:do-tests))
+    (progn (rt::disable-note :nil-vectors-are-strings)
+           (regression-test:do-tests)))
 
 (format t "~&ANSI-SUITE ~D ~D ~D ~D ~D~%"
         (length (cdr rt::*entries*))

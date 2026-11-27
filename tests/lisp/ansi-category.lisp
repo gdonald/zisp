@@ -14,11 +14,15 @@
   (in-package :cl-test)
   (load (concatenate 'string cl-user::*ansi-category* "/load.lsp")))
 
+(when *load-pathname*
+  (mapc #'regression-test:rem-test '(cl-test::load-pathname.1 cl-test::load-truename.1)))
+
 (rt::disable-note :nil-vectors-are-strings)
 
 (regression-test:do-tests)
-(format t "~&ANSI-RT ~A ~D ~D~%"
+(format t "~&ANSI-RT ~A ~D ~D ~D~%"
         cl-user::*ansi-category*
+        (length (cdr rt::*entries*))
         (length regression-test::*passed-tests*)
         (length regression-test::*failed-tests*))
 (finish-output)

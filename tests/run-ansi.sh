@@ -141,8 +141,8 @@ fi
 
 # Eval-mode sweep: one zisp per category, in a copy of the suite with no
 # fasls in it, loads the category through tests/lisp/ansi-category.lisp,
-# runs the tests it registered, and prints an `ANSI-RT` tally of passed
-# and failed tests. A category that does not load or does not report
+# runs the tests it registered, and prints an `ANSI-RT` tally of
+# registered, passed and failed tests. A category that does not load or does not report
 # counts as one failure, and what it printed last is shown.
 run_category() {
   local cat="$1"
@@ -155,17 +155,18 @@ run_category() {
     --load "$DRIVER" 2>&1 | tr -d '\000')" || true
   [[ "$VERBOSE" == "1" ]] && echo "$output"
 
-  local pass=0 fail=0 tally
-  tally="$(grep -E "^ANSI-RT $cat [0-9]+ [0-9]+$" <<<"$output" | tail -n1 || true)"
+  local registered=0 pass=0 fail=0 tally
+  tally="$(grep -E "^ANSI-RT $cat [0-9]+ [0-9]+ [0-9]+$" <<<"$output" | tail -n1 || true)"
   if [[ -n "$tally" ]]; then
-    read -r _ _ pass fail <<<"$tally"
+    read -r _ _ registered pass fail <<<"$tally"
   else
     fail=1
     grep '^ANSI-LOAD-ERROR' <<<"$output" || tail -n 5 <<<"$output"
   fi
 
-  printf "%-26s PASS=%d FAIL=%d\n" "$cat" "$pass" "$fail"
+  printf "%-26s TESTS=%d PASS=%d FAIL=%d\n" "$cat" "$registered" "$pass" "$fail"
   record_result "$cat" "$pass" "$fail"
+  total_registered=$((total_registered + registered))
   total_pass=$((total_pass + pass))
   total_fail=$((total_fail + fail))
 }
@@ -195,6 +196,7 @@ run_category_read_only() {
   total_fail=$((total_fail + fail))
 }
 
+total_registered=0
 total_pass=0
 total_fail=0
 
@@ -220,7 +222,7 @@ else
   total=$((total_pass + total_fail))
   if (( total > 0 )); then
     pct=$(awk -v p="$total_pass" -v t="$total" 'BEGIN{printf "%.1f", 100*p/t}')
-    echo "Eval summary: $total_pass / $total ($pct%) tests passed"
+    echo "Eval summary: $total_pass / $total ($pct%) tests passed, $total_registered registered"
     print_group_summary
   else
     echo "Eval summary: no files matched"

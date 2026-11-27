@@ -1187,10 +1187,9 @@ pub const Converter = struct {
         {
             // FLET's definitions see the functions outside it, not each
             // other, so the frame holding them is set aside meanwhile.
-            const saved = if (recursive) null else self.ev.env.setFunctionChain(frame.parent);
-            defer if (!recursive) {
-                _ = self.ev.env.setFunctionChain(saved);
-            };
+            const saved = if (recursive) null else try self.ev.env.saveChains();
+            defer if (saved) |mark| self.ev.env.restoreChains(mark);
+            if (!recursive) self.ev.env.top_function = frame.parent;
             rest = definitions;
             for (names.items) |sym| {
                 const def = heap.car(rest);

@@ -27,9 +27,18 @@ in it and loads `tests/lisp/ansi-suite.lisp` there. That loads
 `init.lsp`, which loads `gclload1.lsp` and then `gclload2.lsp`, the file
 that loads every category's `load.lsp`, and runs every test with
 `regression-test:do-tests`. An error while the suite loads ends the run
-with the file it came from. The script prints rt's list of failures and
-the count passed, and exits non-zero on any failure. CI does not run it:
-it runs the Zig test suite only, and the ansi-test suite is run locally.
+with the file it came from.
+
+`tests/ansi-failures.txt` names the tests that fail today, one per line,
+and the script hands it to `do-tests` as rt's expected failures. The run
+exits non-zero when a test fails that the file does not name, and when a
+test it names passes, so a fix removes its name from the file in the same
+change. `MODE=compile` reads `tests/ansi-failures-compile.txt` instead,
+since compiled and interpreted code fail different tests. A keyword in
+either file names a note whose tests are switched off. The script prints
+rt's summary of both, the count passed, and the
+count switched off by a note. CI does not run it: it runs the Zig test
+suite only, and the ansi-test suite is run locally.
 
 `tests/run-ansi.sh <category>` runs one category the same way in a zisp
 of its own: `gclload1.lsp`, then that category's `load.lsp`, through
@@ -110,7 +119,8 @@ The framework itself lives in two files at the suite root:
 
 Each category's `load.lsp` compiles the auxiliary files it needs and
 loads its test files. A category run prints an `ANSI-RT <category>
-<passed> <failed>` line, which `tests/run-ansi.sh` reads.
+<registered> <passed> <failed>` line, which `tests/run-ansi.sh` reads.
+The registered counts of the 24 categories add up to the whole run's.
 
 ## Status
 

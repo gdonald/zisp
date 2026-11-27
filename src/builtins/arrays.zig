@@ -690,6 +690,11 @@ fn vectorPushFn(p: *anyopaque, args: []const Value) Error!Value {
     return Value.fromFixnum(@intCast(target.index));
 }
 
+/// Append `element` at the fill pointer of `vector`, growing it when full.
+pub fn pushExtend(ev: *Evaluator, vector: Value, element: Value) Error!void {
+    _ = try vectorPushExtendFn(@ptrCast(ev), &.{ element, vector });
+}
+
 fn vectorPushExtendFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
