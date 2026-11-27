@@ -24,12 +24,11 @@ fn runCorpus(file: []const u8, text: []const u8) !u32 {
     try zisp.eval.registerStandardSpecialForms(&ev);
     try zisp.builtins.registerStandard(&ev);
 
-    var tk = zisp.reader.Tokenizer.init(text);
+    var tk = zisp.reader.Source.init(text);
     var rd = zisp.reader.Reader.initFull(
         &tk,
         &heap,
         &interner,
-        zisp.reader.reader.defaultReadtable(),
         try ev.sourcePositions(),
         file,
     );

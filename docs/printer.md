@@ -17,7 +17,8 @@ prints with it on and `princ` with it off, whatever the variable holds.
 
 `*print-readably*` says the output must read back as the same object. It
 escapes whatever `*print-escape*` would have left bare, and prints the
-whole object whatever `*print-level*` and `*print-length*` hold.
+whole object whatever `*print-level*` and `*print-length*` hold. `princ`
+and `~A` print with it off, whatever it holds.
 
 `*print-base*` is the radix integers and ratios print in, between 2 and
 36. `*print-radix*` adds the marker that says which radix it was: `#b`,
@@ -39,7 +40,12 @@ abbreviated: a number at any depth prints as itself.
 
 `*print-circle*` labels shared structure as `#n=` and `#n#`.
 `*print-pretty*`, `*print-right-margin*`, `*print-miser-width*` and
-`*print-pprint-dispatch*` belong to the pretty printer.
+`*print-pprint-dispatch*` belong to the pretty printer. With
+`*print-pretty*` on, an object whose type has an entry in
+`*print-pprint-dispatch*` is printed by that entry's function, a symbol
+or number as well as a list. `(copy-pprint-dispatch nil)` is a table with
+none of the program's entries in it, and `set-pprint-dispatch` changes
+the table it is given, `*print-pprint-dispatch*` when it is given none.
 
 `*print-array*` and `*print-lines*` are defined and hold their standard
 values. Nothing reads them yet.
@@ -58,15 +64,6 @@ graphic character is spelled `#\U+` and its code in hexadecimal, which
 A condition prints as its report where nothing asked for output that
 reads back, and as `#<TYPE>` where something did. `princ` and `~A` give
 the report, `prin1` and `~S` the type.
-
-## The reader variables
-
-`*read-base*`, `*read-eval*`, `*read-suppress*` and
-`*read-default-float-format*` are defined and hold their standard values.
-A float with no exponent marker, or with `e`, reads as the type
-`*read-default-float-format*` names. `load` and `compile-file` look at it
-again before each top-level form, so a form that sets it at compile time
-changes how the forms after it read.
 
 ## Standard syntax
 

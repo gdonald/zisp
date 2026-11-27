@@ -9,7 +9,7 @@ const zisp = @import("zisp");
 const value = zisp.value;
 const symbol_mod = zisp.symbol;
 const heap_mod = zisp.heap;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const Evaluator = zisp.eval.Evaluator;
 
@@ -108,7 +108,7 @@ test "key-args corpus matches SBCL result lists" {
         const fx = try Fixture.init(gpa);
         defer fx.deinit(gpa);
 
-        var tk = Tokenizer.init(form_src);
+        var tk = Source.init(form_src);
         var rd = Reader.init(&tk, &fx.heap, &fx.interner);
         const form = (try rd.read()) orelse return ParseError.MalformedCorpusLine;
 

@@ -59,9 +59,9 @@ fn runCorpusIn(name: []const u8, text: []const u8, compile: bool) !u32 {
         symbol_mod.symbol(mode).value_cell = try fx.interner.internKeyword("COMPILE");
     }
 
-    var tk = zisp.reader.Tokenizer.init(text);
+    var tk = zisp.reader.Source.init(text);
     var rd = zisp.reader.Reader.init(&tk, &fx.heap, &fx.interner);
-    rd.read_eval = .{ .context = @ptrCast(&fx.ev), .call = &Evaluator.readEval };
+    zisp.builtins.readtables.install(&fx.ev, &rd);
     var checked: u32 = 0;
     while (try rd.read()) |form| {
         checked += 1;
@@ -222,6 +222,11 @@ test "format directives corpus" {
 test "reader syntax corpus" {
     const checked = try runCorpus("reader-syntax", @embedFile("lisp/reader-syntax-corpus.lisp"));
     try testing.expectEqual(@as(u32, 28), checked);
+}
+
+test "reader macros corpus" {
+    const checked = try runCorpus("reader-macros", @embedFile("lisp/reader-macros-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 32), checked);
 }
 
 test "displaced string corpus" {

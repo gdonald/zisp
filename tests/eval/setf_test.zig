@@ -44,7 +44,7 @@ const Fixture = struct {
     }
 
     fn evalStr(self: *Fixture, src: []const u8) !Value {
-        var tk = zisp.reader.Tokenizer.init(src);
+        var tk = zisp.reader.Source.init(src);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         var result = value.NIL;
         while (try rd.read()) |form| {
@@ -324,7 +324,7 @@ test "setf-expander corpus" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
 
-    var tk = zisp.reader.Tokenizer.init(corpus_text);
+    var tk = zisp.reader.Source.init(corpus_text);
     var rd = zisp.reader.Reader.init(&tk, &fx.heap, &fx.interner);
     var checked: u32 = 0;
     while (try rd.read()) |form| {

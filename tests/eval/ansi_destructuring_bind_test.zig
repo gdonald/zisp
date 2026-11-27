@@ -10,7 +10,7 @@ const zisp = @import("zisp");
 const value = zisp.value;
 const symbol_mod = zisp.symbol;
 const heap_mod = zisp.heap;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const Evaluator = zisp.eval.Evaluator;
 
@@ -48,7 +48,7 @@ const Fixture = struct {
     }
 
     fn evalStr(self: *Fixture, src: []const u8) !value.Value {
-        var tk = Tokenizer.init(src);
+        var tk = Source.init(src);
         var rd = Reader.init(&tk, &self.heap, &self.interner);
         var result = value.NIL;
         while (try rd.read()) |form| {
@@ -93,7 +93,7 @@ test "ansi-test destructuring-bind.lsp deftests" {
     var failed: std.ArrayList([]const u8) = .empty;
     defer failed.deinit(gpa);
 
-    var tk = Tokenizer.init(src);
+    var tk = Source.init(src);
     var rd = Reader.init(&tk, &fx.heap, &fx.interner);
     while (try rd.read()) |form| {
         if (!form.isCons() or !symbolNamed(heap_mod.car(form), "DEFTEST")) continue;

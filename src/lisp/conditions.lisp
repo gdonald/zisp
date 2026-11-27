@@ -411,6 +411,8 @@ or `warn`, the restarts are associated with the condition it signals."
     (:|FloatingPointOverflow| . floating-point-overflow)
     (:|FloatingPointUnderflow| . floating-point-underflow)
     (:|FileError| . file-error)
+    (:|EndOfFile| . end-of-file)
+    (:|ReaderError| . reader-error)
     (:|NoOutputStream| . stream-error)
     (:|NoSuchPackage| . package-error)
     (:|PackageError| . package-error)
@@ -420,12 +422,14 @@ or `warn`, the restarts are associated with the condition it signals."
 
 (defun %native-condition-initargs (type caught)
   "The slots a condition standing for a native failure can be given. What
-the failure was about is known for the cell errors, and for a type error
-whose raise site recorded its datum and the type it wanted."
+the failure was about is known for the cell errors, for a type error
+whose raise site recorded its datum and the type it wanted, and for a
+stream error the stream it was reading."
   (cond ((subtypep type 'cell-error) (list :name (%last-error-symbol)))
         ((subtypep type 'type-error)
          (let ((mismatch (%last-type-mismatch)))
            (list :datum (car mismatch) :expected-type (cadr mismatch))))
+        ((subtypep type 'stream-error) (list :stream (%last-error-stream)))
         ((subtypep type 'simple-condition)
          (list :format-control "~A" :format-arguments (list caught)))
         (t nil)))

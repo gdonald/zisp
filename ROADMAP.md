@@ -744,11 +744,11 @@ Every test the suite's own driver runs passes, interpreted and compiled. The per
   - [x] 11.1.2. `tests/run-ansi.sh <category>` loads that category's own `load.lsp` after `gclload1.lsp`, so per-category counts add up to the full run's. Acceptance: the sum over all 24 categories equals the total from 11.1.1
   - [x] 11.1.3. `MODE=compile` runs the full suite with `ext:*evaluator-mode*` set to `:compile`, so every test runs as bytecode
   - [x] 11.1.4. Record the failing test names in `tests/ansi-failures.txt`, which rt reads as its expected failures. The harness fails when a test not in the file fails, and when a test in the file passes, so the file shrinks with each fix and never grows. Acceptance: fixing one test without removing its name from the file fails the run
-- [ ] 11.2. Implementation-dependent tests
+- [x] 11.2. Implementation-dependent tests
   - [x] 11.2.1. Every note zisp disables (such as `:nil-vectors-are-strings`) is listed in `docs/ansi-test.md` with the CLHS section that permits zisp's behavior. A note is not disabled to hide a failure the standard does not permit. Acceptance: the notes `tests/lisp/ansi-rt.lisp` disables and the notes in the doc are the same list
-  - [ ] 11.2.2. Tests whose result depends on an implementation limit (fixnum width, `array-dimension-limit`, `char-code-limit`, float formats) pass against zisp's limits, not skipped
+  - [x] 11.2.2. Tests whose result depends on an implementation limit (fixnum width, `array-dimension-limit`, `char-code-limit`, float formats) pass against zisp's limits, not skipped
 - [ ] 11.3. Syntax
-  - [ ] 11.3.1. `reader/`: 0 failures
+  - [x] 11.3.1. `reader/`: 0 failures
   - [ ] 11.3.2. `printer/`: 0 failures, including `print-unreadable-object`, `*print-pretty*` layout and every `format` directive
 - [ ] 11.4. Evaluation
   - [ ] 11.4.1. `symbols/`: 0 failures

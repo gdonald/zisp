@@ -12,7 +12,7 @@ const heap_mod = @import("heap.zig");
 const symbol = @import("symbol.zig");
 const source_pos = @import("source_pos.zig");
 
-const Tokenizer = reader_mod.Tokenizer;
+const Source = reader_mod.Source;
 const Reader = reader_mod.Reader;
 const Heap = heap_mod.Heap;
 const Interner = symbol.Interner;
@@ -45,15 +45,8 @@ pub fn parseAll(allocator: std.mem.Allocator, source: []const u8, file_name: []c
     defer interner.deinit();
     try symbol.initStandardSymbols(&interner);
 
-    var tk = Tokenizer.init(source);
-    var rd = Reader.initFull(
-        &tk,
-        &heap_inst,
-        &interner,
-        reader_mod.reader.defaultReadtable(),
-        null,
-        file_name,
-    );
+    var text = Source.init(source);
+    var rd = Reader.initFull(&text, &heap_inst, &interner, null, file_name);
 
     var forms: u32 = 0;
     while (true) {

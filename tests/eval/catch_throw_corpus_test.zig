@@ -9,7 +9,7 @@ const std = @import("std");
 const zisp = @import("zisp");
 const value = zisp.value;
 const symbol_mod = zisp.symbol;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const Evaluator = zisp.eval.Evaluator;
 
@@ -88,7 +88,7 @@ test "catch/throw corpus evaluates to SBCL values" {
         const fx = try Fixture.init(std.testing.allocator);
         defer fx.deinit(std.testing.allocator);
 
-        var tk = Tokenizer.init(entry.form_src);
+        var tk = Source.init(entry.form_src);
         var rd = Reader.init(&tk, &fx.heap, &fx.interner);
         const form = (try rd.read()) orelse {
             std.debug.print("corpus line {d}: empty form\n", .{line_no});

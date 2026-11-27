@@ -49,6 +49,11 @@ pub fn registerStreams(ev: *Evaluator) !void {
     _ = try ev.defineNative("READ-BYTE", &readByteFn);
     _ = try ev.defineNative("WRITE-BYTE", &writeByteFn);
     _ = try ev.defineNative("MAKE-STRING-INPUT-STREAM", &makeStringInputStreamFn);
+    _ = try ev.defineNative("MAKE-TWO-WAY-STREAM", &makeTwoWayStreamFn);
+    _ = try ev.defineNative("TWO-WAY-STREAM-INPUT-STREAM", twoWaySideFn(.input));
+    _ = try ev.defineNative("TWO-WAY-STREAM-OUTPUT-STREAM", twoWaySideFn(.output));
+    _ = try ev.defineNative("MAKE-BROADCAST-STREAM", &makeBroadcastStreamFn);
+    _ = try ev.defineNative("BROADCAST-STREAM-STREAMS", &broadcastStreamStreamsFn);
     _ = try ev.defineNative("MAKE-STRING-OUTPUT-STREAM", &makeStringOutputStreamFn);
     _ = try ev.defineNative("GET-OUTPUT-STREAM-STRING", &getOutputStreamStringFn);
     _ = try ev.defineNative("%MAKE-FILL-POINTER-OUTPUT-STREAM", &makeFillPointerOutputStreamFn);
@@ -115,6 +120,7 @@ pub fn emptyStream(kind: heap.StreamKind, direction: heap.StreamDirection) Strea
         .delete_on_close = value.NIL,
         .tokens = .empty,
         .target = value.NIL,
+        .source = value.NIL,
         .block_depth = 0,
         .circle = null,
     };
@@ -127,6 +133,20 @@ pub fn emptyStream(kind: heap.StreamKind, direction: heap.StreamDirection) Strea
 pub const Side = enum { input, output };
 
 pub fn streamOf(ev: *Evaluator, given: ?Value, side: Side) Error!*Stream {
+    return sideOf(try designated(ev, given, side), side);
+}
+
+/// The stream that does the reading or writing for `s`: a two-way stream
+/// reads from its input stream and writes to its output stream.
+fn sideOf(s: *Stream, side: Side) *Stream {
+    var at = s;
+    while (at.kind == .two_way) {
+        at = heap.asStream(if (side == .input) at.source else at.target);
+    }
+    return at;
+}
+
+fn designated(ev: *Evaluator, given: ?Value, side: Side) Error!*Stream {
     const v = given orelse value.NIL;
     if (heap.isStream(v)) return heap.asStream(v);
     const name = if (v.equalsRaw(value.T))
@@ -401,6 +421,67 @@ fn noOpStreamFn(p: *anyopaque, args: []const Value) Error!Value {
     return value.NIL;
 }
 
+// --- composite streams ---
+
+fn isInput(s: *Stream) bool {
+    return s.direction == .input or s.direction == .io;
+}
+
+fn isOutput(s: *Stream) bool {
+    return s.direction == .output or s.direction == .io or s.kind == .console;
+}
+
+/// `(make-two-way-stream input output)`: reads come from INPUT and
+/// writes go to OUTPUT.
+fn makeTwoWayStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    if (!heap.isStream(args[0]) or !isInput(heap.asStream(args[0]))) return ev.typeMismatch(args[0], "STREAM");
+    if (!heap.isStream(args[1]) or !isOutput(heap.asStream(args[1]))) return ev.typeMismatch(args[1], "STREAM");
+    var stream = emptyStream(.two_way, .io);
+    stream.source = args[0];
+    stream.target = args[1];
+    return ev.heap.allocStream(stream);
+}
+
+fn twoWaySideFn(comptime side: Side) function.NativeFn {
+    return struct {
+        fn f(p: *anyopaque, args: []const Value) Error!Value {
+            const ev = evaluator(p);
+            if (args.len != 1) return Error.WrongArgCount;
+            if (!heap.isStream(args[0]) or heap.asStream(args[0]).kind != .two_way) {
+                return ev.typeMismatch(args[0], "TWO-WAY-STREAM");
+            }
+            const s = heap.asStream(args[0]);
+            return if (side == .input) s.source else s.target;
+        }
+    }.f;
+}
+
+/// `(make-broadcast-stream &rest streams)`: a write goes to each of
+/// STREAMS, and with none of them it goes nowhere.
+fn makeBroadcastStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    for (args) |arg| {
+        if (!heap.isStream(arg) or !isOutput(heap.asStream(arg))) return ev.typeMismatch(arg, "STREAM");
+    }
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(try ev.heap.list(args));
+    var stream = emptyStream(.broadcast, .output);
+    stream.target = held.items()[0];
+    return ev.heap.allocStream(stream);
+}
+
+fn broadcastStreamStreamsFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!heap.isStream(args[0]) or heap.asStream(args[0]).kind != .broadcast) {
+        return ev.typeMismatch(args[0], "BROADCAST-STREAM");
+    }
+    return heap.asStream(args[0]).target;
+}
+
 // --- reading and writing characters ---
 
 pub fn expectInput(s: *Stream) Error!void {
@@ -458,8 +539,11 @@ pub const EofBehavior = struct {
         };
     }
 
-    pub fn result(self: EofBehavior) Error!Value {
-        if (self.signal) return Error.FileError;
+    pub fn result(self: EofBehavior, ev: *Evaluator, s: *Stream) Error!Value {
+        if (self.signal) {
+            ev.error_stream = Value.fromHeapAddr(@intFromPtr(s));
+            return Error.EndOfFile;
+        }
         return self.on_eof;
     }
 };
@@ -469,7 +553,7 @@ fn readCharFn(p: *anyopaque, args: []const Value) Error!Value {
     const s = try streamOf(ev, if (args.len > 0) args[0] else null, .input);
     try expectInput(s);
     const eof = try EofBehavior.parse(args, 1);
-    const c = nextChar(s) orelse return eof.result();
+    const c = nextChar(s) orelse return eof.result(ev, s);
     return Value.fromChar(c);
 }
 
@@ -488,7 +572,7 @@ fn peekCharFn(p: *anyopaque, args: []const Value) Error!Value {
     while (true) {
         const before = s.position;
         const pending = s.pending;
-        const c = nextChar(s) orelse return eof.result();
+        const c = nextChar(s) orelse return eof.result(ev, s);
         if (skip_whitespace and (c == ' ' or c == '\n' or c == '\t' or c == '\r')) continue;
         s.position = before;
         s.pending = pending;
@@ -536,6 +620,14 @@ fn emit(ev: *Evaluator, s: *Stream, c: u21) Error!void {
 /// before extending, which is what `:if-exists :overwrite` needs.
 pub fn emitBytes(ev: *Evaluator, s: *Stream, bytes: []const u8) Error!void {
     if (s.kind == .pretty) return @import("pprint.zig").recordText(ev, s, bytes);
+    if (s.kind == .two_way) return emitBytes(ev, sideOf(s, .output), bytes);
+    if (s.kind == .broadcast) {
+        var rest = s.target;
+        while (rest.isCons()) : (rest = heap.cdr(rest)) {
+            try emitBytes(ev, heap.asStream(heap.car(rest)), bytes);
+        }
+        return;
+    }
     if (s.kind == .console) {
         const out = ev.out orelse return Error.NoOutputStream;
         out.writeAll(bytes) catch return Error.WriteFailed;
@@ -593,7 +685,7 @@ fn readLineFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!saw_any) {
         // A line that ends at the end of input is still a line; only an
         // empty read is the end of the file.
-        return ev.setValues(&.{ try eof.result(), value.T });
+        return ev.setValues(&.{ try eof.result(ev, s), value.T });
     }
     return ev.setValues(&.{ try ev.heap.allocStringFromChars(codes.items), value.T });
 }
@@ -616,13 +708,13 @@ fn writeStringFn(comptime newline: bool) function.NativeFn {
 // --- bytes ---
 
 fn readByteFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
+    const ev = evaluator(p);
     if (args.len < 1) return Error.WrongArgCount;
     const s = try expectStream(args[0]);
     try expectInput(s);
     const eof = try EofBehavior.parse(args, 1);
     const width: usize = if (s.element == .signed_byte_16) 2 else 1;
-    if (s.position + width > s.input.len) return eof.result();
+    if (s.position + width > s.input.len) return eof.result(ev, s);
 
     if (width == 1) {
         const b = s.input[s.position];

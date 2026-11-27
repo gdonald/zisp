@@ -41,7 +41,7 @@ const Fixture = struct {
     }
 
     fn run(self: *Fixture, src: []const u8) !Value {
-        var tk = zisp.reader.Tokenizer.init(src);
+        var tk = zisp.reader.Source.init(src);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         var last = value.NIL;
         while (try rd.read()) |form| last = try self.ev.eval(form);

@@ -53,7 +53,7 @@ pub fn registerPprint(ev: *Evaluator) !void {
     try bindVariable(ev, "*PRINT-PRETTY*", value.NIL);
     try bindVariable(ev, "*PRINT-RIGHT-MARGIN*", value.NIL);
     try bindVariable(ev, "*PRINT-MISER-WIDTH*", value.NIL);
-    try bindVariable(ev, "*PRINT-PPRINT-DISPATCH*", value.NIL);
+    try bindVariable(ev, "*PRINT-PPRINT-DISPATCH*", try emptyTable(ev));
     try bindVariable(ev, "*PRINT-CIRCLE*", value.NIL);
 }
 
@@ -407,29 +407,48 @@ fn pprintFn(p: *anyopaque, args: []const Value) Error!Value {
 
 // --- the dispatch table ---
 
-/// A dispatch table is a list of `(type-specifier function priority)`
-/// entries, most recently set first.
+/// A dispatch table is a list headed by `%PPRINT-DISPATCH-TABLE`, so it
+/// can be changed in place, followed by `(type-specifier function
+/// priority)` entries, most recently set first. A lookup passes over the
+/// head, which is not an entry.
+fn emptyTable(ev: *Evaluator) Error!Value {
+    return ev.heap.list(&.{try ev.interner.intern("%PPRINT-DISPATCH-TABLE")});
+}
+
+fn expectTable(ev: *Evaluator, v: Value) Error!Value {
+    if (v.isCons() and heap.car(v).equalsRaw(try ev.interner.intern("%PPRINT-DISPATCH-TABLE"))) return v;
+    return ev.typeMismatch(v, "LIST");
+}
+
 fn setPprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 2 or args.len > 4) return Error.WrongArgCount;
-    const table_sym = try ev.interner.intern("*PRINT-PPRINT-DISPATCH*");
     const priority = if (args.len >= 3) args[2] else Value.fromFixnum(0);
-    const current = ev.env.lookupValue(table_sym) orelse value.NIL;
+    const table = try expectTable(ev, if (args.len == 4) args[3] else try variableOf(ev, "*PRINT-PPRINT-DISPATCH*"));
 
     var held = ev.heap.protect();
     defer held.close();
-    try held.push(current);
+    try held.push(table);
     const entry = try ev.heap.list(&.{ args[0], args[1], priority });
-    try held.push(entry);
-    symbol_mod.symbol(table_sym).value_cell = try ev.heap.listWithTail(&.{entry}, current);
+    heap.setCdr(ev.heap, table, try ev.heap.allocCons(entry, heap.cdr(table)));
     return value.NIL;
 }
 
+/// A fresh table holding what `from` holds: the current table when it is
+/// missing, and none of the program's entries when it is NIL.
 fn copyPprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len > 1) return Error.WrongArgCount;
-    if (args.len == 1 and !args[0].equalsRaw(value.NIL)) return args[0];
-    return variableOf(ev, "*PRINT-PPRINT-DISPATCH*");
+    const from = if (args.len == 0) try variableOf(ev, "*PRINT-PPRINT-DISPATCH*") else args[0];
+    if (from.equalsRaw(value.NIL)) return emptyTable(ev);
+    const source = try expectTable(ev, from);
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(source);
+    var builder = ev.heap.listBuilder();
+    var rest = source;
+    while (rest.isCons()) : (rest = heap.cdr(rest)) try builder.append(heap.car(rest));
+    return builder.finish();
 }
 
 /// The function a table would use for an object, and whether one matched.
@@ -452,7 +471,39 @@ fn pprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
 
 /// How a printing operation escapes: always, never, or as
 /// `*print-escape*` says.
-const WriteStyle = enum { escape, plain, current };
+pub const WriteStyle = enum { escape, plain, current };
+
+/// Call a dispatch function for `v` with the printer variables `style`
+/// says bound, as `princ` binds `*print-escape*` and `*print-readably*`
+/// off and `prin1` binds `*print-escape*` on.
+fn callDispatch(ev: *Evaluator, handler: Value, stream: Value, v: Value, comptime style: WriteStyle) Error!void {
+    const mark = ev.dynamicMark();
+    defer ev.unwindSpecials(mark);
+    switch (style) {
+        .plain => {
+            try ev.bindSpecial(try ev.interner.intern("*PRINT-ESCAPE*"), value.NIL);
+            try ev.bindSpecial(try ev.interner.intern("*PRINT-READABLY*"), value.NIL);
+        },
+        .escape => try ev.bindSpecial(try ev.interner.intern("*PRINT-ESCAPE*"), value.T),
+        .current => {},
+    }
+    _ = try ev.callFunction(handler, &.{ stream, v });
+}
+
+/// The text a dispatch function prints for `v` when printing is pretty
+/// and the dispatch table has an entry for an object that is not a list,
+/// or null when the printer prints it as it is.
+pub fn dispatchedText(ev: *Evaluator, v: Value, comptime style: WriteStyle) Error!?Value {
+    if (v.isCons() or !try prettyWanted(ev)) return null;
+    const handler = try dispatchFor(ev, v) orelse return null;
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(handler);
+    try held.push(v);
+    try held.push(try ev.heap.allocStream(streams.emptyStream(.string, .output)));
+    try callDispatch(ev, held.items()[0], held.items()[2], held.items()[1], style);
+    return try ev.heap.allocString(heap.asStream(held.items()[2]).output.items);
+}
 
 /// Whether printing should lay a list out rather than run it flat.
 fn prettyWanted(ev: *Evaluator) Error!bool {
@@ -461,6 +512,11 @@ fn prettyWanted(ev: *Evaluator) Error!bool {
 
 fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyle) Error!void {
     const target = try streams.streamOf(ev, stream, .output);
+    if (!v.isCons() and try prettyWanted(ev)) {
+        if (try dispatchFor(ev, v)) |handler| {
+            return callDispatch(ev, handler, Value.fromHeapAddr(@intFromPtr(target)), v, style);
+        }
+    }
     if (style != .plain and v.isCons() and try prettyWanted(ev)) {
         if (target.kind == .pretty) {
             try recordValue(ev, target, v);

@@ -96,8 +96,11 @@ fn printCase(ev: *Evaluator) printer.Case {
 /// The settings the printer variables come to, with `escape` left to the
 /// caller: `prin1` and `princ` differ over that one alone.
 fn printerSettings(ev: *Evaluator, escaping: bool) printer.Settings {
+    return settingsReadably(ev, escaping, flag(ev, "*PRINT-READABLY*", false));
+}
+
+fn settingsReadably(ev: *Evaluator, escaping: bool, readably: bool) printer.Settings {
     const base = count(ev, "*PRINT-BASE*") orelse 10;
-    const readably = flag(ev, "*PRINT-READABLY*", false);
     return .{
         .escape = escaping,
         .readably = readably,
@@ -130,8 +133,9 @@ pub fn writeSettings(ev: *Evaluator) printer.Settings {
     return printerSettings(ev, flag(ev, "*PRINT-ESCAPE*", true));
 }
 
+/// `princ` and `~A` neither escape nor print readably (CLHS `princ`).
 pub fn princSettings(ev: *Evaluator) printer.Settings {
-    return printerSettings(ev, false);
+    return settingsReadably(ev, false, false);
 }
 
 /// True when `*print-circle*` asks for shared structure to be labeled.

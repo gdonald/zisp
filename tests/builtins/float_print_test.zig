@@ -50,7 +50,7 @@ const Fixture = struct {
     fn roundTrip(self: *Fixture, v: Value) !Value {
         const text = try printer.printToOwnedSlice(testing.allocator, v);
         defer testing.allocator.free(text);
-        var tk = zisp.reader.Tokenizer.init(text);
+        var tk = zisp.reader.Source.init(text);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         return (try rd.read()) orelse error.NoForm;
     }
@@ -94,7 +94,7 @@ test "every form in the float printing corpus evaluates to T" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
 
-    var tk = zisp.reader.Tokenizer.init(corpus_text);
+    var tk = zisp.reader.Source.init(corpus_text);
     var rd = zisp.reader.Reader.init(&tk, &fx.heap, &fx.interner);
     var checked: u32 = 0;
     while (try rd.read()) |form| {

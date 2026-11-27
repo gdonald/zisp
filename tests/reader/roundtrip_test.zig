@@ -20,7 +20,7 @@ const heap = zisp.heap;
 const symbol = zisp.symbol;
 const printer = zisp.printer;
 const Value = value.Value;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 
 const Setup = struct {
@@ -149,7 +149,7 @@ fn roundTripOnce(allocator: std.mem.Allocator, setup: *Setup, v: Value) !void {
     const printed = try printer.printToOwnedSlice(allocator, v);
     defer allocator.free(printed);
 
-    var tk = Tokenizer.init(printed);
+    var tk = Source.init(printed);
     var rd = Reader.init(&tk, &setup.h, &setup.interner);
     const re_read = (try rd.read()) orelse return error.EmptyReadback;
 

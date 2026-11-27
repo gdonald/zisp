@@ -14,7 +14,7 @@ const value = zisp.value;
 const symbol_mod = zisp.symbol;
 const heap_mod = zisp.heap;
 const source_pos = zisp.source_pos;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Evaluator = zisp.eval.Evaluator;
 
 const corpus_text = @embedFile("../lisp/macroexpand-positions.lisp");
@@ -114,12 +114,11 @@ test "macroexpansion preserves and stamps source positions" {
     try zisp.builtins.registerStandard(&ev);
     ev.positions = &positions;
 
-    var tk = Tokenizer.init(corpus_text);
+    var tk = Source.init(corpus_text);
     var rd = zisp.reader.Reader.initFull(
         &tk,
         &heap,
         &interner,
-        zisp.reader.reader.defaultReadtable(),
         &positions,
         corpus_file,
     );

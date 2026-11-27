@@ -36,6 +36,8 @@ pub const NativeError = error{
     FloatingPointOverflow,
     FloatingPointUnderflow,
     FileError,
+    EndOfFile,
+    ReaderError,
     NoOutputStream,
     Quit,
     NoSuchPackage,

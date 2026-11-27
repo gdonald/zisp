@@ -12,6 +12,7 @@ const circle_mod = @import("../runtime/circle.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
 const printer = @import("../runtime/printer.zig");
 const format = @import("format.zig");
+const pprint = @import("pprint.zig");
 const streams = @import("streams.zig");
 const reader_mod = @import("../reader.zig");
 const collect_mod = @import("../eval/collect.zig");
@@ -45,9 +46,6 @@ pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("PRIN1-TO-STRING", toStringFn(.escape));
     _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(.plain));
     _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(.current));
-    function.asFunction(try ev.defineNative("READ-FROM-STRING", &readFromStringFn))
-        .preserves_values = true;
-    _ = try ev.defineNative("READ", &readFn);
     _ = try ev.defineNative("QUIT", &quitFn);
     _ = try ev.defineNative("EXIT", &quitFn);
 
@@ -86,6 +84,7 @@ fn installFeatures(ev: *Evaluator) !void {
     const list = builder.finish();
     const features = try ev.interner.intern("*FEATURES*");
     symbol_mod.symbol(features).value_cell = list;
+    symbol_mod.symbol(features).special = true;
 }
 
 // --- format ---
@@ -207,6 +206,12 @@ fn toStringFn(comptime escaping: Escaping) function.NativeFn {
         fn f(p: *anyopaque, args: []const Value) Error!Value {
             const ev = evaluator(p);
             if (args.len != 1) return Error.WrongArgCount;
+            const style: pprint.WriteStyle = switch (escaping) {
+                .escape => .escape,
+                .plain => .plain,
+                .current => .current,
+            };
+            if (try pprint.dispatchedText(ev, args[0], style)) |text| return text;
             var aw = std.Io.Writer.Allocating.init(ev.allocator);
             defer aw.deinit();
             const settings = switch (escaping) {
@@ -225,71 +230,6 @@ fn toStringFn(comptime escaping: Escaping) function.NativeFn {
             return ev.heap.allocString(aw.written());
         }
     }.f;
-}
-
-/// `(read-from-string string)` returns the first form and the index just
-/// past the text it consumed.
-fn readFromStringFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    if (args.len != 1) return Error.WrongArgCount;
-    if (!heap.isString(args[0])) return Error.TypeError;
-    const source = try heap.stringUtf8Alloc(ev.allocator, args[0]);
-    defer ev.allocator.free(source);
-
-    var tokenizer = reader_mod.Tokenizer.init(source);
-    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
-    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
-    readtables.install(ev, &rd);
-    const form = rd.read() catch return Error.ProgramError;
-    const characters_read = std.unicode.utf8CountCodepoints(source[0..tokenizer.idx]) catch return Error.TypeError;
-    return ev.setValues(&.{
-        form orelse return Error.ProgramError,
-        Value.fromFixnum(@intCast(characters_read)),
-    });
-}
-
-/// The next form in what `stream` has left to read, or null at its end.
-/// The stream moves past the form. The stream is named by the designator
-/// `given` rather than held, since reading allocates and a collection
-/// can move it.
-pub fn readStreamForm(ev: *Evaluator, given: ?Value) anyerror!?Value {
-    const s = try streams.streamOf(ev, given, .input);
-    try streams.expectInput(s);
-    if (s.pending) |c| {
-        // A character handed back by `unread-char` came off the input,
-        // so it is read again from there.
-        s.position -= std.unicode.utf8CodepointSequenceLength(c) catch 1;
-        s.pending = null;
-    }
-    var tokenizer = reader_mod.Tokenizer.init(s.input[s.position..]);
-    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
-    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
-    readtables.install(ev, &rd);
-    const form = rd.read() catch |e| {
-        // What follows a form that will not read cannot be told apart from
-        // the rest of it, so the input is given up to its end.
-        const failed = try streams.streamOf(ev, given, .input);
-        failed.position = failed.input.len;
-        return e;
-    };
-    const after = try streams.streamOf(ev, given, .input);
-    after.position += tokenizer.idx;
-    // At a terminal, what a person types ends with the newline that sends
-    // it, so output picks up at the left margin.
-    if (after.kind == .console) ev.output_column = 0;
-    return form;
-}
-
-/// `(read &optional stream eof-error-p eof-value recursive-p)`.
-fn readFn(p: *anyopaque, args: []const Value) Error!Value {
-    const ev = evaluator(p);
-    const eof = try streams.EofBehavior.parse(args, 1);
-    const given: ?Value = if (args.len > 0) args[0] else null;
-    const form = readStreamForm(ev, given) catch |e| return switch (e) {
-        error.FileError, error.TypeError, error.UnboundVariable, error.OutOfMemory => |known| known,
-        else => Error.ProgramError,
-    };
-    return form orelse eof.result();
 }
 
 // --- load ---
@@ -442,37 +382,26 @@ const PathVarBindings = struct {
 
 /// Read and evaluate every form in `source`, discarding the values.
 pub fn evalSource(ev: *Evaluator, source: []const u8) Error!void {
-    var tokenizer = reader_mod.Tokenizer.init(source);
-    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
+    var text = reader_mod.Source.init(source);
+    var rd = reader_mod.Reader.init(&text, ev.heap, ev.interner);
     return evalForms(ev, &rd);
 }
 
 /// `evalSource` with where each form was read recorded under the name
 /// `file`, which a backtrace reports.
 pub fn evalSourceRecorded(ev: *Evaluator, source: []const u8, file: []const u8) Error!void {
-    var tokenizer = reader_mod.Tokenizer.init(source);
-    var rd = reader_mod.Reader.initFull(
-        &tokenizer,
-        ev.heap,
-        ev.interner,
-        reader_mod.reader.defaultReadtable(),
-        try ev.sourcePositions(),
-        file,
-    );
+    var text = reader_mod.Source.init(source);
+    var rd = reader_mod.Reader.initFull(&text, ev.heap, ev.interner, try ev.sourcePositions(), file);
     return evalForms(ev, &rd);
 }
 
 fn evalForms(ev: *Evaluator, rd: *reader_mod.Reader) Error!void {
-    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
     while (true) {
         // Between top-level forms nothing but the evaluator's own state
         // holds a value, which is what makes a collection safe here.
         try collect_mod.maybeCollect(ev);
         readtables.install(ev, rd);
-        const form = rd.read() catch |e| return switch (e) {
-            error.OutOfMemory => Error.OutOfMemory,
-            else => Error.ProgramError,
-        };
+        const form = rd.read() catch |e| return readtables.failure(e);
         const f = form orelse break;
         // The form is fresh structure nothing else holds.
         var held = ev.heap.protect();
@@ -595,19 +524,11 @@ pub fn compileSource(ev: *Evaluator, source: []const u8, out: *std.ArrayList(Val
 /// `compileSource` with where each form was read recorded under the name
 /// `file`, for code compiled with `(debug 3)` to say.
 pub fn compileSourceNamed(ev: *Evaluator, source: []const u8, file: []const u8, out: *std.ArrayList(Value)) Error!void {
-    var tokenizer = reader_mod.Tokenizer.init(source);
-    var rd = reader_mod.Reader.initFull(
-        &tokenizer,
-        ev.heap,
-        ev.interner,
-        reader_mod.reader.defaultReadtable(),
-        try ev.sourcePositions(),
-        try ev.keepSourceName(file),
-    );
-    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    var text = reader_mod.Source.init(source);
+    var rd = reader_mod.Reader.initFull(&text, ev.heap, ev.interner, try ev.sourcePositions(), try ev.keepSourceName(file));
     while (true) {
         readtables.install(ev, &rd);
-        const form = rd.read() catch return Error.ProgramError;
+        const form = rd.read() catch |e| return readtables.failure(e);
         const f = form orelse break;
         try compileToplevel(ev, f, false, out);
     }

@@ -16,7 +16,7 @@ const value = zisp.value;
 const heap = zisp.heap;
 const symbol = zisp.symbol;
 const Value = value.Value;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const ReaderError = zisp.reader.ReaderError;
 
@@ -123,9 +123,11 @@ test "feature expression corpus matches expected truth values" {
         defer features_buf.deinit(s.allocator);
         const features = try buildFeatures(&features_buf, &s.interner, s.allocator, entry.features_csv);
 
-        var tk = Tokenizer.init(entry.expr);
+        var tk = Source.init(entry.expr);
         var rd = Reader.init(&tk, &s.h, &s.interner);
         rd.setFeatures(features);
+        // A feature expression is read as keywords, as `#+` reads one.
+        rd.keyword_symbols = true;
 
         const expr_v = (try rd.read()) orelse {
             std.debug.print("line {d}: empty parse for `{s}`\n", .{ entry.line_no, entry.expr });
@@ -228,7 +230,7 @@ fn isWordChar(c: u8) bool {
 // --- direct reader tests for #+ / #- ------------------------------------
 
 fn readWithFeatures(s: *Setup, features: []const Value, src: []const u8) !?Value {
-    var tk = Tokenizer.init(src);
+    var tk = Source.init(src);
     var rd = Reader.init(&tk, &s.h, &s.interner);
     rd.setFeatures(features);
     return try rd.read();
@@ -329,7 +331,7 @@ test "#+ feature expr (and (not ...)) " {
 test "#+ all-skipped at top level returns null" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+nope only-form");
+    var tk = Source.init("#+nope only-form");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     const v = try rd.read();
     try std.testing.expect(v == null);
@@ -338,7 +340,7 @@ test "#+ all-skipped at top level returns null" {
 test "EOF after #+ feature expr is EndOfInput" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+sbcl");
+    var tk = Source.init("#+sbcl");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.EndOfInput, rd.read());
 }
@@ -347,7 +349,7 @@ test "#+ with bad feature expression shape is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
     // 42 is neither a symbol nor a list.
-    var tk = Tokenizer.init("#+42 :yes");
+    var tk = Source.init("#+42 :yes");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
@@ -355,7 +357,7 @@ test "#+ with bad feature expression shape is BadToken" {
 test "#+ with unknown operator is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+(xor a b) :yes");
+    var tk = Source.init("#+(xor a b) :yes");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
@@ -363,11 +365,11 @@ test "#+ with unknown operator is BadToken" {
 test "(not ...) requires exactly one operand" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+(not) :yes");
+    var tk = Source.init("#+(not) :yes");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 
-    var tk2 = Tokenizer.init("#+(not a b) :yes");
+    var tk2 = Source.init("#+(not a b) :yes");
     var rd2 = Reader.init(&tk2, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.BadToken, rd2.read());
 }
@@ -375,7 +377,7 @@ test "(not ...) requires exactly one operand" {
 test "feature expr with non-symbol head is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+(1 2 3) :yes");
+    var tk = Source.init("#+(1 2 3) :yes");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
@@ -383,7 +385,7 @@ test "feature expr with non-symbol head is BadToken" {
 test "dotted feature expression is BadToken" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+(or sbcl . ccl) :yes");
+    var tk = Source.init("#+(or sbcl . ccl) :yes");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.BadToken, rd.read());
 }
@@ -406,7 +408,7 @@ test "non-symbol value in features list is ignored" {
     // entries can match. Regression guard for the `if (!f.isSymbol())`
     // skip in `hasFeature`.
     const features = [_]Value{Value.fromFixnum(1)};
-    var tk = Tokenizer.init("#+sbcl :yes :no");
+    var tk = Source.init("#+sbcl :yes :no");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     rd.setFeatures(&features);
     const v = (try rd.read()).?;
@@ -430,9 +432,10 @@ test "skipped branch may name a symbol that is not external" {
 test "suppression does not intern the symbols it reads" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    // The feature expression itself is read normally; only the discarded
-    // form is suppressed, so intern NOPE before taking the baseline.
-    _ = try s.interner.intern("NOPE");
+    // The feature expression itself is read normally, as keywords; only
+    // the discarded form is suppressed, so intern :NOPE before taking the
+    // baseline.
+    _ = try s.interner.internKeyword("NOPE");
     const before = s.interner.count();
     _ = try readWithFeatures(s, &.{}, "#+nope (never-interned-name #:also-not :nor-this)");
     try std.testing.expectEqual(before, s.interner.count());
@@ -441,7 +444,7 @@ test "suppression does not intern the symbols it reads" {
 test "suppression ends with the discarded form" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#+nope skipped kept:no-such-package");
+    var tk = Source.init("#+nope skipped kept:no-such-package");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     try std.testing.expectError(ReaderError.NoSuchPackage, rd.read());
 }

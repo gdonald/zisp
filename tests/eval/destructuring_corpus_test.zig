@@ -8,7 +8,7 @@ const std = @import("std");
 const zisp = @import("zisp");
 const value = zisp.value;
 const symbol_mod = zisp.symbol;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const Evaluator = zisp.eval.Evaluator;
 
@@ -46,7 +46,7 @@ fn runCorpus(comptime name: []const u8, src: []const u8, expected_forms: u32) !v
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
-    var tk = Tokenizer.init(src);
+    var tk = Source.init(src);
     var rd = Reader.init(&tk, &fx.heap, &fx.interner);
     var checked: u32 = 0;
     while (try rd.read()) |form| {

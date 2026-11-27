@@ -313,7 +313,15 @@ fn subFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len == 0) return Error.WrongArgCount;
     if (anyComplex(args)) return foldComplex(ev, .sub, args);
-    if (args.len == 1) return fold(ev, .sub, 0, args);
+    if (args.len == 1) {
+        // Negating a float flips its sign, so the negation of 0.0 is -0.0
+        // where subtracting it from 0 would give 0.0.
+        switch (try contagionOf(args)) {
+            .rational => return fold(ev, .sub, 0, args),
+            .single => return boxFloat(ev, f32, -@as(f32, @floatCast(asF64(args[0])))),
+            .double => return boxFloat(ev, f64, -asF64(args[0])),
+        }
+    }
     switch (try contagionOf(args)) {
         .rational => {},
         .single => return subFloat(ev, f32, args),
@@ -1008,7 +1016,15 @@ fn conjugateFn(p: *anyopaque, args: []const Value) Error!Value {
     if (!complex.isNumber(args[0])) return Error.TypeError;
     if (!heap.isComplex(args[0])) return args[0];
     const z = try Parts.of(ev, args[0]);
-    return complex.make(ev.heap, z.re, try realSub(ev, ZERO, z.im));
+    // The imaginary part is negated, which takes a float zero to the zero
+    // of the other sign.
+    const negated = if (z.im.isSingleFloat())
+        Value.fromSingleFloat(-z.im.toSingleFloat())
+    else if (heap.isDoubleFloat(z.im))
+        try ev.heap.allocDoubleFloat(-heap.asDoubleFloat(z.im).value)
+    else
+        try realSub(ev, ZERO, z.im);
+    return complex.make(ev.heap, z.re, negated);
 }
 
 // --- transcendental functions ---

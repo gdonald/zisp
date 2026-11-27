@@ -1,6 +1,6 @@
 //! Common Lisp float-lexeme parser.
 //!
-//! The tokenizer recognizes a float as a lexeme but doesn't compute its
+//! The reader recognizes a float as a lexeme but doesn't compute its
 //! numeric value. This module turns the lexeme into a typed `f32`/`f64`
 //! using IEEE 754 round-to-nearest-even — bitwise-identical to SBCL's
 //! reader for the `tests/lisp/float-literal-corpus.lisp` corpus.
@@ -24,20 +24,16 @@ pub const FloatValue = union(FloatType) {
 
 pub const Error = error{
     /// Lexeme didn't match a CL float shape, was empty, or held an
-    /// unexpected character. The tokenizer's classifier should reject
-    /// these before we see them, but we validate defensively.
+    /// unexpected character.
     BadFloatLexeme,
 };
 
-/// Maximum lexeme length we accept. Real-world float lexemes are well
-/// under 64 bytes; the cap keeps the parser stack-only.
+/// The longest lexeme `parseFloatLexemeAs` takes, which keeps it free of
+/// an allocator. `parseFloatInto` takes any length.
 const MAX_LEXEME: usize = 128;
 
-/// Parse a tokenizer-classified float lexeme.
-///
-/// Caller passes the exact `text` slice the tokenizer captured (no
-/// trimming). The function copies into a stack buffer so it can rewrite
-/// the exponent marker to `e` for `std.fmt.parseFloat`.
+/// Parse a float lexeme. The text is copied into a stack buffer so the
+/// exponent marker can be rewritten to `e` for `std.fmt.parseFloat`.
 pub fn parseFloatLexeme(text: []const u8) Error!FloatValue {
     return parseFloatLexemeAs(text, .single);
 }
@@ -45,9 +41,15 @@ pub fn parseFloatLexeme(text: []const u8) Error!FloatValue {
 /// Parse a float lexeme, reading one with no marker or an `e` marker as
 /// `default`, which is what `*read-default-float-format*` names.
 pub fn parseFloatLexemeAs(text: []const u8, default: FloatType) Error!FloatValue {
-    if (text.len == 0 or text.len > MAX_LEXEME) return Error.BadFloatLexeme;
-
+    if (text.len > MAX_LEXEME) return Error.BadFloatLexeme;
     var buf: [MAX_LEXEME]u8 = undefined;
+    return parseFloatInto(&buf, text, default);
+}
+
+/// `parseFloatLexemeAs` with `buf`, at least as long as `text`, to
+/// rewrite the exponent marker in.
+pub fn parseFloatInto(buf: []u8, text: []const u8, default: FloatType) Error!FloatValue {
+    if (text.len == 0 or text.len > buf.len) return Error.BadFloatLexeme;
     @memcpy(buf[0..text.len], text);
 
     // Walk the lexeme to find the exponent marker (the sole letter

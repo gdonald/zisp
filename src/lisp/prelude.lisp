@@ -615,6 +615,9 @@ there is one keyword constructor named make-NAME."
        (%put ',name '%structure-slots ',slot-names)
        (%put ',name '%structure-descriptions ',descriptions)
        (%put ',name '%structure-slot-types ',slot-types)
+       (%put ',name '%structure-keyword-constructor
+             ',(dolist (constructor constructors)
+                 (unless (cadr constructor) (return (car constructor)))))
        (%define-structure-class ',name ',slot-names ',(cadr include))
        ,@(mapcar (lambda (constructor) (%struct-constructor-form name constructor descriptions))
                  constructors)
@@ -626,6 +629,20 @@ there is one keyword constructor named make-NAME."
        ,@(%struct-accessor-forms accessors 0)
        ,@(%struct-printer-forms name options)
        ',name)))
+
+;; What `#S(name slot value ...)` reads as: a structure made by NAME's
+;; keyword constructor, each slot named by a string designator. NIL when
+;; NAME has no keyword constructor, which the reader reports.
+(defun %read-structure (form)
+  (let ((constructor (and (symbolp (car form))
+                          (get (car form) '%structure-keyword-constructor))))
+    (when constructor
+      (let ((arguments nil))
+        (do ((rest (cdr form) (cddr rest)))
+            ((null rest))
+          (push (intern (string (car rest)) "KEYWORD") arguments)
+          (push (cadr rest) arguments))
+        (apply constructor (nreverse arguments))))))
 
 ;; Set once a print-object method is defined for some structure type,
 ;; which is when the printer starts asking print-object about structures.
@@ -860,6 +877,16 @@ when the block will not fit before the right margin."
   `(let ((,var (open ,filespec ,@options)))
      (unwind-protect (progn ,@body)
        (when ,var (close ,var)))))
+
+(defmacro with-open-stream ((var stream) &body body)
+  (let ((declarations nil))
+    (do () ((not (and (consp (car body)) (eq (car (car body)) 'declare))))
+      (setq declarations (cons (car body) declarations))
+      (setq body (cdr body)))
+    `(let ((,var ,stream))
+       ,@(reverse declarations)
+       (unwind-protect (progn ,@body)
+         (close ,var)))))
 
 (defmacro with-input-from-string ((var string &rest options) &body body)
   (declare (ignore options))

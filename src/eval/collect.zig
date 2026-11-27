@@ -336,6 +336,7 @@ fn updateRoots(e: *evacuate_mod.Evacuator, ev: *Evaluator) !void {
     try e.update(&ev.error_condition);
     try e.update(&ev.error_datum);
     try e.update(&ev.error_expected);
+    try e.update(&ev.error_stream);
     var hosts = ev.logical_hosts.valueIterator();
     while (hosts.next()) |v| try e.update(v);
 }
@@ -598,6 +599,7 @@ fn pushEvaluatorState(marker: *mark_mod.Marker, ev: *Evaluator) !void {
     try marker.push(ev.error_condition);
     try marker.push(ev.error_datum);
     try marker.push(ev.error_expected);
+    try marker.push(ev.error_stream);
 
     var hosts = ev.logical_hosts.valueIterator();
     while (hosts.next()) |translations| try marker.push(translations.*);

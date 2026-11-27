@@ -558,12 +558,11 @@ fn readFile(ev: *Evaluator, path: []const u8) ![]u8 {
 }
 
 fn readOneForm(ev: *Evaluator, source: []const u8) Error!Value {
-    var tokenizer = reader_mod.Tokenizer.init(source);
-    var rd = reader_mod.Reader.init(&tokenizer, ev.heap, ev.interner);
-    rd.read_eval = .{ .context = @ptrCast(ev), .call = &eval_mod.Evaluator.readEval };
+    var text = reader_mod.Source.init(source);
+    var rd = reader_mod.Reader.init(&text, ev.heap, ev.interner);
     readtables.install(ev, &rd);
-    const form = rd.read() catch return Error.ProgramError;
-    return form orelse Error.ProgramError;
+    const form = rd.read() catch |e| return readtables.failure(e);
+    return form orelse Error.EndOfFile;
 }
 
 // --- wildcard matching and substitution ---

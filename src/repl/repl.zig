@@ -136,7 +136,7 @@ pub const Repl = struct {
 
         while (true) {
             try collect_mod.maybeCollect(&self.ev);
-            const form = system.readStreamForm(&self.ev, value.T) catch |e| {
+            const form = readtables.readStreamForm(&self.ev, value.T) catch |e| {
                 try self.reportError("Reader", e);
                 return;
             };
@@ -185,13 +185,12 @@ pub const Repl = struct {
     /// caught: it propagates so the batch driver can choose an exit code.
     /// Used by `--eval` (print) and `--load` (no print).
     pub fn evalForms(self: *Repl, source: []const u8, print: bool) Error!void {
-        var tokenizer = reader_mod.Tokenizer.init(source);
-        var rd = reader_mod.Reader.init(&tokenizer, &self.heap, &self.interner);
-        rd.read_eval = .{ .context = @ptrCast(&self.ev), .call = &eval_pkg.Evaluator.readEval };
+        var text = reader_mod.Source.init(source);
+        var rd = reader_mod.Reader.init(&text, &self.heap, &self.interner);
         while (true) {
             try collect_mod.maybeCollect(&self.ev);
             readtables.install(&self.ev, &rd);
-            const form = rd.read() catch return Error.ProgramError;
+            const form = rd.read() catch |e| return readtables.failure(e);
             const f = form orelse break;
             self.rotateInput(f);
             const result = try self.ev.evalTopLevel(f);

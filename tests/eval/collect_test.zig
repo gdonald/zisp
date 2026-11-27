@@ -49,7 +49,7 @@ const Fixture = struct {
 
     /// Evaluate every form in `source` and return the last value.
     fn eval(self: *Fixture, source: []const u8) !Value {
-        var tk = zisp.reader.Tokenizer.init(source);
+        var tk = zisp.reader.Source.init(source);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         var last = value.NIL;
         while (try rd.read()) |form| last = try self.ev.eval(form);

@@ -66,7 +66,7 @@ const Fixture = struct {
     }
 
     fn evalStr(self: *Fixture, src: []const u8) !Value {
-        var tk = zisp.reader.Tokenizer.init(src);
+        var tk = zisp.reader.Source.init(src);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         var result = value.NIL;
         while (try rd.read()) |form| {
@@ -446,10 +446,10 @@ test "peek-char with t skips whitespace" {
 test "reading past the end signals or returns the eof value" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try fx.expectErr(Error.FileError, "(with-input-from-string (s \"\") (read-char s))");
+    try fx.expectErr(Error.EndOfFile, "(with-input-from-string (s \"\") (read-char s))");
     try fx.expectT("(with-input-from-string (s \"\") (eq (read-char s nil :done) :done))");
     try fx.expectT("(with-input-from-string (s \"\") (eq (peek-char nil s nil :done) :done))");
-    try fx.expectErr(Error.FileError, "(with-input-from-string (s \"\") (peek-char nil s))");
+    try fx.expectErr(Error.EndOfFile, "(with-input-from-string (s \"\") (peek-char nil s))");
 }
 
 test "the character operations check their arguments" {

@@ -29,7 +29,7 @@ comptime {
     _ = @import("runtime/printer_variables_test.zig");
     _ = @import("runtime/log_test.zig");
     _ = @import("runtime/read_all_test.zig");
-    _ = @import("reader/tokenizer_test.zig");
+    _ = @import("reader/token_syntax_test.zig");
     _ = @import("reader/float_parse_test.zig");
     _ = @import("reader/reader_test.zig");
     _ = @import("reader/package_syntax_test.zig");

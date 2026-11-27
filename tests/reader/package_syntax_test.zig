@@ -3,7 +3,7 @@ const zisp = @import("zisp");
 const heap = zisp.heap;
 const symbol = zisp.symbol;
 const printer = zisp.printer;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const ReaderError = zisp.reader.ReaderError;
 const Value = zisp.Value;
@@ -35,7 +35,7 @@ fn newSetup(test_allocator: std.mem.Allocator) !*Setup {
 }
 
 fn readOne(setup: *Setup, src: []const u8) !Value {
-    var tk = Tokenizer.init(src);
+    var tk = Source.init(src);
     var rd = Reader.init(&tk, &setup.h, &setup.interner);
     const got = try rd.read();
     return got orelse error.UnexpectedEof;
@@ -135,7 +135,7 @@ test "a pipe-quoted package prefix keeps its case" {
 test "sharp-colon reads a fresh uninterned symbol every time" {
     const s = try newSetup(std.testing.allocator);
     defer s.deinit();
-    var tk = Tokenizer.init("#:gs #:gs");
+    var tk = Source.init("#:gs #:gs");
     var rd = Reader.init(&tk, &s.h, &s.interner);
     const first = (try rd.read()).?;
     const second = (try rd.read()).?;

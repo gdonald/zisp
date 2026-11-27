@@ -46,7 +46,7 @@ test "the default pathname starts as the absolute current directory" {
     try testing.expectEqualStrings("(:ABSOLUTE NIL T)\n", h.output());
 }
 
-test "a session with no file system starts with an empty default pathname" {
+test "a session with no io starts with an empty default pathname" {
     var aw = std.Io.Writer.Allocating.init(testing.allocator);
     defer aw.deinit();
     const repl = try zisp.repl.Repl.init(testing.allocator, &aw.writer, null);
@@ -222,10 +222,10 @@ test "evalForms propagates an evaluation error instead of entering the debugger"
     try testing.expectError(error.TypeError, h.repl.evalForms("(car 5)", true));
 }
 
-test "evalForms propagates a reader error as a program error" {
+test "evalForms propagates a form the input ends inside as an end of file" {
     const h = try newHarness();
     defer h.deinit(testing.allocator);
-    try testing.expectError(error.ProgramError, h.repl.evalForms("(+ 1", false));
+    try testing.expectError(error.EndOfFile, h.repl.evalForms("(+ 1", false));
 }
 
 test "quit with no status at top level sets exit code zero" {

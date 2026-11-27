@@ -215,7 +215,8 @@ pub const Evacuator = struct {
         }
         switch (heap.heapType(v)) {
             // Nothing inside these points at another object.
-            .bignum, .double_float, .random_state, .package, .readtable => {},
+            .bignum, .double_float, .random_state, .package => {},
+            .readtable => try self.update(&heap.asReadtable(v).table),
             .string => {
                 const text = heap.asString(v);
                 if (text.isDisplaced()) {
@@ -263,6 +264,7 @@ pub const Evacuator = struct {
                 const s = heap.asStream(v);
                 try self.update(&s.path);
                 try self.update(&s.target);
+                try self.update(&s.source);
                 try self.update(&s.delete_on_close);
             },
             // A weak pointer keeps nothing alive, so what it refers to

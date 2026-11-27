@@ -21,8 +21,11 @@
 (check (string= "hi" (let ((*print-escape* nil)) (write-to-string "hi"))))
 (check (string= "hi" (princ-to-string "hi")))
 
-;; A `princ` that must read back is escaped anyway.
-(check (string= "\"hi\"" (let ((*print-readably* t)) (princ-to-string "hi"))))
+;; `princ` prints with `*print-readably*` off, whatever it was, and
+;; `write` escapes what must read back.
+(check (string= "hi" (let ((*print-readably* t)) (princ-to-string "hi"))))
+(check (string= "hi" (let ((*print-readably* t)) (format nil "~a" "hi"))))
+(check (string= "\"hi\"" (let ((*print-readably* t) (*print-escape* nil)) (write-to-string "hi"))))
 
 ;; Printing that must read back ignores the length and depth limits.
 (check (string= "(1 (2 (3)))"

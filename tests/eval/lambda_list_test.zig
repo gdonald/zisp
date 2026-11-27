@@ -6,7 +6,7 @@ const zisp = @import("zisp");
 const value = zisp.value;
 const symbol_mod = zisp.symbol;
 const heap_mod = zisp.heap;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const Evaluator = zisp.eval.Evaluator;
 const Error = zisp.eval.eval.Error;
@@ -41,7 +41,7 @@ const Fixture = struct {
 
     /// Read and evaluate a single form from source.
     fn eval(self: *Fixture, src: []const u8) !value.Value {
-        var tk = Tokenizer.init(src);
+        var tk = Source.init(src);
         var rd = Reader.init(&tk, &self.heap, &self.interner);
         const form = (try rd.read()).?;
         return self.ev.eval(form);

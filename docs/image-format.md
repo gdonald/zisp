@@ -110,9 +110,9 @@ value carries.
 | 18 | structure | name, slot count, slots |
 | 19 | package | package index |
 | 20 | pathname | host, device, directory, name, type, version, logical flag |
-| 21 | stream | kind, direction, element type, external format, path, target |
+| 21 | stream | kind, direction, element type, external format, path, target, source |
 | 22 | random state | four 8-byte words |
-| 23 | readtable | case |
+| 23 | readtable | case, table |
 | 24 | weak pointer | referent |
 
 `%image-round-trip` writes the objects reachable from one object, with
@@ -168,4 +168,4 @@ A file whose major version, or whose instruction set, is not the one
 this zisp writes signals an error before anything is made. The minor
 version changes when a section kind is added that an older loader can
 pass over by its length; an object tag cannot be skipped, so adding one
-changes the major version. This zisp writes version 2.0.
+changes the major version. This zisp writes version 3.0.

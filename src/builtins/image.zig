@@ -15,7 +15,6 @@ const fasl = @import("../compiler/fasl.zig");
 const hash_tables = @import("hash_tables.zig");
 const streams = @import("streams.zig");
 const system = @import("system.zig");
-const reader_mod = @import("../reader.zig");
 const fs = @import("fs.zig");
 
 const Value = value.Value;
@@ -25,7 +24,7 @@ const Frame = env_mod.Frame;
 const Code = bytecode.Code;
 
 pub const MAGIC = "ZISPIMG\x00";
-pub const MAJOR: u16 = 2;
+pub const MAJOR: u16 = 3;
 pub const MINOR: u16 = 0;
 const NONE: u32 = 0xFFFFFFFF;
 
@@ -394,6 +393,7 @@ const Writer = struct {
                 try self.int(u8, @backingInt(st.external_format));
                 try self.ref(st.path);
                 try self.ref(st.target);
+                try self.ref(st.source);
             },
             .random_state => {
                 try self.int(u8, @backingInt(Tag.random_state));
@@ -401,11 +401,9 @@ const Writer = struct {
             },
             .readtable => {
                 const rt = heap.asReadtable(v);
-                const table: *const reader_mod.Readtable = @ptrCast(@alignCast(rt.handlers));
-                const standard = reader_mod.reader.defaultReadtable();
-                if (!std.mem.eql(u8, std.mem.asBytes(table), std.mem.asBytes(standard))) return Error.TypeError;
                 try self.int(u8, @backingInt(Tag.readtable));
                 try self.int(u64, rt.case);
+                try self.ref(rt.table);
             },
             .weak_pointer => {
                 try self.int(u8, @backingInt(Tag.weak_pointer));
@@ -978,7 +976,7 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
                 const direction: heap.StreamDirection = @fromBackingInt(@intCast(try l.r.int(u8)));
                 const element: heap.StreamElement = @fromBackingInt(@intCast(try l.r.int(u8)));
                 const format: heap.ExternalFormat = @fromBackingInt(@intCast(try l.r.int(u8)));
-                l.r.at += 16;
+                l.r.at += 24;
                 var st = streams.emptyStream(kind, direction);
                 st.element = element;
                 st.external_format = format;
@@ -994,10 +992,8 @@ fn makeObjects(l: *Loader, held: anytype) Error!void {
             },
             .readtable => blk: {
                 const case = try l.r.int(u64);
-                const bytes = try ev.heap.storage.alignedAlloc(u8, std.mem.Alignment.of(reader_mod.Readtable).max(.of(u64)), @sizeOf(reader_mod.Readtable));
-                const table: *reader_mod.Readtable = @ptrCast(bytes.ptr);
-                table.* = reader_mod.reader.defaultReadtable().*;
-                break :blk try ev.heap.allocReadtable(bytes, case);
+                l.r.at += 8;
+                break :blk try ev.heap.allocReadtable(value.NIL, case);
             },
             .weak_pointer => blk: {
                 l.r.at += 8;
@@ -1146,11 +1142,19 @@ fn linkObjects(l: *Loader, held: anytype) Error!void {
                 const st = heap.asStream(target);
                 st.path = try l.readRef(held);
                 st.target = try l.readRef(held);
+                st.source = try l.readRef(held);
                 heap.writeBarrier(ev.heap, target, st.path);
                 heap.writeBarrier(ev.heap, target, st.target);
+                heap.writeBarrier(ev.heap, target, st.source);
             },
             .weak_pointer => {
                 heap.asWeakPointer(target).referent = try l.readRef(held);
+            },
+            .readtable => {
+                l.r.at += 8;
+                const rt = heap.asReadtable(target);
+                rt.table = try l.readRef(held);
+                heap.writeBarrier(ev.heap, target, rt.table);
             },
             else => {},
         }

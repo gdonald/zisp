@@ -117,6 +117,11 @@ before anything unwinds. A handler that declines leaves it to
 `handler-case` or `ignore-errors` further out, which receive the same
 condition object.
 
+Reading past the end of a stream is an `end-of-file`, and text the reader
+cannot make an object of a `reader-error`. Both carry the stream that was
+being read, which for `read-from-string` is a string stream over the
+string.
+
 Float arithmetic signals rather than producing an infinity: a result too
 large for its format is a `floating-point-overflow`, a product, quotient,
 `exp` or `expt` that rounds to zero when its exact value is not zero a

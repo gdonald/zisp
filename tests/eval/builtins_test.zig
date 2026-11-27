@@ -38,7 +38,7 @@ const Fixture = struct {
     }
 
     fn evalStr(self: *Fixture, src: []const u8) !Value {
-        var tk = zisp.reader.Tokenizer.init(src);
+        var tk = zisp.reader.Source.init(src);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         const form = (try rd.read()) orelse return error.NoForm;
         return self.ev.eval(form);

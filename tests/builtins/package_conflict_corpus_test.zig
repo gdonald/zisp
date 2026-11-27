@@ -46,7 +46,7 @@ test "every form in the package conflict corpus evaluates to T" {
     const fx = try Fixture.init(testing.allocator);
     defer fx.deinit(testing.allocator);
 
-    var tk = zisp.reader.Tokenizer.init(corpus_text);
+    var tk = zisp.reader.Source.init(corpus_text);
     var rd = zisp.reader.Reader.init(&tk, &fx.heap, &fx.interner);
     var checked: u32 = 0;
     while (try rd.read()) |form| {

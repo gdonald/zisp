@@ -43,7 +43,7 @@ const Fixture = struct {
     }
 
     fn evalStr(self: *Fixture, src: []const u8) !Value {
-        var tk = zisp.reader.Tokenizer.init(src);
+        var tk = zisp.reader.Source.init(src);
         var rd = zisp.reader.Reader.init(&tk, &self.heap, &self.interner);
         const form = (try rd.read()) orelse return error.NoForm;
         return self.ev.eval(form);
@@ -320,10 +320,16 @@ test "loadPath errors when no io is wired" {
     try testing.expectError(error.FileError, zisp.builtins.system.loadPath(&fx.ev, "whatever.lisp"));
 }
 
-test "evalSource on malformed input is a program error" {
+test "evalSource on input that ends inside a form is an end of file" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try testing.expectError(error.ProgramError, zisp.builtins.system.evalSource(&fx.ev, "(+ 1"));
+    try testing.expectError(error.EndOfFile, zisp.builtins.system.evalSource(&fx.ev, "(+ 1"));
+}
+
+test "evalSource on text that is not an object is a reader error" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try testing.expectError(error.ReaderError, zisp.builtins.system.evalSource(&fx.ev, "(+ 1 . 2 3)"));
 }
 
 test "evalSource evaluates each form" {

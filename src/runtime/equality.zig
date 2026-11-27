@@ -268,7 +268,8 @@ fn sxhashAt(v: Value, depth: u32) u64 {
 
 fn equalpHash(v: Value, depth: u32) u64 {
     // Numbers compare across types under equalp, so they all hash as f64.
-    if (isNumber(v)) return mix(5, numberHash(v));
+    // Adding 0.0 makes -0.0 the 0.0 it is `=` to.
+    if (isNumber(v)) return mix(5, @bitCast(toF64(v) + 0.0));
     if (v.isChar()) return mix(6, charLower(v.toChar()));
     if (heap.isString(v)) {
         var folded = std.hash.Wyhash.init(0);

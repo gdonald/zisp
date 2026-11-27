@@ -384,6 +384,12 @@ fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     if (std.mem.eql(u8, name, "STRING-STREAM")) {
         return heap.isStream(v) and heap.asStream(v).kind == .string;
     }
+    if (std.mem.eql(u8, name, "TWO-WAY-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .two_way;
+    }
+    if (std.mem.eql(u8, name, "BROADCAST-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .broadcast;
+    }
     if (std.mem.eql(u8, name, "COMPILED-FUNCTION")) return function.isCompiledFunction(v);
     if (classNamed(name)) |class| {
         if (class == .nil_type) return false;

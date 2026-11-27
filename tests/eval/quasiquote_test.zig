@@ -6,7 +6,7 @@ const zisp = @import("zisp");
 const value = zisp.value;
 const heap_mod = zisp.heap;
 const symbol_mod = zisp.symbol;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 const Evaluator = zisp.eval.Evaluator;
 const Error = zisp.eval.eval.Error;
@@ -41,13 +41,13 @@ const Fixture = struct {
     }
 
     fn read(self: *Fixture, src: []const u8) !value.Value {
-        var tk = Tokenizer.init(src);
+        var tk = Source.init(src);
         var rd = Reader.init(&tk, &self.heap, &self.interner);
         return (try rd.read()) orelse error.TestUnexpectedResult;
     }
 
     fn evalStr(self: *Fixture, src: []const u8) !value.Value {
-        var tk = Tokenizer.init(src);
+        var tk = Source.init(src);
         var rd = Reader.init(&tk, &self.heap, &self.interner);
         var result = value.NIL;
         while (try rd.read()) |form| {
@@ -73,18 +73,18 @@ test "the expander produces an append/list/quote form" {
     try std.testing.expect(heap_mod.car(seg1).equalsRaw(try fx.interner.intern("LIST")));
 }
 
-test "bare unquote outside backquote errors" {
+test "bare unquote outside backquote does not read" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
-    try std.testing.expectError(Error.ProgramError, fx.evalStr("(let ((x 1)) ,x)"));
+    try std.testing.expectError(error.BadToken, fx.evalStr("(let ((x 1)) ,x)"));
 }
 
-test "bare unquote-splicing outside backquote errors" {
+test "bare unquote-splicing outside backquote does not read" {
     const fx = try Fixture.init(std.testing.allocator);
     defer fx.deinit(std.testing.allocator);
 
-    try std.testing.expectError(Error.ProgramError, fx.evalStr("(let ((x '(1))) ,@x)"));
+    try std.testing.expectError(error.BadToken, fx.evalStr("(let ((x '(1))) ,@x)"));
 }
 
 test "splice at the top level of a template errors" {

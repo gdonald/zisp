@@ -6,7 +6,8 @@ const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 
 pub const system = @import("system.zig");
-const readtables = @import("readtables.zig");
+pub const readtables = @import("readtables.zig");
+
 pub const registerSystem = system.registerSystem;
 pub const packages = @import("packages.zig");
 pub const pathnames = @import("pathnames.zig");
@@ -135,6 +136,7 @@ pub fn registerNatives(ev: *Evaluator) !void {
     _ = try ev.defineNative("%RAISE-CONDITION", &raiseConditionFn);
     _ = try ev.defineNative("%LAST-ERROR-SYMBOL", &lastErrorSymbolFn);
     _ = try ev.defineNative("%LAST-TYPE-MISMATCH", &lastTypeMismatchFn);
+    _ = try ev.defineNative("%LAST-ERROR-STREAM", &lastErrorStreamFn);
 
     _ = try ev.defineNative("RPLACA", &rplacaFn);
     _ = try ev.defineNative("RPLACD", &rplacdFn);
@@ -642,10 +644,22 @@ fn lastErrorSymbolFn(p: *anyopaque, args: []const Value) Error!Value {
 /// recorded type mismatch named, as a two-element list, or nil where none
 /// was recorded. Reading it clears it, so a later failure that records
 /// nothing is not handed a stale datum.
+/// The stream the last native end-of-file or reader failure was reading,
+/// or NIL, which is taken so it is reported once.
+fn lastErrorStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    const stream = ev.error_stream;
+    ev.error_stream = .{ .raw = 0 };
+    return if (stream.raw == 0) value.NIL else stream;
+}
+
 fn lastTypeMismatchFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 0) return Error.WrongArgCount;
-    if (ev.error_datum.raw == 0) return value.NIL;
+    // The expected type says whether anything was recorded, since the
+    // datum may be the fixnum zero the slots start out holding.
+    if (ev.error_expected.raw == 0) return value.NIL;
     const datum = ev.error_datum;
     const expected = ev.error_expected;
     ev.error_datum = .{ .raw = 0 };

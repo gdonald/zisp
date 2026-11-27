@@ -163,10 +163,14 @@ pub const Evaluator = struct {
     // when the failure came from a native rather than from Lisp.
     error_condition: Value = .{ .raw = 0 },
     // The object a native `TypeError` rejected and the type it wanted,
-    // recorded by `typeMismatch` for the condition built from it. Fixnum
-    // zero when the raise site had nothing to record.
+    // recorded by `typeMismatch` for the condition built from it. The
+    // expected type is fixnum zero when the raise site had nothing to
+    // record.
     error_datum: Value = .{ .raw = 0 },
     error_expected: Value = .{ .raw = 0 },
+    // The stream a native `EndOfFile` or `ReaderError` was reading, for
+    // the condition built from it. Fixnum zero when there was none.
+    error_stream: Value = .{ .raw = 0 },
     // Set while the condition standing for a native failure is being
     // built, so a failure in building it is not offered in turn.
     building_failure_condition: bool = false,

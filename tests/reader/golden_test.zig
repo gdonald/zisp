@@ -15,7 +15,7 @@ const value = zisp.value;
 const heap = zisp.heap;
 const symbol = zisp.symbol;
 const printer = zisp.printer;
-const Tokenizer = zisp.reader.Tokenizer;
+const Source = zisp.reader.Source;
 const Reader = zisp.reader.Reader;
 
 const Case = struct {
@@ -33,8 +33,8 @@ const cases = [_]Case{
     .{ .name = "nested list", .input = "(a (b c) d)", .expected = "(A (B C) D)" },
     .{ .name = "quote shortcut", .input = "'foo", .expected = "(QUOTE FOO)" },
     .{ .name = "backquote shortcut", .input = "`x", .expected = "(QUASIQUOTE X)" },
-    .{ .name = "unquote shortcut", .input = ",x", .expected = "(UNQUOTE X)" },
-    .{ .name = "unquote-splicing shortcut", .input = ",@x", .expected = "(UNQUOTE-SPLICING X)" },
+    .{ .name = "unquote shortcut", .input = "`,x", .expected = "(QUASIQUOTE (UNQUOTE X))" },
+    .{ .name = "unquote-splicing shortcut", .input = "`(,@x)", .expected = "(QUASIQUOTE ((UNQUOTE-SPLICING X)))" },
     .{ .name = "function shortcut", .input = "#'car", .expected = "(FUNCTION CAR)" },
     .{ .name = "vector literal", .input = "#(1 2 3)", .expected = "#(1 2 3)" },
     .{ .name = "string with escapes", .input = "\"a\\\"b\"", .expected = "\"a\\\"b\"" },
@@ -81,7 +81,7 @@ fn newSetup(test_allocator: std.mem.Allocator) !*Setup {
 fn readPrintAll(allocator: std.mem.Allocator, setup: *Setup, input: []const u8) ![]u8 {
     var aw = std.Io.Writer.Allocating.init(allocator);
     defer aw.deinit();
-    var tk = Tokenizer.init(input);
+    var tk = Source.init(input);
     var rd = Reader.init(&tk, &setup.h, &setup.interner);
     var first = true;
     while (try rd.read()) |v| {

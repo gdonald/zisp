@@ -164,7 +164,7 @@ pub const HeapArray = extern struct {
 };
 
 /// What a stream is attached to.
-pub const StreamKind = enum(u8) { file, string, console, pretty };
+pub const StreamKind = enum(u8) { file, string, console, pretty, two_way, broadcast };
 
 /// Which operations a stream allows.
 pub const StreamDirection = enum(u8) { input, output, io, probe };
@@ -201,8 +201,12 @@ pub const HeapStream = struct {
     /// to lives in `output`, so a token holds an offset and a length
     /// rather than a slice that reallocation could invalidate.
     tokens: std.ArrayListUnmanaged(PrettyToken),
-    /// The stream a pretty stream writes to once it has laid itself out.
+    /// The stream a pretty stream writes to once it has laid itself out,
+    /// the output side of a two-way stream, and the list of streams a
+    /// broadcast stream writes to.
     target: Value,
+    /// The input side of a two-way stream.
+    source: Value,
     /// How many logical blocks are open.
     block_depth: u32,
     /// Labels for `*print-circle*`, when it is on.
@@ -227,16 +231,11 @@ pub const HeapRandomState = extern struct {
     state: [4]u64,
 };
 
-/// Reader-macro dispatch table, plus the case the reader folds symbol
-/// names with. The handler table itself is Zig fn pointers, held opaquely
-/// here so this module stays free of a reader import.
+/// A readtable: the vector the reader looks each character up in, laid
+/// out by `reader/readtable.zig`, and the case it folds symbol names with.
 pub const HeapReadtable = extern struct {
     header: HeapHeader,
-    /// `*reader.Readtable`, owned by the heap's allocator. Its byte length
-    /// travels with it so the sweep can hand the storage back without
-    /// knowing the reader's type.
-    handlers: *anyopaque,
-    handlers_size: u64,
+    table: Value,
     /// `readtable-case`: 0 upcase, 1 downcase, 2 preserve, 3 invert.
     case: u64,
 };
@@ -788,14 +787,14 @@ pub const Heap = struct {
         return Value.fromHeapAddr(@intFromPtr(obj));
     }
 
-    /// The table pointer is borrowed: the caller allocated it and frees it
-    /// when the object is finalized.
-    pub fn allocReadtable(self: *Heap, handlers: []align(8) u8, case: u64) !Value {
+    pub fn allocReadtable(self: *Heap, table: Value, case: u64) !Value {
+        var held = self.protect();
+        defer held.close();
+        try held.push(table);
         const obj = try self.create(HeapReadtable);
         obj.* = .{
             .header = .{ .type_tag = .readtable, .size = @sizeOf(HeapReadtable) },
-            .handlers = @ptrCast(handlers.ptr),
-            .handlers_size = handlers.len,
+            .table = table,
             .case = case,
         };
         return Value.fromHeapAddr(@intFromPtr(obj));
@@ -879,11 +878,6 @@ fn finalizeObject(context: *anyopaque, object: [*]align(gc.ALIGNMENT) u8) void {
             const text: *HeapString = @ptrCast(obj);
             // A displaced string borrows its target's storage.
             if (!text.isDisplaced()) self.storage.free(text.allocated());
-        },
-        .readtable => {
-            const table: *HeapReadtable = @ptrCast(@alignCast(obj));
-            const bytes: [*]align(8) u8 = @ptrCast(@alignCast(table.handlers));
-            self.storage.free(bytes[0..@intCast(table.handlers_size)]);
         },
         .vector => {
             const array: *HeapArray = @ptrCast(obj);

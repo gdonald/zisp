@@ -207,7 +207,8 @@ pub const Marker = struct {
     fn visitHeapObject(self: *Marker, v: Value) !void {
         switch (heap.heapType(v)) {
             // Nothing inside these points at another object.
-            .bignum, .double_float, .random_state, .package, .readtable => {},
+            .bignum, .double_float, .random_state, .package => {},
+            .readtable => try self.push(heap.asReadtable(v).table),
             // A displaced string's storage belongs to its target.
             .string => {
                 const text = heap.asString(v);
@@ -254,6 +255,7 @@ pub const Marker = struct {
                 const s = heap.asStream(v);
                 try self.push(s.path);
                 try self.push(s.target);
+                try self.push(s.source);
                 try self.push(s.delete_on_close);
             },
             .function, .closure => try self.visitFunction(v),
