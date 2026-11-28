@@ -164,7 +164,7 @@ pub const HeapArray = extern struct {
 };
 
 /// What a stream is attached to.
-pub const StreamKind = enum(u8) { file, string, console, pretty, two_way, broadcast };
+pub const StreamKind = enum(u8) { file, string, console, pretty, two_way, broadcast, synonym, concatenated, echo };
 
 /// Which operations a stream allows.
 pub const StreamDirection = enum(u8) { input, output, io, probe };
@@ -202,10 +202,11 @@ pub const HeapStream = struct {
     /// rather than a slice that reallocation could invalidate.
     tokens: std.ArrayListUnmanaged(PrettyToken),
     /// The stream a pretty stream writes to once it has laid itself out,
-    /// the output side of a two-way stream, and the list of streams a
-    /// broadcast stream writes to.
+    /// the output side of a two-way or echo stream, the list of streams a
+    /// broadcast stream writes to, and the list a concatenated stream
+    /// has still to read, and the symbol a synonym stream names.
     target: Value,
-    /// The input side of a two-way stream.
+    /// The input side of a two-way or echo stream.
     source: Value,
     /// How many logical blocks are open.
     block_depth: u32,
@@ -451,7 +452,7 @@ pub const Heap = struct {
         const collector = self.collector orelse return;
         self.collecting = true;
         defer self.collecting = false;
-        collector.run(collector.context) catch {};
+        collector.run(collector.context) catch self.objects.postponeCollection();
     }
 
     fn maybeTorture(self: *Heap) void {

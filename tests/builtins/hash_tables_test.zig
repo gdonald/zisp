@@ -337,8 +337,8 @@ test "traversal checks its arguments" {
     try fx.expectErr(Error.TypeError, "(maphash #'cons 7)");
     try fx.expectErr(Error.TypeError, "(maphash 7 (make-hash-table))");
     try fx.expectErr(Error.UnboundFunction, "(maphash 'no-such-visitor (make-hash-table))");
-    try fx.expectErr(Error.WrongArgCount, "(%hash-table-entries)");
-    try fx.expectErr(Error.TypeError, "(%hash-table-entries 7)");
+    try fx.expectErr(Error.WrongArgCount, "(cl::%hash-table-entries)");
+    try fx.expectErr(Error.TypeError, "(cl::%hash-table-entries 7)");
 }
 
 // --- introspection ---
@@ -348,7 +348,7 @@ test "the accessors reject anything that is not a hash table" {
     defer fx.deinit(testing.allocator);
     for ([_][]const u8{
         "(gethash 'a 7)",
-        "(%puthash 'a 7 1)",
+        "(cl::%puthash 'a 7 1)",
         "(remhash 'a 7)",
         "(clrhash 7)",
         "(hash-table-count 7)",
@@ -367,7 +367,7 @@ test "the accessors check their argument counts" {
     for ([_][]const u8{
         "(gethash 'a)",
         "(gethash 'a (make-hash-table) 1 2)",
-        "(%puthash 'a (make-hash-table))",
+        "(cl::%puthash 'a (make-hash-table))",
         "(remhash 'a)",
         "(clrhash)",
         "(hash-table-count)",

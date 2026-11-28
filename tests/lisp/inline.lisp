@@ -6,7 +6,7 @@
 (progn
   (defun inline-calls-p (caller callee)
     "Whether the compiled code of CALLER refers to CALLEE."
-    (not (null (member callee (%function-constants (%compile-function (fdefinition caller)))))))
+    (not (null (member callee (cl::%function-constants (cl::%compile-function (fdefinition caller)))))))
   (defun count-substring (part whole)
     (do ((start 0 (1+ found))
          (found (search part whole) (search part whole :start2 (1+ found)))
@@ -39,7 +39,7 @@
                       :output-file ".zig-cache/inline-defines.zfasl"))
   (load (compile-file "tests/lisp/inline-files/uses.lisp"
                       :output-file ".zig-cache/inline-uses.zfasl"))
-  (and (not (member 'inline-file-triple (%function-constants #'inline-file-user)))
+  (and (not (member 'inline-file-triple (cl::%function-constants #'inline-file-user)))
        (eql (inline-file-user 2) 7)))
 
 ;; A recursive inline function is expanded three deep, and the call

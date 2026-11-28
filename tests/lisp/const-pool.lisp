@@ -18,13 +18,13 @@
        (search "(1 2 3)" listing :start2 (search "Constants:" listing))
        t))
 
-(let ((first-pool (%function-constants #'const-pool-first))
-      (second-pool (%function-constants #'const-pool-second)))
+(let ((first-pool (cl::%function-constants #'const-pool-first))
+      (second-pool (cl::%function-constants #'const-pool-second)))
   (and (equal first-pool '((1 2 3)))
        (equal second-pool '((1 2 3)))
        (not (eq (car first-pool) (car second-pool)))))
 
-(equal (%function-constants #'const-pool-twice) '((1 2 3) list))
+(equal (cl::%function-constants #'const-pool-twice) '((1 2 3) list))
 
 (let ((made (const-pool-twice)))
   (eq (first made) (second made)))

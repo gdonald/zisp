@@ -234,6 +234,11 @@ test "pretty printer corpus" {
     try testing.expectEqual(@as(u32, 21), checked);
 }
 
+test "environment corpus" {
+    const checked = try runCorpus("environment", @embedFile("lisp/environment-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 33), checked);
+}
+
 test "displaced string corpus" {
     const checked = try runCorpus("displaced-string", @embedFile("lisp/displaced-string-corpus.lisp"));
     try testing.expectEqual(@as(u32, 8), checked);

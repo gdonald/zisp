@@ -53,6 +53,18 @@ pub fn registerStreams(ev: *Evaluator) !void {
     _ = try ev.defineNative("TWO-WAY-STREAM-INPUT-STREAM", twoWaySideFn(.input));
     _ = try ev.defineNative("TWO-WAY-STREAM-OUTPUT-STREAM", twoWaySideFn(.output));
     _ = try ev.defineNative("MAKE-BROADCAST-STREAM", &makeBroadcastStreamFn);
+    _ = try ev.defineNative("MAKE-SYNONYM-STREAM", &makeSynonymStreamFn);
+    _ = try ev.defineNative("SYNONYM-STREAM-SYMBOL", componentFn(.synonym, .target, "SYNONYM-STREAM"));
+    _ = try ev.defineNative("MAKE-CONCATENATED-STREAM", &makeConcatenatedStreamFn);
+    _ = try ev.defineNative("CONCATENATED-STREAM-STREAMS", componentFn(.concatenated, .target, "CONCATENATED-STREAM"));
+    _ = try ev.defineNative("MAKE-ECHO-STREAM", &makeEchoStreamFn);
+    _ = try ev.defineNative("ECHO-STREAM-INPUT-STREAM", componentFn(.echo, .source, "ECHO-STREAM"));
+    _ = try ev.defineNative("ECHO-STREAM-OUTPUT-STREAM", componentFn(.echo, .target, "ECHO-STREAM"));
+    _ = try ev.defineNative("STREAM-EXTERNAL-FORMAT", &streamExternalFormatFn);
+    _ = try ev.defineNative("INTERACTIVE-STREAM-P", &interactiveStreamPFn);
+    _ = try ev.defineNative("CLEAR-INPUT", &clearInputFn);
+    _ = try ev.defineNative("READ-CHAR-NO-HANG", &readCharFn);
+    _ = try ev.defineNative("FILE-STRING-LENGTH", &fileStringLengthFn);
     _ = try ev.defineNative("BROADCAST-STREAM-STREAMS", &broadcastStreamStreamsFn);
     _ = try ev.defineNative("MAKE-STRING-OUTPUT-STREAM", &makeStringOutputStreamFn);
     _ = try ev.defineNative("GET-OUTPUT-STREAM-STRING", &getOutputStreamStringFn);
@@ -140,10 +152,28 @@ pub fn streamOf(ev: *Evaluator, given: ?Value, side: Side) Error!*Stream {
 /// reads from its input stream and writes to its output stream.
 fn sideOf(s: *Stream, side: Side) *Stream {
     var at = s;
-    while (at.kind == .two_way) {
-        at = heap.asStream(if (side == .input) at.source else at.target);
+    while (true) {
+        switch (at.kind) {
+            .two_way, .echo => at = heap.asStream(if (side == .input) at.source else at.target),
+            // A synonym stream is whatever its symbol holds now.
+            .synonym => {
+                const held = symbol_mod.symbol(at.target).value_cell;
+                if (!heap.isStream(held)) return at;
+                at = heap.asStream(held);
+            },
+            // A concatenated stream reads from the first of its streams
+            // with something left, dropping those that have run out.
+            .concatenated => {
+                while (at.target.isCons()) {
+                    const first = sideOf(heap.asStream(heap.car(at.target)), .input);
+                    if (first.pending != null or first.position < first.input.len) return first;
+                    at.target = heap.cdr(at.target);
+                }
+                return at;
+            },
+            else => return at,
+        }
     }
-    return at;
 }
 
 fn designated(ev: *Evaluator, given: ?Value, side: Side) Error!*Stream {
@@ -473,6 +503,103 @@ fn makeBroadcastStreamFn(p: *anyopaque, args: []const Value) Error!Value {
     return ev.heap.allocStream(stream);
 }
 
+/// `(make-synonym-stream symbol)`: a stream that is whatever stream the
+/// symbol's value is when it is used.
+fn makeSynonymStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    if (!args[0].isSymbol()) return ev.typeMismatch(args[0], "SYMBOL");
+    var stream = emptyStream(.synonym, .io);
+    stream.target = args[0];
+    return ev.heap.allocStream(stream);
+}
+
+/// `(make-concatenated-stream &rest input-streams)`: reads from each
+/// stream in turn until all of them run out.
+fn makeConcatenatedStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    for (args) |arg| {
+        if (!heap.isStream(arg) or !isInput(heap.asStream(arg))) return ev.typeMismatch(arg, "STREAM");
+    }
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(try ev.heap.list(args));
+    var stream = emptyStream(.concatenated, .input);
+    stream.target = held.items()[0];
+    return ev.heap.allocStream(stream);
+}
+
+/// `(make-echo-stream input output)`.
+fn makeEchoStreamFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    if (!heap.isStream(args[0]) or !isInput(heap.asStream(args[0]))) return ev.typeMismatch(args[0], "STREAM");
+    if (!heap.isStream(args[1]) or !isOutput(heap.asStream(args[1]))) return ev.typeMismatch(args[1], "STREAM");
+    var stream = emptyStream(.echo, .io);
+    stream.source = args[0];
+    stream.target = args[1];
+    return ev.heap.allocStream(stream);
+}
+
+/// A reader of one part of a composite stream.
+fn componentFn(comptime kind: heap.StreamKind, comptime part: enum { source, target }, comptime type_name: []const u8) function.NativeFn {
+    return struct {
+        fn f(p: *anyopaque, args: []const Value) Error!Value {
+            const ev = evaluator(p);
+            if (args.len != 1) return Error.WrongArgCount;
+            if (!heap.isStream(args[0]) or heap.asStream(args[0]).kind != kind) return ev.typeMismatch(args[0], type_name);
+            const s = heap.asStream(args[0]);
+            return if (part == .source) s.source else s.target;
+        }
+    }.f;
+}
+
+fn streamExternalFormatFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    const s = try expectStream(args[0]);
+    return ev.interner.internKeyword(if (s.external_format == .latin1) "LATIN-1" else "UTF-8");
+}
+
+/// Only the terminal is interactive.
+fn interactiveStreamPFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 1) return Error.WrongArgCount;
+    const s = try expectStream(args[0]);
+    return boolv(sideOf(s, .input).kind == .console);
+}
+
+/// `(clear-input &optional stream)` drops what a person has typed and the
+/// program has not read.
+fn clearInputFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len > 1) return Error.WrongArgCount;
+    const s = try streamOf(ev, if (args.len == 1) args[0] else null, .input);
+    if (s.kind == .console) {
+        s.position = s.input.len;
+        s.pending = null;
+    }
+    return value.NIL;
+}
+
+/// `(file-string-length stream object)`: the bytes OBJECT, a string or a
+/// character, takes in STREAM's external format.
+fn fileStringLengthFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    const s = try expectStream(args[0]);
+    const latin1 = s.external_format == .latin1;
+    var bytes: usize = 0;
+    if (args[1].tag() == .char) {
+        bytes = if (latin1) 1 else std.unicode.utf8CodepointSequenceLength(args[1].toChar()) catch 1;
+    } else if (heap.isString(args[1])) {
+        for (heap.asString(args[1]).constSlice()) |c| {
+            bytes += if (latin1) 1 else std.unicode.utf8CodepointSequenceLength(@intCast(c)) catch 1;
+        }
+    } else return ev.typeMismatch(args[1], "STRING");
+    return Value.fromFixnum(@intCast(bytes));
+}
+
 fn broadcastStreamStreamsFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
@@ -620,7 +747,11 @@ fn emit(ev: *Evaluator, s: *Stream, c: u21) Error!void {
 /// before extending, which is what `:if-exists :overwrite` needs.
 pub fn emitBytes(ev: *Evaluator, s: *Stream, bytes: []const u8) Error!void {
     if (s.kind == .pretty) return @import("pprint.zig").recordText(ev, s, bytes);
-    if (s.kind == .two_way) return emitBytes(ev, sideOf(s, .output), bytes);
+    if (s.kind == .two_way or s.kind == .echo or s.kind == .synonym) {
+        const to = sideOf(s, .output);
+        if (to == s) return Error.TypeError;
+        return emitBytes(ev, to, bytes);
+    }
     if (s.kind == .broadcast) {
         var rest = s.target;
         while (rest.isCons()) : (rest = heap.cdr(rest)) {

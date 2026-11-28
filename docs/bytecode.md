@@ -144,10 +144,10 @@ reclaimed and its address handed to another while the cache could
 mistake one for the other. A collection that moves objects empties the
 shared table, which is keyed on addresses.
 
-`(%call-site-counters function)` gives one property list for each site
+`(cl::%call-site-counters function)` gives one property list for each site
 of a compiled function: the state its cache is in, how many calls took
 each path, how many missed, and how many times the site turned
-polymorphic and megamorphic. `(%call-cache-counters)` adds every site's
+polymorphic and megamorphic. `(cl::%call-cache-counters)` adds every site's
 counts together.
 
 ## Variables

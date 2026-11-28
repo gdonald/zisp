@@ -390,7 +390,20 @@ fn typepAtomic(ev: *Evaluator, v: Value, spec: Value) Error!bool {
     if (std.mem.eql(u8, name, "BROADCAST-STREAM")) {
         return heap.isStream(v) and heap.asStream(v).kind == .broadcast;
     }
+    if (std.mem.eql(u8, name, "SYNONYM-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .synonym;
+    }
+    if (std.mem.eql(u8, name, "CONCATENATED-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .concatenated;
+    }
+    if (std.mem.eql(u8, name, "ECHO-STREAM")) {
+        return heap.isStream(v) and heap.asStream(v).kind == .echo;
+    }
     if (std.mem.eql(u8, name, "COMPILED-FUNCTION")) return function.isCompiledFunction(v);
+    // Bare, a byte type has no size limit: any non-negative integer for
+    // `unsigned-byte`, any integer for `signed-byte`.
+    if (std.mem.eql(u8, name, "UNSIGNED-BYTE")) return bignum.isInteger(v) and !bignum.isNegative(v);
+    if (std.mem.eql(u8, name, "SIGNED-BYTE")) return bignum.isInteger(v);
     if (classNamed(name)) |class| {
         if (class == .nil_type) return false;
         return contains(class, classOf(ev, v));

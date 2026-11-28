@@ -239,14 +239,29 @@ test "isPackage rejects a non-package value" {
     try testing.expect(!package.isPackage(value.NIL));
 }
 
-test "intern promotes an existing internal COMMON-LISP symbol to external" {
+test "intern leaves a name past the standard ones internal to COMMON-LISP" {
     var interner = try newInterner();
     defer interner.deinit();
-    const sym = try interner.internIn(interner.cl, "LATER-EXPORTED");
-    try testing.expectEqual(package.Status.internal, interner.cl.findSymbol("LATER-EXPORTED").?.status);
-    const again = try interner.intern("LATER-EXPORTED");
-    try testing.expect(again.equalsRaw(sym));
-    try testing.expectEqual(package.Status.external, interner.cl.findSymbol("LATER-EXPORTED").?.status);
+    const sym = try interner.intern("%LATER-HELPER");
+    try testing.expectEqual(package.Status.internal, interner.cl.findSymbol("%LATER-HELPER").?.status);
+    try testing.expect((try interner.intern("%LATER-HELPER")).equalsRaw(sym));
+    try testing.expect(interner.cl_user.findSymbol("%LATER-HELPER") == null);
+}
+
+test "intern puts a name past the standard ones with no % in EXTENSIONS, held in COMMON-LISP too" {
+    var interner = try newInterner();
+    defer interner.deinit();
+    const sym = try interner.intern("LATER-EXTENSION");
+    try testing.expectEqual(package.Status.external, interner.ext.findSymbol("LATER-EXTENSION").?.status);
+    try testing.expectEqual(package.Status.internal, interner.cl.findSymbol("LATER-EXTENSION").?.status);
+    try testing.expect(interner.cl_user.findSymbol("LATER-EXTENSION").?.sym.equalsRaw(sym));
+}
+
+test "COMMON-LISP exports the 978 standard symbols and no others" {
+    var interner = try newInterner();
+    defer interner.deinit();
+    _ = try interner.intern("%LATER-HELPER");
+    try testing.expectEqual(@as(u32, 978), interner.cl.external.count());
 }
 
 test "currentPackage follows the value of *package*" {

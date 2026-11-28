@@ -37,6 +37,7 @@ pub fn registerPathnames(ev: *Evaluator) !void {
     _ = try ev.defineNative("MAKE-PATHNAME", &makePathnameFn);
     _ = try ev.defineNative("MERGE-PATHNAMES", &mergePathnamesFn);
     _ = try ev.defineNative("NAMESTRING", &namestringFn);
+    _ = try ev.defineNative("PATHNAME-MATCH-P", &pathnameMatchPFn);
     _ = try ev.defineNative("FILE-NAMESTRING", &fileNamestringFn);
     _ = try ev.defineNative("DIRECTORY-NAMESTRING", &directoryNamestringFn);
     _ = try ev.defineNative("PATHNAME-HOST", componentFn(.host));
@@ -686,6 +687,27 @@ fn substituteDirectory(ev: *Evaluator, pattern: Value, caps: *Captures) Error!Va
 
 /// `(translate-pathname source from to)`: match `source` against `from`,
 /// then fill `to`'s wildcards with what matched.
+/// `(pathname-match-p pathname wildcard)`. A component the wildcard
+/// leaves out matches anything (CLHS `pathname-match-p`).
+fn pathnameMatchPFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 2) return Error.WrongArgCount;
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(args[0]);
+    try held.push(args[1]);
+    const source = try componentsOf(ev, args[0]);
+    try holdParts(&held, source);
+    const pattern = try componentsOf(ev, args[1]);
+    try holdParts(&held, pattern);
+    var caps = Captures{};
+    defer caps.deinit(ev);
+    if (!pattern.directory.equalsRaw(value.NIL) and !try matchDirectory(ev, pattern.directory, source.directory, &caps)) return value.NIL;
+    if (!pattern.name.equalsRaw(value.NIL) and !try matchComponent(ev, pattern.name, source.name, &caps.name)) return value.NIL;
+    if (!pattern.type_.equalsRaw(value.NIL) and !try matchComponent(ev, pattern.type_, source.type_, &caps.type_)) return value.NIL;
+    return value.T;
+}
+
 fn translatePathnameFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 3) return Error.WrongArgCount;

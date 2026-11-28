@@ -53,6 +53,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "ansi_tests", ansi_tests);
     build_options.addOption(bool, "profile", profile);
     build_options.addOption(bool, "freestanding", freestanding);
+    build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
     const build_options_module = build_options.createModule();
 
     // Public runtime module — exposed to tests and to the executable.
@@ -346,6 +347,7 @@ pub fn build(b: *std.Build) void {
     freestanding_options.addOption(bool, "ansi_tests", false);
     freestanding_options.addOption(bool, "profile", false);
     freestanding_options.addOption(bool, "freestanding", true);
+    freestanding_options.addOption([]const u8, "version", @import("build.zig.zon").version);
     const web_wasm = b.addExecutable(.{
         .name = "zisp",
         .root_module = b.createModule(.{

@@ -955,7 +955,7 @@ pub const VM = struct {
             if (callee.isSymbol()) {
                 const sym = callee;
                 callee = symbol_mod.symbol(sym).function_cell;
-                if (callee.equalsRaw(value.SPECIAL_UNBOUND)) return run.ev.unbound(sym, Error.UnboundFunction);
+                if (callee.equalsRaw(value.SPECIAL_UNBOUND) or function.isMacro(callee)) return run.ev.unbound(sym, Error.UnboundFunction);
             }
             if (!function.isFunction(callee)) return run.ev.typeMismatch(callee, "FUNCTION");
             const f = function.asFunction(callee);

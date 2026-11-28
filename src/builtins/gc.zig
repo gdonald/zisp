@@ -22,6 +22,7 @@ pub fn registerGc(ev: *Evaluator) !void {
     _ = try ev.defineNative("GC", &gcFn);
     _ = try ev.defineNative("ROOM", &roomFn);
     _ = try ev.defineNative("GET-INTERNAL-REAL-TIME", &internalRealTimeFn);
+    _ = try ev.defineNative("%UNIX-TIME", &unixTimeFn);
     _ = try ev.defineNative("GET-INTERNAL-RUN-TIME", &internalRunTimeFn);
     _ = try ev.defineNative("%SLEEP-NANOSECONDS", &sleepNanosecondsFn);
     try defineExtension(ev, "MAKE-WEAK-POINTER", &makeWeakPointerFn);
@@ -141,6 +142,16 @@ fn internalRealTimeFn(p: *anyopaque, args: []const Value) Error!Value {
     const io = ev.io orelse return Error.ProgramError;
     const now = std.Io.Timestamp.now(io, .awake).nanoseconds;
     return Value.fromFixnum(@intCast(@divFloor(now, std.time.ns_per_us)));
+}
+
+/// Seconds since 1970-01-01 by the wall clock, which `get-universal-time`
+/// counts from.
+fn unixTimeFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    const io = ev.io orelse return Error.ProgramError;
+    const now = std.Io.Timestamp.now(io, .real).nanoseconds;
+    return Value.fromFixnum(@intCast(@divFloor(now, std.time.ns_per_s)));
 }
 
 /// Processor time this process has used, in the same units.

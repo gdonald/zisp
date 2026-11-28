@@ -377,9 +377,10 @@ or `warn`, the restarts are associated with the condition it signals."
     (when restart (invoke-restart restart value))))
 
 ;; What the REPL evaluates each form through, so `abort` has a restart
-;; to reach. The first value says whether FORM completed.
+;; to reach. The first value says whether FORM completed, and FORM's
+;; values follow it.
 (defun %eval-with-abort (form)
-  (restart-case (values t (eval form))
+  (restart-case (multiple-value-call #'values t (eval form))
     (abort ()
       :report "Return to the top level."
       (values nil nil))))
@@ -626,7 +627,7 @@ is caught on the way out and offered to the clauses there."
   `(handler-case (progn ,@body)
      (error (%condition) (values nil %condition))))
 
-(export '(define-condition make-condition conditionp
+(export '(define-condition make-condition
           signal error cerror warn invoke-debugger *debugger-hook*
           handler-bind handler-case ignore-errors
           restart restart-name compute-restarts find-restart
@@ -634,7 +635,6 @@ is caught on the way out and offered to the clauses there."
           restart-bind restart-case with-condition-restarts with-simple-restart
           abort muffle-warning continue store-value use-value
           *break-on-signals*
-          find-condition-class condition-type-name
           condition serious-condition error warning
           simple-condition simple-error simple-warning style-warning
           storage-condition

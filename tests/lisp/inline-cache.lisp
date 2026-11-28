@@ -17,7 +17,7 @@
   (defun inline-cache-apply (f x) (funcall f x))
   (defun inline-cache-spread (f x) (funcall f x))
   (defun inline-cache-site (function key)
-    (getf (car (%call-site-counters function)) key))
+    (getf (car (cl::%call-site-counters function)) key))
   (dolist (name '(inline-cache-one inline-cache-hot inline-cache-a inline-cache-b
                   inline-cache-c inline-cache-d inline-cache-e
                   inline-cache-apply inline-cache-spread))
@@ -28,7 +28,7 @@
 ;; but the first.
 (progn
   (inline-cache-hot)
-  (let* ((site (car (%call-site-counters #'inline-cache-hot)))
+  (let* ((site (car (cl::%call-site-counters #'inline-cache-hot)))
          (hits (getf site :monomorphic))
          (calls (+ hits (getf site :polymorphic) (getf site :megamorphic) (getf site :misses))))
     (and (eq (getf site :state) :monomorphic)

@@ -382,10 +382,10 @@ test "%package-symbols partitions by internal, external, and inherited" {
     _ = try fx.run("(intern \"OWN\" \"MINE\")");
     _ = try fx.run("(export (intern \"PUB\" \"MINE\") \"MINE\")");
 
-    try fx.runPrints("(length (%package-symbols \"MINE\" \"INTERNAL\"))", "1");
-    try fx.runPrints("(length (%package-symbols \"MINE\" \"EXTERNAL\"))", "1");
-    try fx.runPrints("(length (%package-symbols \"MINE\" \"PRESENT\"))", "2");
-    try fx.runPrints("(car (%package-symbols \"MINE\" \"INHERITED\"))", "PROVIDER:SHARED");
+    try fx.runPrints("(length (cl::%package-symbols \"MINE\" \"INTERNAL\"))", "1");
+    try fx.runPrints("(length (cl::%package-symbols \"MINE\" \"EXTERNAL\"))", "1");
+    try fx.runPrints("(length (cl::%package-symbols \"MINE\" \"PRESENT\"))", "2");
+    try fx.runPrints("(car (cl::%package-symbols \"MINE\" \"INHERITED\"))", "PROVIDER:SHARED");
 }
 
 test "%package-symbols skips inherited names the package already has" {
@@ -395,5 +395,5 @@ test "%package-symbols skips inherited names the package already has" {
     _ = try fx.run("(export (intern \"SHARED\" \"PROVIDER\") \"PROVIDER\")");
     _ = try fx.run("(make-package \"MINE\" :use (list \"PROVIDER\"))");
     _ = try fx.run("(shadow \"SHARED\" \"MINE\")");
-    try fx.runPrints("(%package-symbols \"MINE\" \"INHERITED\")", "NIL");
+    try fx.runPrints("(cl::%package-symbols \"MINE\" \"INHERITED\")", "NIL");
 }

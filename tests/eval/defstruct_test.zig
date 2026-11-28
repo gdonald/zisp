@@ -196,7 +196,7 @@ test "constructor predicate and copier can be suppressed with nil" {
     try testing.expectError(Error.UnboundFunction, fx.evalStr("(quiet-p 1)"));
     try testing.expectError(Error.UnboundFunction, fx.evalStr("(copy-quiet 1)"));
     // The accessor is still defined.
-    try fx.expectNil("(quiet-slot (%make-structure 'quiet nil))");
+    try fx.expectNil("(quiet-slot (cl::%make-structure 'quiet nil))");
 }
 
 test "an unsupported defstruct option is an error" {
@@ -230,55 +230,55 @@ test "a structure with no registered slot names still prints its values" {
     try zisp.builtins.registerSystem(&fx.ev);
     try testing.expectEqualStrings(
         "#S(RAW 1 2)",
-        try fx.printed("(format nil \"~S\" (%make-structure 'raw 1 2))"),
+        try fx.printed("(format nil \"~S\" (cl::%make-structure 'raw 1 2))"),
     );
 }
 
 test "structure primitives reject non-structures" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try testing.expectError(Error.TypeError, fx.evalStr("(%structure-name 5)"));
-    try testing.expectError(Error.TypeError, fx.evalStr("(%structure-ref 5 0)"));
-    try testing.expectError(Error.TypeError, fx.evalStr("(%set-structure-ref 5 0 1)"));
-    try testing.expectError(Error.TypeError, fx.evalStr("(%copy-structure 5)"));
-    try testing.expectError(Error.TypeError, fx.evalStr("(%make-structure \"not-a-symbol\")"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%structure-name 5)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%structure-ref 5 0)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%set-structure-ref 5 0 1)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%copy-structure 5)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%make-structure \"not-a-symbol\")"));
 }
 
 test "structure slot access is bounds-checked" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try testing.expectError(Error.TypeError, fx.evalStr("(%structure-ref (%make-structure 'r 1) 1)"));
-    try testing.expectError(Error.TypeError, fx.evalStr("(%set-structure-ref (%make-structure 'r 1) 1 0)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%structure-ref (cl::%make-structure 'r 1) 1)"));
+    try testing.expectError(Error.TypeError, fx.evalStr("(cl::%set-structure-ref (cl::%make-structure 'r 1) 1 0)"));
 }
 
 test "structure primitives check their argument counts" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try testing.expectError(Error.WrongArgCount, fx.evalStr("(%make-structure)"));
-    try testing.expectError(Error.WrongArgCount, fx.evalStr("(%structure-p)"));
-    try testing.expectError(Error.WrongArgCount, fx.evalStr("(%structure-name)"));
-    try testing.expectError(Error.WrongArgCount, fx.evalStr("(%structure-ref (%make-structure 'r 1))"));
-    try testing.expectError(Error.WrongArgCount, fx.evalStr("(%set-structure-ref (%make-structure 'r 1) 0)"));
-    try testing.expectError(Error.WrongArgCount, fx.evalStr("(%copy-structure)"));
+    try testing.expectError(Error.WrongArgCount, fx.evalStr("(cl::%make-structure)"));
+    try testing.expectError(Error.WrongArgCount, fx.evalStr("(cl::%structure-p)"));
+    try testing.expectError(Error.WrongArgCount, fx.evalStr("(cl::%structure-name)"));
+    try testing.expectError(Error.WrongArgCount, fx.evalStr("(cl::%structure-ref (cl::%make-structure 'r 1))"));
+    try testing.expectError(Error.WrongArgCount, fx.evalStr("(cl::%set-structure-ref (cl::%make-structure 'r 1) 0)"));
+    try testing.expectError(Error.WrongArgCount, fx.evalStr("(cl::%copy-structure)"));
 }
 
 test "%structure-p is false for every non-structure value" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try fx.expectNil("(%structure-p 5)");
-    try fx.expectNil("(%structure-p \"s\")");
-    try fx.expectNil("(%structure-p '(1 2))");
-    try fx.expectT("(%structure-p (%make-structure 'r))");
+    try fx.expectNil("(cl::%structure-p 5)");
+    try fx.expectNil("(cl::%structure-p \"s\")");
+    try fx.expectNil("(cl::%structure-p '(1 2))");
+    try fx.expectT("(cl::%structure-p (cl::%make-structure 'r))");
 }
 
 test "a non-symbol in the slot-name list prints as a bare value" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try zisp.builtins.registerSystem(&fx.ev);
-    _ = try fx.evalStr("(%put 'raw '%structure-slots '(1 b))");
+    _ = try fx.evalStr("(cl::%put 'raw 'cl::%structure-slots '(1 b))");
     try testing.expectEqualStrings(
         "#S(RAW 7 :B 8)",
-        try fx.printed("(format nil \"~S\" (%make-structure 'raw 7 8))"),
+        try fx.printed("(format nil \"~S\" (cl::%make-structure 'raw 7 8))"),
     );
 }
 
@@ -289,7 +289,7 @@ test "an odd plist on the structure name falls back to bare values" {
     _ = try fx.evalStr("(setf (symbol-plist 'raw) '(some-key))");
     try testing.expectEqualStrings(
         "#S(RAW 7)",
-        try fx.printed("(format nil \"~S\" (%make-structure 'raw 7))"),
+        try fx.printed("(format nil \"~S\" (cl::%make-structure 'raw 7))"),
     );
 }
 
@@ -297,10 +297,10 @@ test "a plist entry before the slot list is skipped" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try zisp.builtins.registerSystem(&fx.ev);
-    _ = try fx.evalStr("(%put 'raw 'unrelated 1)");
-    _ = try fx.evalStr("(%put 'raw '%structure-slots '(a))");
+    _ = try fx.evalStr("(cl::%put 'raw 'unrelated 1)");
+    _ = try fx.evalStr("(cl::%put 'raw 'cl::%structure-slots '(a))");
     try testing.expectEqualStrings(
         "#S(RAW :A 7)",
-        try fx.printed("(format nil \"~S\" (%make-structure 'raw 7))"),
+        try fx.printed("(format nil \"~S\" (cl::%make-structure 'raw 7))"),
     );
 }

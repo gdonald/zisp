@@ -2,6 +2,7 @@ const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
+const printer = @import("../runtime/printer.zig");
 const eval_mod = @import("../eval/eval.zig");
 const function = @import("../eval/function.zig");
 
@@ -78,6 +79,37 @@ const ordinals = [_][]const u8{
 pub fn registerStandard(ev: *Evaluator) !void {
     try registerNatives(ev);
     try loadBootSources(ev);
+    try markStandardConstants(ev);
+}
+
+/// The constant variables CLHS 1.9 names, which `constantp` is true of.
+const STANDARD_CONSTANTS = [_][]const u8{
+    "ARRAY-DIMENSION-LIMIT",                  "ARRAY-RANK-LIMIT",                       "ARRAY-TOTAL-SIZE-LIMIT",
+    "BOOLE-1",                                "BOOLE-2",                                "BOOLE-AND",
+    "BOOLE-ANDC1",                            "BOOLE-ANDC2",                            "BOOLE-C1",
+    "BOOLE-C2",                               "BOOLE-CLR",                              "BOOLE-EQV",
+    "BOOLE-IOR",                              "BOOLE-NAND",                             "BOOLE-NOR",
+    "BOOLE-ORC1",                             "BOOLE-ORC2",                             "BOOLE-SET",
+    "BOOLE-XOR",                              "CALL-ARGUMENTS-LIMIT",                   "CHAR-CODE-LIMIT",
+    "DOUBLE-FLOAT-EPSILON",                   "DOUBLE-FLOAT-NEGATIVE-EPSILON",          "INTERNAL-TIME-UNITS-PER-SECOND",
+    "LAMBDA-LIST-KEYWORDS",                   "LAMBDA-PARAMETERS-LIMIT",                "LEAST-NEGATIVE-DOUBLE-FLOAT",
+    "LEAST-NEGATIVE-LONG-FLOAT",              "LEAST-NEGATIVE-NORMALIZED-DOUBLE-FLOAT", "LEAST-NEGATIVE-NORMALIZED-LONG-FLOAT",
+    "LEAST-NEGATIVE-NORMALIZED-SHORT-FLOAT",  "LEAST-NEGATIVE-NORMALIZED-SINGLE-FLOAT", "LEAST-NEGATIVE-SHORT-FLOAT",
+    "LEAST-NEGATIVE-SINGLE-FLOAT",            "LEAST-POSITIVE-DOUBLE-FLOAT",            "LEAST-POSITIVE-LONG-FLOAT",
+    "LEAST-POSITIVE-NORMALIZED-DOUBLE-FLOAT", "LEAST-POSITIVE-NORMALIZED-LONG-FLOAT",   "LEAST-POSITIVE-NORMALIZED-SHORT-FLOAT",
+    "LEAST-POSITIVE-NORMALIZED-SINGLE-FLOAT", "LEAST-POSITIVE-SHORT-FLOAT",             "LEAST-POSITIVE-SINGLE-FLOAT",
+    "LONG-FLOAT-EPSILON",                     "LONG-FLOAT-NEGATIVE-EPSILON",            "MOST-NEGATIVE-DOUBLE-FLOAT",
+    "MOST-NEGATIVE-FIXNUM",                   "MOST-NEGATIVE-LONG-FLOAT",               "MOST-NEGATIVE-SHORT-FLOAT",
+    "MOST-NEGATIVE-SINGLE-FLOAT",             "MOST-POSITIVE-DOUBLE-FLOAT",             "MOST-POSITIVE-FIXNUM",
+    "MOST-POSITIVE-LONG-FLOAT",               "MOST-POSITIVE-SHORT-FLOAT",              "MOST-POSITIVE-SINGLE-FLOAT",
+    "MULTIPLE-VALUES-LIMIT",                  "NIL",                                    "PI",
+    "SHORT-FLOAT-EPSILON",                    "SHORT-FLOAT-NEGATIVE-EPSILON",           "SINGLE-FLOAT-EPSILON",
+    "SINGLE-FLOAT-NEGATIVE-EPSILON",          "T",
+};
+
+/// Mark the standard constants, once every one has its value.
+fn markStandardConstants(ev: *Evaluator) !void {
+    for (STANDARD_CONSTANTS) |name| symbol_mod.symbol(try ev.interner.intern(name)).constant = true;
 }
 
 /// Every native and the state the boot sources start from, which is
@@ -125,6 +157,7 @@ pub fn registerNatives(ev: *Evaluator) !void {
     _ = try ev.defineNative("GENTEMP", &gentempFn);
 
     const counter_sym = try ev.interner.intern("*GENSYM-COUNTER*");
+    symbol_mod.symbol(counter_sym).special = true;
     if (symbol_mod.symbol(counter_sym).value_cell.equalsRaw(value.SPECIAL_UNBOUND)) {
         symbol_mod.symbol(counter_sym).value_cell = Value.fromFixnum(1);
     }
@@ -226,6 +259,7 @@ pub fn loadBootSources(ev: *Evaluator) !void {
     try system.evalSource(ev, streams_source);
     if (fs.available) try system.evalSource(ev, files_source);
     try system.evalSource(ev, debugger_source);
+    try system.evalSource(ev, environment_source);
     try system.evalSource(ev, ffi_source);
     try system.evalSource(ev, zig_source);
 }
@@ -249,9 +283,8 @@ fn rplacdFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn getFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     var plist = symbol_mod.symbol(args[0]).plist;
     while (plist.isCons()) {
         const rest = heap.cdr(plist);
@@ -265,7 +298,7 @@ fn getFn(p: *anyopaque, args: []const Value) Error!Value {
 fn putFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 3) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return ev.typeMismatch(args[0], "SYMBOL");
     const sym = symbol_mod.symbol(args[0]);
     var plist = sym.plist;
     while (plist.isCons()) {
@@ -283,7 +316,7 @@ fn putFn(p: *anyopaque, args: []const Value) Error!Value {
 
 fn symbolValueFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     const cell = symbol_mod.symbol(args[0]).value_cell;
     if (cell.equalsRaw(value.SPECIAL_UNBOUND)) {
         return evaluator(p).unbound(args[0], Error.UnboundVariable);
@@ -292,16 +325,15 @@ fn symbolValueFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn setSymbolValueFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     symbol_mod.symbol(args[0]).value_cell = args[1];
     return args[1];
 }
 
 fn symbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     const cell = symbol_mod.symbol(args[0]).function_cell;
     if (cell.equalsRaw(value.SPECIAL_UNBOUND)) {
         return evaluator(p).unbound(args[0], Error.UnboundFunction);
@@ -310,10 +342,9 @@ fn symbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn setSymbolFunctionFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
-    if (!function.isFunction(args[1])) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
+    if (!function.isFunction(args[1])) return evaluator(p).typeMismatch(args[1], "FUNCTION");
     symbol_mod.symbol(args[0]).function_cell = args[1];
     function.invalidateCallCaches();
     return args[1];
@@ -338,9 +369,8 @@ const special_operators = [_][]const u8{
 };
 
 fn specialOperatorPFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     if (symbol_mod.homePackage(args[0]) == null) return value.NIL;
     const name = symbol_mod.name(args[0]);
     for (special_operators) |operator| {
@@ -370,7 +400,7 @@ fn setFdefinitionFn(p: *anyopaque, args: []const Value) Error!Value {
 fn boundpFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     return if (ev.env.lookupValue(args[0]) != null) value.T else value.NIL;
 }
 
@@ -386,9 +416,8 @@ fn constantpFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn makunboundFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     symbol_mod.symbol(args[0]).value_cell = value.SPECIAL_UNBOUND;
     return args[0];
 }
@@ -403,16 +432,14 @@ fn fmakunboundFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn symbolPlistFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     return symbol_mod.symbol(args[0]).plist;
 }
 
 fn setSymbolPlistFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 2) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     symbol_mod.symbol(args[0]).plist = args[1];
     return args[1];
 }
@@ -613,6 +640,7 @@ const loop_source = @embedFile("../lisp/loop.lisp");
 const sequences_source = @embedFile("../lisp/sequences.lisp");
 const files_source = @embedFile("../lisp/files.lisp");
 const streams_source = @embedFile("../lisp/streams.lisp");
+const environment_source = @embedFile("../lisp/environment.lisp");
 const clos_source = @embedFile("../lisp/clos.lisp");
 const conditions_source = @embedFile("../lisp/conditions.lisp");
 const types_source = @embedFile("../lisp/types.lisp");
@@ -961,8 +989,10 @@ fn notFn(p: *anyopaque, args: []const Value) Error!Value {
 fn resolveCallee(ev: *Evaluator, designator: Value) Error!Value {
     if (function.isFunction(designator)) return designator;
     if (designator.isSymbol()) {
-        return ev.env.lookupFunction(designator) orelse
-            ev.unbound(designator, Error.UnboundFunction);
+        const callee = ev.env.lookupFunction(designator) orelse
+            return ev.unbound(designator, Error.UnboundFunction);
+        if (function.isMacro(callee)) return ev.unbound(designator, Error.UnboundFunction);
+        return callee;
     }
     return Error.TypeError;
 }
@@ -985,35 +1015,49 @@ fn evalFn(p: *anyopaque, args: []const Value) Error!Value {
 /// `(gensym [prefix-string | nonnegative-fixnum])`. A string names the
 /// prefix; a fixnum is used as the counter without touching
 /// `*gensym-counter*`. Otherwise the counter is read and incremented.
+fn isUnsignedInteger(v: Value) bool {
+    if (v.isFixnum()) return v.toFixnum() >= 0;
+    return heap.isBignum(v) and heap.asBignum(v).toConst().positive;
+}
+
+/// `(gensym &optional x)`: an uninterned symbol named a prefix and a
+/// counter, the prefix X when it is a string and the counter X when it is
+/// a non-negative integer. Otherwise the counter is `*gensym-counter*`,
+/// which goes up by one.
 fn gensymFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len > 1) return Error.WrongArgCount;
 
     var prefix: []const u8 = "G";
-    var explicit: ?i64 = null;
+    var counter: ?Value = null;
     if (args.len == 1) {
         const a = args[0];
-        if (a.tag() == .fixnum) {
-            if (a.toFixnum() < 0) return Error.TypeError;
-            explicit = a.toFixnum();
+        if (isUnsignedInteger(a)) {
+            counter = a;
         } else if (heap.isString(a)) {
             prefix = try heap.stringUtf8Alloc(ev.heap.allocator, a);
-        } else return Error.TypeError;
+        } else {
+            ev.error_expected = try ev.heap.list(&.{ try ev.interner.intern("OR"), try ev.interner.intern("STRING"), try ev.interner.intern("UNSIGNED-BYTE") });
+            ev.error_datum = a;
+            return Error.TypeError;
+        }
     }
 
-    var n: i64 = undefined;
-    if (explicit) |c| {
-        n = c;
-    } else {
+    var held = ev.heap.protect();
+    defer held.close();
+    if (counter == null) {
         const counter_sym = try ev.interner.intern("*GENSYM-COUNTER*");
         const cur = ev.env.lookupValue(counter_sym) orelse
             return ev.unbound(counter_sym, Error.UnboundVariable);
-        if (cur.tag() != .fixnum or cur.toFixnum() < 0) return Error.TypeError;
-        n = cur.toFixnum();
-        symbol_mod.symbol(counter_sym).value_cell = Value.fromFixnum(n + 1);
+        if (!isUnsignedInteger(cur)) return ev.typeMismatch(cur, "UNSIGNED-BYTE");
+        try held.push(cur);
+        counter = cur;
+        const one_plus = ev.env.lookupFunction(try ev.interner.intern("1+")) orelse return Error.UnboundFunction;
+        symbol_mod.symbol(counter_sym).value_cell = try ev.callFunction(one_plus, &.{cur});
     }
-
-    const name = try std.fmt.allocPrint(ev.allocator, "{s}{d}", .{ prefix, n });
+    const digits = printer.writeToOwnedSlice(ev.allocator, counter.?, .{ .base = 10 }) catch return Error.OutOfMemory;
+    defer ev.allocator.free(digits);
+    const name = try std.fmt.allocPrint(ev.allocator, "{s}{s}", .{ prefix, digits });
     defer ev.allocator.free(name);
     return ev.interner.makeUninterned(name);
 }
@@ -1030,8 +1074,14 @@ fn gentempFn(p: *anyopaque, args: []const Value) Error!Value {
     var prefix: []const u8 = "T";
     if (args.len >= 1) {
         const a = args[0];
-        if (!heap.isString(a)) return Error.TypeError;
+        if (!heap.isString(a)) return ev.typeMismatch(a, "STRING");
         prefix = try heap.stringUtf8Alloc(ev.heap.allocator, a);
+    }
+    if (args.len == 2) {
+        const designator = args[1];
+        const designates = designator.isSymbol() or designator.tag() == .char or heap.isString(designator) or
+            @import("../runtime/package.zig").isPackage(designator);
+        if (!designates) return ev.typeMismatch(designator, "PACKAGE");
     }
     const pkg = if (args.len == 2)
         try @import("../eval/special_forms.zig").resolvePackage(ev, args[1])

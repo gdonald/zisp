@@ -89,6 +89,33 @@
                  (when file (push file found))))))
     (sort (remove-duplicates found :test #'equal :key #'namestring) #'string< :key #'namestring)))
 
+;; The directory named by HOME.
+(defun user-homedir-pathname (&optional host)
+  (declare (ignore host))
+  (let ((home (%getenv "HOME")))
+    (and home
+         (pathname (if (and (> (length home) 0)
+                            (char= (char home (1- (length home))) #\/))
+                       home
+                       (concatenate 'string home "/"))))))
+
+;; There are no hosts but logical ones, which a namestring names first.
+(defun host-namestring (pathname)
+  (let ((host (pathname-host (pathname pathname))))
+    (if (stringp host) host "")))
+
+;; A namestring that merges with DEFAULTS back into PATHNAME: the whole
+;; namestring always does.
+(defun enough-namestring (pathname &optional (defaults *default-pathname-defaults*))
+  (declare (ignore defaults))
+  (namestring pathname))
+
+;; Who wrote a file is not recorded, so there is no author to give, but
+;; the file has to exist.
+(defun file-author (pathspec)
+  (truename pathspec)
+  nil)
+
 (export '(delete-file rename-file ensure-directories-exist directory))
 
 (in-package "COMMON-LISP-USER")

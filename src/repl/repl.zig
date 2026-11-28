@@ -47,6 +47,9 @@ pub const Repl = struct {
     plus: Value,
     plus2: Value,
     plus3: Value,
+    slash: Value,
+    slash2: Value,
+    slash3: Value,
     star: Value,
     star2: Value,
     star3: Value,
@@ -71,6 +74,9 @@ pub const Repl = struct {
             .plus = value.NIL,
             .plus2 = value.NIL,
             .plus3 = value.NIL,
+            .slash = value.NIL,
+            .slash2 = value.NIL,
+            .slash3 = value.NIL,
             .star = value.NIL,
             .star2 = value.NIL,
             .star3 = value.NIL,
@@ -103,7 +109,10 @@ pub const Repl = struct {
         self.star = try self.interner.intern("*");
         self.star2 = try self.interner.intern("**");
         self.star3 = try self.interner.intern("***");
-        for ([_]Value{ self.minus, self.plus, self.plus2, self.plus3, self.star, self.star2, self.star3 }) |sym| {
+        self.slash = try self.interner.intern("/");
+        self.slash2 = try self.interner.intern("//");
+        self.slash3 = try self.interner.intern("///");
+        for ([_]Value{ self.minus, self.plus, self.plus2, self.plus3, self.star, self.star2, self.star3, self.slash, self.slash2, self.slash3 }) |sym| {
             symbol_mod.symbol(sym).value_cell = value.NIL;
         }
         return self;
@@ -155,7 +164,7 @@ pub const Repl = struct {
                 try self.writeLine(ABORT_MSG);
                 continue;
             };
-            self.rotateOutput(result);
+            try self.rotateOutput(result);
             try self.printResult(result);
         }
     }
@@ -194,7 +203,7 @@ pub const Repl = struct {
             const f = form orelse break;
             self.rotateInput(f);
             const result = try self.ev.evalTopLevel(f);
-            self.rotateOutput(result);
+            try self.rotateOutput(result);
             if (print) try self.printResult(result);
         }
     }
@@ -211,7 +220,9 @@ pub const Repl = struct {
             return try self.ev.evalTopLevel(form);
         const completed = try self.ev.callFunction(runner, &.{form});
         if (completed.equalsRaw(value.NIL)) return null;
-        return self.ev.values.items[1];
+        // What is left is the form's own values.
+        _ = self.ev.values.orderedRemove(0);
+        return if (self.ev.values.items.len > 0) self.ev.values.items[0] else value.NIL;
     }
 
     fn rotateInput(self: *Repl, form: Value) void {
@@ -221,10 +232,15 @@ pub const Repl = struct {
         setVal(self.minus, form);
     }
 
-    fn rotateOutput(self: *Repl, result: Value) void {
+    /// `*` gets the form's first value and `/` the list of all of them.
+    fn rotateOutput(self: *Repl, result: Value) Error!void {
+        const all = try self.heap.list(self.ev.values.items);
         setVal(self.star3, getVal(self.star2));
         setVal(self.star2, getVal(self.star));
         setVal(self.star, result);
+        setVal(self.slash3, getVal(self.slash2));
+        setVal(self.slash2, getVal(self.slash));
+        setVal(self.slash, all);
     }
 
     fn printResult(self: *Repl, result: Value) Error!void {

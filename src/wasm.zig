@@ -25,7 +25,7 @@ extern "env" fn zisp_js_call(request: [*]const u8, len: usize) i32;
 const js_package =
     \\(defpackage "JS" (:use "COMMON-LISP") (:export "CALL"))
     \\(defun js:call (name &rest arguments)
-    \\  (multiple-value-bind (result threw) (%js-call name arguments)
+    \\  (multiple-value-bind (result threw) (cl::%js-call name arguments)
     \\    (if threw (error "JavaScript: ~a" result) result)))
 ;
 

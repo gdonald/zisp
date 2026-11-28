@@ -261,25 +261,25 @@ test "setf aref stores through subscripts and checks the element" {
         7,
     );
     try fx.expectText("(let ((s (make-string 2))) (setf (aref s 0) #\\z) s)", "z ");
-    try fx.expectErr(Error.WrongArgCount, "(%set-aref (make-array 1))");
-    try fx.expectErr(Error.TypeError, "(%set-aref 7 0 1)");
-    try fx.expectErr(Error.TypeError, "(%set-aref (make-string 1) 0 7)");
-    try fx.expectErr(Error.TypeError, "(%set-aref (make-array 1 :element-type 'bit) 0 5)");
+    try fx.expectErr(Error.WrongArgCount, "(cl::%set-aref (make-array 1))");
+    try fx.expectErr(Error.TypeError, "(cl::%set-aref 7 0 1)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-aref (make-string 1) 0 7)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-aref (make-array 1 :element-type 'bit) 0 5)");
 }
 
 test "row-major access is bounds-checked and type-checked" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try fx.expectErr(Error.WrongArgCount, "(row-major-aref (make-array 1))");
-    try fx.expectErr(Error.WrongArgCount, "(%set-row-major-aref (make-array 1) 0)");
+    try fx.expectErr(Error.WrongArgCount, "(cl::%set-row-major-aref (make-array 1) 0)");
     try fx.expectErr(Error.TypeError, "(row-major-aref (make-array 1) 1)");
     try fx.expectErr(Error.TypeError, "(row-major-aref (make-array 1) 'x)");
     try fx.expectErr(Error.TypeError, "(row-major-aref 7 0)");
-    try fx.expectErr(Error.TypeError, "(%set-row-major-aref 7 0 1)");
-    try fx.expectErr(Error.TypeError, "(%set-row-major-aref (make-string 1) 0 7)");
-    try fx.expectErr(Error.TypeError, "(%set-row-major-aref (make-array 1 :element-type 'bit) 0 5)");
-    try fx.expectErr(Error.TypeError, "(%set-row-major-aref (make-array 1) 1 0)");
-    try fx.expectText("(let ((s (make-string 1))) (%set-row-major-aref s 0 #\\q) s)", "q");
+    try fx.expectErr(Error.TypeError, "(cl::%set-row-major-aref 7 0 1)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-row-major-aref (make-string 1) 0 7)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-row-major-aref (make-array 1 :element-type 'bit) 0 5)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-row-major-aref (make-array 1) 1 0)");
+    try fx.expectText("(let ((s (make-string 1))) (cl::%set-row-major-aref s 0 #\\q) s)", "q");
 }
 
 // --- introspection ---
@@ -356,10 +356,10 @@ test "fill-pointer needs a vector that has one" {
     defer fx.deinit(testing.allocator);
     try fx.expectErr(Error.TypeError, "(fill-pointer (make-array 2))");
     try fx.expectErr(Error.TypeError, "(fill-pointer \"ab\")");
-    try fx.expectErr(Error.TypeError, "(%set-fill-pointer (make-array 2) 1)");
-    try fx.expectErr(Error.TypeError, "(%set-fill-pointer \"ab\" 1)");
-    try fx.expectErr(Error.WrongArgCount, "(%set-fill-pointer (make-array 2))");
-    try fx.expectErr(Error.TypeError, "(%set-fill-pointer (make-array 2 :fill-pointer 0) 3)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-fill-pointer (make-array 2) 1)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-fill-pointer \"ab\" 1)");
+    try fx.expectErr(Error.WrongArgCount, "(cl::%set-fill-pointer (make-array 2))");
+    try fx.expectErr(Error.TypeError, "(cl::%set-fill-pointer (make-array 2 :fill-pointer 0) 3)");
     try fx.expectFix(
         "(let ((s (make-array 3 :element-type 'character :fill-pointer 0))) " ++
             "(setf (fill-pointer s) 2) (length s))",

@@ -13,7 +13,7 @@
   (compiled-closures-inc-x)
   (eql (compiled-closures-get-x) 2))
 
-(listp (%function-constants #'compiled-closures-get-x))
+(listp (cl::%function-constants #'compiled-closures-get-x))
 
 (let ((pair (funcall (compile nil '(lambda ()
                                      (let ((n 10))

@@ -47,6 +47,9 @@ pub fn registerSystem(ev: *Evaluator) !void {
     _ = try ev.defineNative("PRINC-TO-STRING", toStringFn(.plain));
     _ = try ev.defineNative("%WRITE-TO-STRING", toStringFn(.current));
     _ = try ev.defineNative("QUIT", &quitFn);
+    _ = try ev.defineNative("%MACHINE-TYPE", &machineTypeFn);
+    _ = try ev.defineNative("LISP-IMPLEMENTATION-VERSION", &lispVersionFn);
+    _ = try ev.defineNative("%SOFTWARE-TYPE", &softwareTypeFn);
     _ = try ev.defineNative("EXIT", &quitFn);
 
     // Bound to namestrings during load / compile-file, nil otherwise.
@@ -482,7 +485,7 @@ pub fn compileToplevel(ev: *Evaluator, form: Value, ctt: bool, out: *std.ArrayLi
 const compile_time_definers = [_][]const u8{
     "DEFCLASS",            "DEFINE-CONDITION",     "DEFSTRUCT",           "DEFTYPE",
     "DEFSETF",             "DEFINE-SETF-EXPANDER", "DEFINE-SYMBOL-MACRO", "DEFINE-COMPILER-MACRO",
-    "DEFINE-MODIFY-MACRO", "DEFCONSTANT",
+    "DEFINE-MODIFY-MACRO", "DEFCONSTANT",          "DEFPACKAGE",          "IN-PACKAGE",
 };
 
 fn definesAtCompileTime(form: Value) bool {
@@ -569,6 +572,10 @@ fn compileFileFn(p: *anyopaque, args: []const Value) Error!Value {
             truename,
         );
         defer bindings.restore();
+        // CLHS 24.1: compile-file binds `*package*`, so an `in-package` the
+        // file makes at compile time does not leak into its caller.
+        const saved_package = ev.interner.currentPackage();
+        defer ev.interner.setCurrentPackage(saved_package);
         try compileSourceNamed(ev, source, truename, &load_forms);
     }
 
@@ -625,10 +632,34 @@ fn writeFasl(ev: *Evaluator, io: std.Io, path: []const u8, forms: []const Value)
         defer state.deinit(ev.allocator);
         var settings = format.prin1Settings(ev);
         settings.circle = &state;
+        // Each form is read back in whatever package the forms before it
+        // left current, so every symbol carries its package.
+        settings.current_package = ev.interner.keyword;
+        settings.read_case = .upcase;
         printer.write(ev.allocator, w, f, settings) catch return Error.OutOfMemory;
         w.writeByte('\n') catch return Error.OutOfMemory;
     }
     try fs.writeFile(io, path, text.written());
+}
+
+// --- the machine ---
+
+fn lispVersionFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    return ev.heap.allocString(@import("build_options").version);
+}
+
+fn machineTypeFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    return ev.heap.allocString(@tagName(builtin.cpu.arch));
+}
+
+fn softwareTypeFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    return ev.heap.allocString(@tagName(builtin.os.tag));
 }
 
 // --- quit / exit ---

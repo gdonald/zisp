@@ -122,7 +122,7 @@ and written to `*zig-cache-directory*` before each Zig run.
    returned.
 
 zisp has no way to run a program today. The bridge adds one native,
-`(%run-program program arguments directory)`, in `src/builtins/zig.zig`,
+`(cl::%run-program program arguments directory)`, in `src/builtins/zig.zig`,
 returning three values: the exit code, the standard output string and
 the standard error string. A program that cannot be started returns NIL
 and the reason as the third value. It uses `std.process.run` and is left

@@ -384,7 +384,7 @@ test "a compiled file's closures share a binding they all assign" {
     _ = try fx.evalStr("(file-inc-x)");
     _ = try fx.evalStr("(file-inc-x)");
     try testing.expectEqual(@as(i64, 2), (try fx.evalStr("(file-get-x)")).toFixnum());
-    try testing.expect((try fx.evalStr("(listp (%function-constants #'file-get-x))")).equalsRaw(value.T));
+    try testing.expect((try fx.evalStr("(listp (cl::%function-constants #'file-get-x))")).equalsRaw(value.T));
 }
 
 // --- binary fasls ---
@@ -446,6 +446,23 @@ test "a form reads with the float format the forms before it in the file set" {
     const compile_form = try std.fmt.allocPrint(testing.allocator, "(let ((*read-default-float-format* 'single-float)) (load (compile-file \"{s}\")) float-format-marker)", .{path});
     defer testing.allocator.free(compile_form);
     try testing.expect((try fx.evalStr(compile_form)).equalsRaw(try fx.evalStr("'double-float")));
+}
+
+test "a compiled file's forms are read in the package its in-package names" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTemp(&tmp, "in-package.lisp",
+        \\(defpackage "COMPILE-FILE-PACKAGE" (:use "COMMON-LISP"))
+        \\(in-package "COMPILE-FILE-PACKAGE")
+        \\(defun package-marker () (package-name (symbol-package 'package-marker)))
+    );
+    defer testing.allocator.free(path);
+
+    const form = try std.fmt.allocPrint(testing.allocator, "(progn (load (compile-file \"{s}\")) (equal (list (package-name *package*) (funcall (find-symbol \"PACKAGE-MARKER\" \"COMPILE-FILE-PACKAGE\"))) '(\"COMMON-LISP-USER\" \"COMPILE-FILE-PACKAGE\")))", .{path});
+    defer testing.allocator.free(form);
+    try testing.expect((try fx.evalStr(form)).equalsRaw(value.T));
 }
 
 test "a binary fasl gives back what its source defines" {
@@ -557,7 +574,7 @@ test "a big-endian fasl is read with its bytes swapped" {
     defer testing.allocator.free(path);
     const form = try std.fmt.allocPrint(
         testing.allocator,
-        "(let ((*%fasl-big-endian* t)) (compile-file \"{s}\"))",
+        "(let ((cl::*%fasl-big-endian* t)) (compile-file \"{s}\"))",
         .{path},
     );
     defer testing.allocator.free(form);

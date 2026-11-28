@@ -31,6 +31,16 @@ pub const KEYWORD_PACKAGE_NAME = "KEYWORD";
 /// CMUCL names it, since that is where the shape of these comes from.
 pub const EXT_PACKAGE_NAME = "EXTENSIONS";
 
+/// Extensions defined in Lisp rather than from Zig, interned ahead of the
+/// Lisp sources so their definitions land on the `EXTENSIONS` symbols.
+const EXTENSION_NAMES = [_][]const u8{
+    "GC",                  "QUIT",             "EXIT",
+    "UNICODE-UPCASE",      "UNICODE-DOWNCASE", "UNICODE-CAPITALIZE",
+    "*GC-MAJOR-FLOOR*",    "*GC-VERBOSE*",     "*GC-TRIGGER*",
+    "*GC-NURSERY-BYTES*",  "CONDITIONP",       "FIND-CONDITION-CLASS",
+    "CONDITION-TYPE-NAME",
+};
+
 /// Narrow a registry result whose non-allocation failures are impossible
 /// at the call site.
 fn onlyAllocFailure(result: anytype) std.mem.Allocator.Error!@typeInfo(@TypeOf(result)).error_union.payload {
@@ -51,6 +61,9 @@ pub const Interner = struct {
     /// source of truth for the current package, so a dynamic rebinding of
     /// `*package*` is visible to the reader immediately.
     package_symbol: Value = .{ .raw = 0 },
+    /// Set once the standard symbols are in, after which `intern` adds
+    /// nothing to what `COMMON-LISP` exports.
+    standard_done: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Interner {
         var self: Interner = .{
@@ -145,16 +158,29 @@ pub const Interner = struct {
         return sym;
     }
 
-    /// Intern a name the Zig side owns: a `COMMON-LISP` external symbol.
-    /// Every builtin, special-form name, and lambda-list keyword lands here.
+    /// Intern a name the Zig side owns. The standard names are the 978
+    /// `COMMON-LISP` exports. A name past them holding a `%` is one of the
+    /// implementation's own helpers, internal to `COMMON-LISP`; any other
+    /// is exported from `EXTENSIONS` and held in `COMMON-LISP` too, so the
+    /// implementation reads it unqualified and a program sees it.
     pub fn intern(self: *Interner, sym_name: []const u8) !Value {
         if (self.cl.findPresent(sym_name)) |found| {
-            if (found.status == .internal) {
+            if (found.status == .internal and !self.standard_done) {
                 const owned_name = symbol(found.sym).name;
                 _ = self.cl.internal.remove(owned_name);
                 try self.cl.addExternal(owned_name, found.sym);
             }
             return found.sym;
+        }
+        if (self.standard_done) {
+            if (std.mem.indexOfScalar(u8, sym_name, '%') == null) {
+                const sym = try self.internExtension(sym_name);
+                try self.cl.addInternal(symbol(sym).name, sym);
+                return sym;
+            }
+            const sym = try self.allocSymbol(sym_name, self.cl);
+            try self.cl.addInternal(symbol(sym).name, sym);
+            return sym;
         }
         const sym = try self.allocSymbol(sym_name, self.cl);
         try self.cl.addExternal(symbol(sym).name, sym);
@@ -258,6 +284,10 @@ pub fn initStandardSymbols(interner: *Interner) !void {
     symbol(interner.package_symbol).special = true;
     interner.setCurrentPackage(interner.cl_user);
     for (cl_symbols.names) |standard_name| _ = try interner.intern(standard_name);
+    interner.standard_done = true;
+    // In place before any Lisp source reads them, so a definition read in
+    // `COMMON-LISP` lands on the `EXTENSIONS` symbol.
+    for (EXTENSION_NAMES) |extension| _ = try interner.intern(extension);
 
     // Lambda-list keywords and core special forms
     inline for (&[_][]const u8{

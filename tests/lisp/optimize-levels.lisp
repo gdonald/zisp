@@ -83,9 +83,9 @@
   (compile 'optimize-loop-fast)
   (and (eql (optimize-loop-slow 1000) (optimize-loop-fast 1000))
        (>= (reduce #'+ (mapcar (lambda (site) (+ (getf site :monomorphic) (getf site :misses)))
-                               (%call-site-counters #'optimize-loop-slow)))
+                               (cl::%call-site-counters #'optimize-loop-slow)))
            2000)
-       (null (%call-site-counters #'optimize-loop-fast))))
+       (null (cl::%call-site-counters #'optimize-loop-fast))))
 
 ;;; debug
 
@@ -125,8 +125,8 @@
 (progn
   (defun optimize-space-expanded (y) (declare (optimize (space 0))) (optimize-double y))
   (defun optimize-space-called (y) (declare (optimize (space 3))) (optimize-double y))
-  (and (not (member 'optimize-double (%function-constants (%compile-function #'optimize-space-expanded))))
-       (member 'optimize-double (%function-constants (%compile-function #'optimize-space-called)))
+  (and (not (member 'optimize-double (cl::%function-constants (cl::%compile-function #'optimize-space-expanded))))
+       (member 'optimize-double (cl::%function-constants (cl::%compile-function #'optimize-space-called)))
        (eql (optimize-space-expanded 3) (optimize-space-called 3))))
 
 ;; (speed 3) expands an inline function even under (space 3).

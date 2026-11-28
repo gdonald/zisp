@@ -302,7 +302,7 @@ test "a native failure whose condition cannot be built unwinds as itself" {
 test "a native failure with no condition system defined unwinds as itself" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    _ = try fx.evalStr("(fmakunbound '%run-handlers)");
+    _ = try fx.evalStr("(fmakunbound 'cl::%run-handlers)");
     try testing.expectError(
         error.TypeError,
         fx.evalStr("(let ((*handler-clusters* (list nil))) (car 1))"),

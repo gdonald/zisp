@@ -60,6 +60,17 @@ pub fn registerStandard(ev: *Evaluator) !void {
     try ev.registerSpecialForm("IN-PACKAGE", &inPackage);
     try ev.registerSpecialForm("MACROEXPAND-1", &macroexpand1Form);
     try ev.registerSpecialForm("MACROEXPAND", &macroexpandForm);
+    // The same operators called as functions, through funcall or apply,
+    // take the environment as an argument.
+    function.asFunction(try ev.defineNative("MACROEXPAND-1", macroexpandFn(true))).preserves_values = true;
+    function.asFunction(try ev.defineNative("MACROEXPAND", macroexpandFn(false))).preserves_values = true;
+
+    // The standard macros implemented here as special operators are
+    // macros too (CLHS 3.1.2.1.2.2), whose expansion is the same operator
+    // under a `%` name.
+    inline for (MACROS_AS_SPECIAL_FORMS) |name| {
+        try ev.registerSpecialForm("%" ++ name, ev.lookupSpecialForm(try ev.interner.intern(name)) orelse unreachable);
+    }
 
     ev.sym_if = try ev.interner.intern("IF");
     ev.sym_progn = try ev.interner.intern("PROGN");
@@ -173,9 +184,16 @@ fn inPackage(ev: *Evaluator, args: Value) Error!Value {
 /// Text of a string designator: a string, a symbol (its name), or a
 /// character. A symbol's name is borrowed; a string is encoded to UTF-8
 /// through `allocator`, which the callers back with the heap's arena.
+/// The text a string designator names: a symbol's name, a string, or a
+/// character as a string of one.
 pub fn stringDesignator(allocator: std.mem.Allocator, v: Value) Error![]const u8 {
     if (v.isSymbol()) return symbol_mod.symbol(v).name;
     if (heap.isString(v)) return heap.stringUtf8Alloc(allocator, v);
+    if (v.tag() == .char) {
+        var buf: [4]u8 = undefined;
+        const n = std.unicode.utf8Encode(v.toChar(), &buf) catch return Error.TypeError;
+        return allocator.dupe(u8, buf[0..n]);
+    }
     return Error.TypeError;
 }
 
@@ -508,6 +526,35 @@ fn macroexpandForm(ev: *Evaluator, args: Value) Error!Value {
         expanded = true;
     }
     return ev.setValues(&.{ held.items()[0], if (expanded) value.T else value.NIL });
+}
+
+const MACROS_AS_SPECIAL_FORMS = [_][]const u8{
+    "DECLAIM",             "DEFCONSTANT",         "DEFMACRO",           "DEFPARAMETER",
+    "DEFUN",               "DEFVAR",              "DESTRUCTURING-BIND", "IN-PACKAGE",
+    "MULTIPLE-VALUE-BIND", "MULTIPLE-VALUE-LIST",
+};
+
+/// `macroexpand-1` and `macroexpand` called as functions, with the
+/// environment given or the global one.
+fn macroexpandFn(comptime once: bool) function.NativeFn {
+    return struct {
+        fn f(p: *anyopaque, args: []const Value) Error!Value {
+            const ev = Evaluator.fromOpaque(p);
+            if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
+            const previous = try ev.enterEnvironment(if (args.len == 2) args[1] else value.NIL);
+            defer ev.leaveEnvironment(previous);
+            var held = ev.heap.protect();
+            defer held.close();
+            try held.push(args[0]);
+            var expanded = false;
+            while (try ev.macroexpand1(held.items()[0])) |expansion| {
+                held.items()[0] = expansion;
+                expanded = true;
+                if (once) break;
+            }
+            return ev.setValues(&.{ held.items()[0], if (expanded) value.T else value.NIL });
+        }
+    }.f;
 }
 
 const MacroexpandArgs = struct { form: Value, environment: Value };
@@ -1020,8 +1067,10 @@ fn multipleValueCall(ev: *Evaluator, args: Value) Error!Value {
 fn resolveCallee(ev: *Evaluator, designator: Value) Error!Value {
     if (function.isFunction(designator)) return designator;
     if (designator.isSymbol()) {
-        return ev.env.lookupFunction(designator) orelse
-            ev.unbound(designator, Error.UnboundFunction);
+        const callee = ev.env.lookupFunction(designator) orelse
+            return ev.unbound(designator, Error.UnboundFunction);
+        if (function.isMacro(callee)) return ev.unbound(designator, Error.UnboundFunction);
+        return callee;
     }
     return Error.TypeError;
 }

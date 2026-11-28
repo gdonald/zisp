@@ -751,7 +751,7 @@ Every test the suite's own driver runs passes, interpreted and compiled. The per
   - [x] 11.3.1. `reader/`: 0 failures
   - [x] 11.3.2. `printer/`: 0 failures, including `print-unreadable-object`, `*print-pretty*` layout and every `format` directive
 - [ ] 11.4. Evaluation
-  - [ ] 11.4.1. `symbols/`: 0 failures
+  - [x] 11.4.1. `symbols/`: 0 failures
   - [ ] 11.4.2. `packages/`: 0 failures
   - [ ] 11.4.3. `eval-and-compile/`: 0 failures, including `compile-file` and `load` of the files it writes, `macroexpand` environments and `define-compiler-macro`
   - [ ] 11.4.4. `data-and-control-flow/`: 0 failures

@@ -8,6 +8,22 @@
 
 (in-package "COMMON-LISP")
 
+;; The standard macros this implementation runs as special operators have
+;; macro definitions as well (CLHS 3.1.2.1.2.2), expanding to the same
+;; operators under `%` names.
+(defmacro defun (&whole form &rest args) (declare (ignore args)) (cons '%defun (cdr form)))
+(defmacro defmacro (&whole form &rest args) (declare (ignore args)) (cons '%defmacro (cdr form)))
+(defmacro defvar (&whole form &rest args) (declare (ignore args)) (cons '%defvar (cdr form)))
+(defmacro defparameter (&whole form &rest args) (declare (ignore args)) (cons '%defparameter (cdr form)))
+(defmacro defconstant (&whole form &rest args) (declare (ignore args)) (cons '%defconstant (cdr form)))
+(defmacro declaim (&whole form &rest args) (declare (ignore args)) (cons '%declaim (cdr form)))
+(defmacro in-package (&whole form &rest args) (declare (ignore args)) (cons '%in-package (cdr form)))
+(defmacro destructuring-bind (&whole form &rest args) (declare (ignore args)) (cons '%destructuring-bind (cdr form)))
+(defmacro multiple-value-bind (&whole form &rest args) (declare (ignore args)) (cons '%multiple-value-bind (cdr form)))
+(defmacro multiple-value-list (&whole form &rest args) (declare (ignore args)) (cons '%multiple-value-list (cdr form)))
+(defmacro lambda (&whole form &rest args) (declare (ignore args)) (list 'function form))
+(defmacro return (&optional value) (list 'return-from nil value))
+
 (defconstant lambda-list-keywords
   '(&allow-other-keys &aux &body &environment &key &optional &rest &whole))
 
@@ -1126,6 +1142,60 @@ KEYS unless the first :allow-other-keys among them is true."
          (*readtable* (copy-readtable nil)))
      ,@body))
 
+(defvar *load-print* nil)
+(defvar *modules* nil)
+
+;; `time` reports how long its form took on *trace-output*, after the
+;; form's values are in hand.
+(defmacro time (form)
+  (let ((start (gensym "START")))
+    `(let ((,start (get-internal-real-time)))
+       (multiple-value-prog1 ,form
+         (format *trace-output* "~&; Evaluation took ~,6F seconds of real time~%"
+                 (/ (- (get-internal-real-time) ,start)
+                    (float internal-time-units-per-second)))))))
+
+;; `step` evaluates its form; there is no single stepper.
+(defmacro step (form) form)
+
+(defmacro with-compilation-unit ((&rest options) &body body)
+  (declare (ignore options))
+  `(progn ,@body))
+
+;; `trace` wraps each named global function so each call and its values
+;; are written to *trace-output*; `untrace` puts the function back. Each
+;; returns the names, and with none given, those being traced.
+(defvar *%traced* nil)
+
+(defun %trace-function (name)
+  (unless (assoc name *%traced* :test #'equal)
+    (let ((original (fdefinition name)))
+      (push (cons name original) *%traced*)
+      (setf (fdefinition name)
+            (lambda (&rest args)
+              (format *trace-output* "~&; ~S called with ~S~%" name args)
+              (let ((values (multiple-value-list (apply original args))))
+                (format *trace-output* "~&; ~S returned ~{~S~^ ~}~%" name values)
+                (values-list values))))))
+  name)
+
+(defun %untrace-function (name)
+  (let ((entry (assoc name *%traced* :test #'equal)))
+    (when entry
+      (setf (fdefinition name) (cdr entry))
+      (setq *%traced* (remove entry *%traced*))))
+  name)
+
+(defmacro trace (&rest names)
+  (if names
+      `(mapcar #'%trace-function ',names)
+      '(mapcar #'car *%traced*)))
+
+(defmacro untrace (&rest names)
+  (if names
+      `(mapcar #'%untrace-function ',names)
+      '(mapcar #'%untrace-function (mapcar #'car *%traced*))))
+
 (export '(sleep psetf rotatef shiftf multiple-value-setq with-standard-io-syntax formatter assert compile proclaim
           disassemble define-symbol-macro
           write write-to-string
@@ -1138,7 +1208,7 @@ KEYS unless the first :allow-other-keys among them is true."
           defstruct otherwise nth-value locally handler-bind handler-case identity
           with-hash-table-iterator with-open-file
           with-input-from-string with-output-to-string
-          do-symbols do-external-symbols do-all-symbols dolist-over defpackage
+          do-symbols do-external-symbols do-all-symbols defpackage
           deftype check-type pprint-logical-block))
 
 (in-package "COMMON-LISP-USER")

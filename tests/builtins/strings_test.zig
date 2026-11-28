@@ -189,8 +189,8 @@ test "setf char replaces a character in place" {
 test "setf char rejects a wide character, a bad index and the wrong argument count" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
-    try fx.expectErr(Error.TypeError, "(%set-char (make-string 1) 5 #\\a)");
-    try fx.expectErr(Error.WrongArgCount, "(%set-char (make-string 1) 0)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-char (make-string 1) 5 #\\a)");
+    try fx.expectErr(Error.WrongArgCount, "(cl::%set-char (make-string 1) 0)");
 }
 
 test "aref and elt read and write string elements" {
@@ -207,9 +207,9 @@ test "string element access is bounds- and type-checked through aref and elt" {
     defer fx.deinit(testing.allocator);
     try fx.expectErr(Error.TypeError, "(aref \"abc\" 3)");
     try fx.expectErr(Error.TypeError, "(elt \"abc\" 3)");
-    try fx.expectErr(Error.TypeError, "(%set-aref \"abc\" 3 #\\a)");
-    try fx.expectErr(Error.TypeError, "(%set-aref \"abc\" 0 7)");
-    try fx.expectErr(Error.TypeError, "(%set-elt \"abc\" 3 #\\a)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-aref \"abc\" 3 #\\a)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-aref \"abc\" 0 7)");
+    try fx.expectErr(Error.TypeError, "(cl::%set-elt \"abc\" 3 #\\a)");
 }
 
 test "length counts a string's characters" {

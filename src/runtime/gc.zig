@@ -563,6 +563,13 @@ pub const Allocator = struct {
         self.stats.bytes_since_collection = 0;
     }
 
+    /// Wait a whole interval before trying again after a collection that
+    /// could not finish, so a heap at its limit does not repeat the work
+    /// of a failed collection on every allocation.
+    pub fn postponeCollection(self: *Allocator) void {
+        self.stats.bytes_since_collection = 0;
+    }
+
     /// Whether the nursery has handed out its whole budget, which is what
     /// makes a collection due at the next top level form.
     pub fn nurseryFull(self: *const Allocator) bool {

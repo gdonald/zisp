@@ -485,9 +485,8 @@ fn unusePackageFn(p: *anyopaque, args: []const Value) Error!Value {
 }
 
 fn symbolPackageFn(p: *anyopaque, args: []const Value) Error!Value {
-    _ = p;
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return evaluator(p).typeMismatch(args[0], "SYMBOL");
     const home = symbol_mod.homePackage(args[0]) orelse return value.NIL;
     return home.toValue();
 }
@@ -501,14 +500,15 @@ fn keywordpFn(p: *anyopaque, args: []const Value) Error!Value {
 fn symbolNameFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
+    if (!args[0].isSymbol()) return ev.typeMismatch(args[0], "SYMBOL");
     return ev.heap.allocString(symbol_mod.symbol(args[0]).name);
 }
 
 fn makeSymbolFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 1) return Error.WrongArgCount;
-    return ev.interner.makeUninterned(try special_forms.stringDesignator(ev.heap.allocator, args[0]));
+    if (!heap.isString(args[0])) return ev.typeMismatch(args[0], "STRING");
+    return ev.interner.makeUninterned(try heap.stringUtf8Alloc(ev.heap.allocator, args[0]));
 }
 
 /// `(%package-symbols pkg kind)` — the list backing `do-symbols` and its
