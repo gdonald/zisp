@@ -140,6 +140,7 @@ fn resultKindOf(spec: Value) Error!Kind {
         std.mem.eql(u8, n, "ARRAY") or std.mem.eql(u8, n, "SIMPLE-ARRAY")) return .vector;
     if (std.mem.eql(u8, n, "STRING") or std.mem.eql(u8, n, "SIMPLE-STRING") or
         std.mem.eql(u8, n, "BASE-STRING") or std.mem.eql(u8, n, "SIMPLE-BASE-STRING")) return .string;
+    if (isBitVectorName(spec)) return .vector;
     return Error.TypeError;
 }
 
@@ -153,7 +154,14 @@ fn concatenateFn(p: *anyopaque, args: []const Value) Error!Value {
     for (args[1..]) |seq| {
         try collectElements(ev, seq, &elements);
     }
+    if (isBitVectorName(args[0])) return buildTyped(ev, .vector, .bit, elements.items);
     return build(ev, kind, elements.items);
+}
+
+fn isBitVectorName(spec: Value) bool {
+    if (!spec.isSymbol()) return false;
+    const n = symbol_mod.symbol(spec).name;
+    return std.mem.eql(u8, n, "BIT-VECTOR") or std.mem.eql(u8, n, "SIMPLE-BIT-VECTOR");
 }
 
 // --- copying and slicing ---

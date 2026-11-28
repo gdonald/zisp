@@ -50,9 +50,21 @@ is 1, or the `y`/`ies` pair with `@`. `:` re-reads the previous argument.
 
 ## Layout
 
-`~T` moves to a column, `~<...~>` lays segments out across a line, and
+`~T` moves to a column: `~colnum,colincT` to `colnum`, or past it by a
+multiple of `colinc`, and not at all with a `colinc` of zero, and
+`~colrel,colinc@T` on by `colrel` and then to a multiple of `colinc`.
+`~<...~>` lays segments out across a line, with the padding that does not
+divide evenly going to the rightmost gaps and `minpad` applying only
+between segments. A first segment ended by `~n,m:;` is written ahead of
+the rest only when the rest, with `n` spare columns, would run past
+column `m`, which is `*print-right-margin*` or 72 when not given.
+
 `~_`, `~I` and `~<...~:>` are the pretty printer's conditional newline,
-indentation and logical block.
+indentation and logical block, and `~:T` and `~:@T` its section tabs.
+Inside a logical block `~T` is a pretty printer tab too. `~<...~:@>` puts
+a fill newline after each run of blanks in its body's text. A
+justification `~<...~>` may hold none of these, and a control string with
+a `~:;` justification may use none of them anywhere.
 
 A logical block reads the elements of its list argument in turn. It
 stops at `*print-length*` and writes `...`, and at a tail that is not a
@@ -75,7 +87,10 @@ arguments run out, and `~:^` the whole iteration.
 takes a control string or function and an argument list and runs them
 here.
 `~(...~)` converts the case of what its body wrote. `~/name/` calls a
-function with the stream, the argument and the modifiers.
+function with the stream, the argument, whether `:` and `@` were given,
+and the parameters, which are read ahead of the argument. A `v`
+parameter whose argument is NIL is passed as not given, and a character
+parameter as the character.
 
 ## Parameters
 

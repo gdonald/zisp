@@ -120,7 +120,8 @@ condition object.
 Reading past the end of a stream is an `end-of-file`, and text the reader
 cannot make an object of a `reader-error`. Both carry the stream that was
 being read, which for `read-from-string` is a string stream over the
-string.
+string. Printing an object that cannot be read back with
+`*print-readably*` on is a `print-not-readable` carrying the object.
 
 Float arithmetic signals rather than producing an infinity: a result too
 large for its format is a `floating-point-overflow`, a product, quotient,

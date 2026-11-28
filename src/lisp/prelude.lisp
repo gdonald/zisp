@@ -681,10 +681,27 @@ there is one keyword constructor named make-NAME."
          (*print-right-margin* (getf ,options :right-margin *print-right-margin*)))
      ,@body))
 
+(defparameter *%print-option-keys*
+  '(:array :base :case :circle :escape :gensym :length :level :lines :miser-width
+    :pprint-dispatch :pretty :radix :readably :right-margin))
+
+(defun %check-print-options (options keys)
+  "Signal a program-error for an odd number of OPTIONS, or for a key not in
+KEYS unless the first :allow-other-keys among them is true."
+  (unless (evenp (length options))
+    (error 'program-error))
+  (unless (getf options :allow-other-keys)
+    (do ((rest options (cddr rest)))
+        ((null rest))
+      (unless (or (member (car rest) keys) (eq (car rest) :allow-other-keys))
+        (error 'program-error)))))
+
 (defun write-to-string (object &rest options)
+  (%check-print-options options *%print-option-keys*)
   (%with-print-options options (%write-to-string object)))
 
 (defun write (object &rest options)
+  (%check-print-options options (cons :stream *%print-option-keys*))
   (%with-print-options options (%write object (getf options :stream nil)))
   object)
 
@@ -692,27 +709,100 @@ there is one keyword constructor named make-NAME."
   (%proclaim declaration)
   nil)
 
-(defmacro pprint-logical-block ((stream-var object &key prefix per-line-prefix suffix)
+;; A logical block runs its body with STREAM-SYMBOL bound to a pretty
+;; stream, and with pprint-pop and pprint-exit-if-list-exhausted reading
+;; the list. An object that is not a list is written as it is, and one
+;; past *print-level*, or one *print-circle* has printed already, stands
+;; in as # or its #n#.
+(defmacro pprint-logical-block ((stream-symbol object &key (prefix nil prefix-p)
+                                                         (per-line-prefix nil per-line-p)
+                                                         (suffix ""))
                                 &body body)
-  "Print BODY as one logical block, breaking its conditional newlines only
-when the block will not fit before the right margin."
-  (when (and prefix per-line-prefix)
-    (error "cannot specify values for both prefix and per-line-prefix"))
-  (let ((target (gensym))
-        (pretty (gensym)))
-    `(let* ((,target ,stream-var)
-            (,pretty (%make-pretty-stream ,target))
-            (,stream-var ,pretty))
-       (declare (ignore ,object))
-       (unwind-protect
-            (progn
-              ;; A per-line prefix goes on the first line as well, so it
-              ;; serves as the block's prefix too.
-              (%pprint-block-start ,pretty ,(or prefix per-line-prefix "")
-                                   ,(or per-line-prefix "") "")
-              ,@body
-              (%pprint-block-end ,pretty ,(or suffix "")))
-         (%pretty-stream-finish ,pretty)))))
+  (let ((stream-var (cond ((null stream-symbol) '*standard-output*)
+                          ((eq stream-symbol t) '*terminal-io*)
+                          (t stream-symbol)))
+        (list (gensym "LIST"))
+        (count (gensym "COUNT"))
+        (done (gensym "DONE")))
+    `(%pprint-logical-block
+      ,stream-var ,object ,(if prefix-p prefix "") ,per-line-prefix ,suffix ,per-line-p ,(and prefix-p per-line-p)
+      (lambda (,stream-var ,list)
+        (let ((,count 0))
+          (declare (ignorable ,count))
+          (block ,done
+            (macrolet ((pprint-exit-if-list-exhausted ()
+                         '(when (null ,list) (return-from ,done nil)))
+                       (pprint-pop ()
+                         '(progn
+                           (when (%pprint-pop-stops ,stream-var ,list ,count)
+                             (return-from ,done nil))
+                           (setq ,count (+ ,count 1))
+                           (pop ,list))))
+              ,@body)))))))
+
+(defun %pprint-logical-block (stream object prefix per-line-prefix suffix per-line-p both body)
+  (when both
+    (error 'program-error))
+  (let ((stream (cond ((null stream) *standard-output*)
+                      ((eq stream t) *terminal-io*)
+                      (t stream))))
+    (unless (stringp prefix) (error 'type-error :datum prefix :expected-type 'string))
+    (when (and per-line-p (not (stringp per-line-prefix)))
+      (error 'type-error :datum per-line-prefix :expected-type 'string))
+    (unless (stringp suffix) (error 'type-error :datum suffix :expected-type 'string))
+    (if (not (listp object))
+        (write object :stream stream)
+        (multiple-value-bind (pretty fresh)
+            (%pprint-open stream object (or per-line-prefix prefix) (or per-line-prefix "") suffix)
+          (when pretty
+            (unwind-protect (funcall body pretty object)
+              (%pprint-close pretty suffix fresh))))))
+  nil)
+
+;; Whether pprint-pop stops instead of popping, having written what
+;; stands for the rest of the list: ". " and a tail that is not a list or
+;; is shared structure, or "..." past *print-length*.
+(defun %pprint-pop-stops (stream list count)
+  (cond ((not (listp list))
+         (write-string ". " stream)
+         (write list :stream stream)
+         t)
+        ((and *print-length* (not *print-readably*) (>= count *print-length*))
+         (write-string "..." stream)
+         t)
+        ((and list (> count 0) (%pprint-shared-p stream list))
+         (write-string ". " stream)
+         (write list :stream stream)
+         t)
+        (t nil)))
+
+(defun pprint-linear (stream list &optional (colon-p t) at-sign-p)
+  (declare (ignore at-sign-p))
+  (pprint-logical-block (stream list :prefix (if colon-p "(" "") :suffix (if colon-p ")" ""))
+    (pprint-exit-if-list-exhausted)
+    (loop (write (pprint-pop) :stream stream)
+          (pprint-exit-if-list-exhausted)
+          (write-char #\Space stream)
+          (pprint-newline :linear stream))))
+
+(defun pprint-fill (stream list &optional (colon-p t) at-sign-p)
+  (declare (ignore at-sign-p))
+  (pprint-logical-block (stream list :prefix (if colon-p "(" "") :suffix (if colon-p ")" ""))
+    (pprint-exit-if-list-exhausted)
+    (loop (write (pprint-pop) :stream stream)
+          (pprint-exit-if-list-exhausted)
+          (write-char #\Space stream)
+          (pprint-newline :fill stream))))
+
+(defun pprint-tabular (stream list &optional (colon-p t) at-sign-p (tabsize 16))
+  (declare (ignore at-sign-p))
+  (pprint-logical-block (stream list :prefix (if colon-p "(" "") :suffix (if colon-p ")" ""))
+    (pprint-exit-if-list-exhausted)
+    (loop (write (pprint-pop) :stream stream)
+          (pprint-exit-if-list-exhausted)
+          (write-char #\Space stream)
+          (pprint-tab :section-relative 0 tabsize stream)
+          (pprint-newline :fill stream))))
 
 (defmacro deftype (name lambda-list &body body)
   `(%put-deftype ',name

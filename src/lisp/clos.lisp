@@ -2615,12 +2615,14 @@ finds under NAME after it was renamed is not, and a new class is made."
     (when *print-readably*
       (error 'print-not-readable :object object))
     (write-string "#<" stream)
+    ;; The space after the type and the one before the identity are
+    ;; written whether or not the body writes anything between them.
     (when type
       (prin1 (type-of object) stream)
-      (when (or body identity) (write-char #\Space stream)))
+      (write-char #\Space stream))
     (when body (funcall body))
     (when identity
-      (when body (write-char #\Space stream))
+      (write-char #\Space stream)
       (format stream "{~X}" (%object-address object)))
     (write-string ">" stream)
     nil))

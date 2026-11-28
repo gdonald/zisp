@@ -229,6 +229,11 @@ test "reader macros corpus" {
     try testing.expectEqual(@as(u32, 32), checked);
 }
 
+test "pretty printer corpus" {
+    const checked = try runCorpus("pretty-printer", @embedFile("lisp/pretty-printer-corpus.lisp"));
+    try testing.expectEqual(@as(u32, 21), checked);
+}
+
 test "displaced string corpus" {
     const checked = try runCorpus("displaced-string", @embedFile("lisp/displaced-string-corpus.lisp"));
     try testing.expectEqual(@as(u32, 8), checked);

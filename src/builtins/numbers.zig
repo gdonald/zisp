@@ -97,6 +97,9 @@ pub fn registerNumbers(ev: *Evaluator) !void {
 
     _ = try ev.defineNative("RANDOM", &randomFn);
     _ = try ev.defineNative("MAKE-RANDOM-STATE", &makeRandomStateFn);
+    // What a random state printed readably reads back through.
+    symbol_mod.symbol(try ev.interner.internExtension("%RANDOM-STATE-FROM-WORDS")).function_cell =
+        try ev.makeNative("%RANDOM-STATE-FROM-WORDS", &randomStateFromWordsFn);
     _ = try ev.defineNative("RANDOM-STATE-P", &randomStatePFn);
 
     const initial = std.Random.Xoshiro256.init(DEFAULT_RANDOM_SEED);
@@ -1434,6 +1437,21 @@ fn makeRandomStateFn(p: *anyopaque, args: []const Value) Error!Value {
     const given: ?Value = if (args.len == 1 and !args[0].equalsRaw(value.NIL)) args[0] else null;
     const state = try randomStateOf(ev, given);
     return ev.heap.allocRandomState(state.state);
+}
+
+/// A random state holding the four words it is given.
+fn randomStateFromWordsFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 4) return Error.WrongArgCount;
+    var words: [4]u64 = undefined;
+    for (args, &words) |arg, *word| {
+        if (arg.isFixnum() and arg.toFixnum() >= 0) {
+            word.* = @intCast(arg.toFixnum());
+        } else if (heap.isBignum(arg)) {
+            word.* = heap.asBignum(arg).toConst().toInt(u64) catch return ev.typeMismatch(arg, "INTEGER");
+        } else return ev.typeMismatch(arg, "INTEGER");
+    }
+    return ev.heap.allocRandomState(words);
 }
 
 fn randomStatePFn(p: *anyopaque, args: []const Value) Error!Value {

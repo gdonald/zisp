@@ -137,6 +137,7 @@ pub fn registerNatives(ev: *Evaluator) !void {
     _ = try ev.defineNative("%LAST-ERROR-SYMBOL", &lastErrorSymbolFn);
     _ = try ev.defineNative("%LAST-TYPE-MISMATCH", &lastTypeMismatchFn);
     _ = try ev.defineNative("%LAST-ERROR-STREAM", &lastErrorStreamFn);
+    _ = try ev.defineNative("%LAST-ERROR-OBJECT", &lastErrorObjectFn);
 
     _ = try ev.defineNative("RPLACA", &rplacaFn);
     _ = try ev.defineNative("RPLACD", &rplacdFn);
@@ -652,6 +653,16 @@ fn lastErrorStreamFn(p: *anyopaque, args: []const Value) Error!Value {
     const stream = ev.error_stream;
     ev.error_stream = .{ .raw = 0 };
     return if (stream.raw == 0) value.NIL else stream;
+}
+
+/// The object the last print-not-readable failure could not print, or
+/// NIL, which is taken so it is reported once.
+fn lastErrorObjectFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 0) return Error.WrongArgCount;
+    const object = ev.error_object;
+    ev.error_object = .{ .raw = 0 };
+    return if (object.raw == 0) value.NIL else object;
 }
 
 fn lastTypeMismatchFn(p: *anyopaque, args: []const Value) Error!Value {

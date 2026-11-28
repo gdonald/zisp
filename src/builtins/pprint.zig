@@ -28,7 +28,7 @@ fn evaluator(p: *anyopaque) *Evaluator {
 }
 
 pub fn registerPprint(ev: *Evaluator) !void {
-    _ = try ev.defineNative("PPRINT", &pprintFn);
+    function.asFunction(try ev.defineNative("PPRINT", &pprintFn)).preserves_values = true;
     _ = try ev.defineNative("PRIN1", writerFn(.escape));
     _ = try ev.defineNative("PRINC", writerFn(.plain));
     _ = try ev.defineNative("%WRITE", writerFn(.current));
@@ -42,11 +42,12 @@ pub fn registerPprint(ev: *Evaluator) !void {
     _ = try ev.defineNative("PPRINT-NEWLINE", &pprintNewlineFn);
     _ = try ev.defineNative("PPRINT-INDENT", &pprintIndentFn);
     _ = try ev.defineNative("PPRINT-TAB", &pprintTabFn);
-    _ = try ev.defineNative("PPRINT-FILL", listPrinter(.fill));
-    _ = try ev.defineNative("PPRINT-LINEAR", listPrinter(.linear));
-    _ = try ev.defineNative("PPRINT-TABULAR", listPrinter(.fill));
+    function.asFunction(try ev.defineNative("%PPRINT-OPEN", &pprintOpenFn)).preserves_values = true;
+    _ = try ev.defineNative("%PPRINT-CLOSE", &pprintCloseFn);
+    _ = try ev.defineNative("%PPRINT-SHARED-P", &pprintSharedFn);
     _ = try ev.defineNative("SET-PPRINT-DISPATCH", &setPprintDispatchFn);
     _ = try ev.defineNative("COPY-PPRINT-DISPATCH", &copyPprintDispatchFn);
+    _ = try ev.defineNative("%PPRINT-DISPATCH-TABLE-P", &tablePFn);
     function.asFunction(try ev.defineNative("PPRINT-DISPATCH", &pprintDispatchFn))
         .preserves_values = true;
 
@@ -106,7 +107,7 @@ fn finishFn(p: *anyopaque, args: []const Value) Error!Value {
     return finish(ev, try expectPretty(args[0]));
 }
 
-fn finish(ev: *Evaluator, s: *Stream) Error!Value {
+pub fn finish(ev: *Evaluator, s: *Stream) Error!Value {
     const target = try streams.streamOf(ev, s.target, .output);
 
     var tokens: std.ArrayList(pretty.Token) = .empty;
@@ -118,7 +119,8 @@ fn finish(ev: *Evaluator, s: *Stream) Error!Value {
     const text = try pretty.layout(ev.allocator, tokens.items, .{
         .right_margin = try marginOf(ev),
         .miser_width = try miserWidthOf(ev),
-        .start_column = if (target.kind == .console) ev.output_column else 0,
+        .lines = try linesOf(ev),
+        .start_column = s.write_position,
     });
     defer ev.allocator.free(text);
     try streams.emitBytes(ev, target, text);
@@ -130,6 +132,7 @@ fn resolve(s: *Stream, token: heap.PrettyToken) Error!pretty.Token {
         .text => |span| .{ .text = s.output.items[span.start .. span.start + span.len] },
         .newline => |kind| .{ .newline = kind },
         .indent => |request| .{ .indent = .{ .kind = request.kind, .amount = request.amount } },
+        .tab => |tab| .{ .tab = .{ .kind = tab.kind, .colnum = tab.colnum, .colinc = tab.colinc } },
         .block_start => |block| .{ .block_start = .{
             .prefix = spanText(s, block.prefix),
             .per_line = spanText(s, block.per_line),
@@ -147,6 +150,14 @@ fn marginOf(ev: *Evaluator) Error!usize {
     const v = try variableOf(ev, "*PRINT-RIGHT-MARGIN*");
     if (v.isFixnum() and v.toFixnum() > 0) return @intCast(v.toFixnum());
     return 80;
+}
+
+fn linesOf(ev: *Evaluator) Error!?usize {
+    // What must read back is printed whole.
+    if (!(try variableOf(ev, "*PRINT-READABLY*")).equalsRaw(value.NIL)) return null;
+    const v = try variableOf(ev, "*PRINT-LINES*");
+    if (v.isFixnum() and v.toFixnum() >= 0) return @intCast(v.toFixnum());
+    return null;
 }
 
 fn miserWidthOf(ev: *Evaluator) Error!?usize {
@@ -167,46 +178,62 @@ fn blockStartFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 4) return Error.WrongArgCount;
     const s = try expectPretty(args[0]);
-    const prefix = try intern(ev, s, try textOf(ev, args[1]));
-    const per_line = try intern(ev, s, try textOf(ev, args[2]));
-    const suffix = try intern(ev, s, try textOf(ev, args[3]));
+    try blockStart(ev, s, try textOf(ev, args[1]), try textOf(ev, args[2]), try textOf(ev, args[3]));
+    return value.NIL;
+}
+
+pub fn blockStart(ev: *Evaluator, s: *Stream, prefix_text: []const u8, per_line_text: []const u8, suffix_text: []const u8) Error!void {
+    const prefix = try intern(ev, s, prefix_text);
+    const per_line = try intern(ev, s, per_line_text);
+    const suffix = try intern(ev, s, suffix_text);
     try s.tokens.append(ev.heap.storage, .{ .block_start = .{
         .prefix = prefix,
         .per_line = per_line,
         .suffix = suffix,
     } });
     s.block_depth += 1;
-    return value.NIL;
 }
 
 fn blockEndFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len != 2) return Error.WrongArgCount;
     const s = try expectPretty(args[0]);
-    if (s.block_depth == 0) return Error.ControlError;
-    const suffix = try intern(ev, s, try textOf(ev, args[1]));
-    try s.tokens.append(ev.heap.storage, .{ .text = .{ .start = suffix.start, .len = suffix.len } });
-    try s.tokens.append(ev.heap.storage, .{ .block_end = suffix });
-    s.block_depth -= 1;
+    try blockEnd(ev, s, try textOf(ev, args[1]));
     return value.NIL;
 }
 
-/// A newline or indent request outside a pretty stream does nothing,
-/// which is what CLHS says about a stream that is not pretty.
+pub fn blockEnd(ev: *Evaluator, s: *Stream, suffix_text: []const u8) Error!void {
+    if (s.block_depth == 0) return Error.ControlError;
+    const suffix = try intern(ev, s, suffix_text);
+    try s.tokens.append(ev.heap.storage, .{ .text = .{ .start = suffix.start, .len = suffix.len } });
+    try s.tokens.append(ev.heap.storage, .{ .block_end = suffix });
+    s.block_depth -= 1;
+}
+
+/// A newline, indent or tab request does nothing outside a pretty
+/// stream, or with `*print-pretty*` off (CLHS `pprint-newline`).
 fn prettyTargetOf(ev: *Evaluator, given: ?Value) Error!?*Stream {
     const s = try streams.streamOf(ev, given, .output);
     if (s.kind != .pretty) return null;
+    if (!try prettyWanted(ev)) return null;
     return s;
 }
 
+const NEWLINE_KINDS = [_][]const u8{ "LINEAR", "FILL", "MISER", "MANDATORY" };
+
 fn newlineKindOf(ev: *Evaluator, v: Value) Error!pretty.NewlineKind {
-    if (!v.isSymbol()) return Error.TypeError;
-    const n = symbol_mod.symbol(v).name;
-    if (std.mem.eql(u8, n, "LINEAR")) return .linear;
-    if (std.mem.eql(u8, n, "FILL")) return .fill;
-    if (std.mem.eql(u8, n, "MISER")) return .miser;
-    if (std.mem.eql(u8, n, "MANDATORY")) return .mandatory;
-    _ = ev;
+    inline for (NEWLINE_KINDS, 0..) |name, i| {
+        if (v.equalsRaw(try ev.interner.internKeyword(name))) return @fromBackingInt(@intCast(i));
+    }
+    // The type the kind has to be of, for the condition.
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(v);
+    var builder = ev.heap.listBuilder();
+    try builder.append(try ev.interner.intern("MEMBER"));
+    for (NEWLINE_KINDS) |name| try builder.append(try ev.interner.internKeyword(name));
+    ev.error_expected = builder.finish();
+    ev.error_datum = held.items()[0];
     return Error.TypeError;
 }
 
@@ -219,76 +246,156 @@ fn pprintNewlineFn(p: *anyopaque, args: []const Value) Error!Value {
     return value.NIL;
 }
 
+/// `(pprint-indent relative-to n &optional stream)`. N is a real, taken
+/// as the integer it truncates to.
 fn pprintIndentFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 2 or args.len > 3) return Error.WrongArgCount;
-    if (!args[0].isSymbol()) return Error.TypeError;
-    const name = symbol_mod.symbol(args[0]).name;
-    const kind: pretty.IndentKind = if (std.mem.eql(u8, name, "BLOCK"))
+    const kind: pretty.IndentKind = if (args[0].equalsRaw(try ev.interner.internKeyword("BLOCK")))
         .block
-    else if (std.mem.eql(u8, name, "CURRENT"))
+    else if (args[0].equalsRaw(try ev.interner.internKeyword("CURRENT")))
         .current
     else
-        return Error.TypeError;
-    if (!args[1].isFixnum()) return Error.TypeError;
+        return ev.typeMismatch(args[0], "SYMBOL");
+    if (!isReal(args[1])) return ev.typeMismatch(args[1], "REAL");
+    const amount: i64 = std.math.lossyCast(i64, @trunc(equality.toF64(args[1])));
     const s = try prettyTargetOf(ev, if (args.len == 3) args[2] else null) orelse return value.NIL;
-    try s.tokens.append(ev.heap.storage, .{
-        .indent = .{ .kind = kind, .amount = args[1].toFixnum() },
-    });
+    try recordIndent(ev, s, kind, amount);
     return value.NIL;
 }
 
-/// `pprint-tab` moves to a column. Only the section-relative forms differ
-/// from the line-relative ones once a block has an indent, and both land
-/// on an indent request here.
+fn tabKindOf(v: Value) ?pretty.TabKind {
+    if (!v.isSymbol()) return null;
+    const n = symbol_mod.symbol(v).name;
+    if (std.mem.eql(u8, n, "LINE")) return .line;
+    if (std.mem.eql(u8, n, "SECTION")) return .section;
+    if (std.mem.eql(u8, n, "LINE-RELATIVE")) return .line_relative;
+    if (std.mem.eql(u8, n, "SECTION-RELATIVE")) return .section_relative;
+    return null;
+}
+
+fn expectCount(ev: *Evaluator, v: Value) Error!u32 {
+    if (!v.isFixnum() or v.toFixnum() < 0) return ev.typeMismatch(v, "UNSIGNED-BYTE");
+    return std.math.cast(u32, v.toFixnum()) orelse std.math.maxInt(u32);
+}
+
+/// `(pprint-tab kind colnum colinc &optional stream)`.
 fn pprintTabFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 3 or args.len > 4) return Error.WrongArgCount;
-    if (!args[1].isFixnum() or !args[2].isFixnum()) return Error.TypeError;
+    const kind = tabKindOf(args[0]) orelse return ev.typeMismatch(args[0], "SYMBOL");
+    const colnum = try expectCount(ev, args[1]);
+    const colinc = try expectCount(ev, args[2]);
     const s = try prettyTargetOf(ev, if (args.len == 4) args[3] else null) orelse return value.NIL;
-    try s.tokens.append(ev.heap.storage, .{
-        .indent = .{ .kind = .block, .amount = args[1].toFixnum() },
-    });
+    try recordTab(ev, s, kind, colnum, colinc);
     return value.NIL;
+}
+
+pub fn recordTab(ev: *Evaluator, s: *Stream, kind: pretty.TabKind, colnum: u32, colinc: u32) Error!void {
+    try s.tokens.append(ev.heap.storage, .{ .tab = .{ .kind = kind, .colnum = colnum, .colinc = colinc } });
+}
+
+pub fn recordNewline(ev: *Evaluator, s: *Stream, kind: pretty.NewlineKind) Error!void {
+    try s.tokens.append(ev.heap.storage, .{ .newline = kind });
+}
+
+pub fn recordIndent(ev: *Evaluator, s: *Stream, kind: pretty.IndentKind, amount: i64) Error!void {
+    try s.tokens.append(ev.heap.storage, .{ .indent = .{ .kind = kind, .amount = amount } });
+}
+
+// --- logical blocks ---
+
+/// `(%pprint-open stream object prefix per-line-prefix suffix)` opens a
+/// logical block for OBJECT on STREAM, which is given a pretty stream of
+/// its own unless it is one. Returns that stream and whether it is new,
+/// or NIL where the block stands in as `#` past `*print-level*` or as the
+/// `#n#` of an object already printed.
+fn pprintOpenFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 5) return Error.WrongArgCount;
+    const given = try streams.streamOf(ev, args[0], .output);
+    var held = ev.heap.protect();
+    defer held.close();
+    const fresh = given.kind != .pretty;
+    try held.push(if (fresh) try openPretty(ev, Value.fromHeapAddr(@intFromPtr(given))) else Value.fromHeapAddr(@intFromPtr(given)));
+    const s = heap.asStream(held.items()[0]);
+    if (fresh) try attachCircle(ev, s, args[1]);
+    if (try levelExceeded(ev, s)) {
+        try recordText(ev, s, "#");
+        if (fresh) _ = try finish(ev, s);
+        return ev.setValues(&.{ value.NIL, value.NIL });
+    }
+    if (s.circle) |state| {
+        if (state.get(args[1])) |label| {
+            const id = state.assign(label);
+            var buf: [24]u8 = undefined;
+            if (label.printed) {
+                try recordText(ev, s, std.fmt.bufPrint(&buf, "#{d}#", .{id}) catch unreachable);
+                if (fresh) _ = try finish(ev, s);
+                return ev.setValues(&.{ value.NIL, value.NIL });
+            }
+            label.printed = true;
+            try recordText(ev, s, std.fmt.bufPrint(&buf, "#{d}=", .{id}) catch unreachable);
+        }
+    }
+    _ = try blockStartFn(p, &.{ held.items()[0], args[2], args[3], args[4] });
+    return ev.setValues(&.{ held.items()[0], if (fresh) value.T else value.NIL });
+}
+
+/// Whether a block opened at this depth is past `*print-level*`.
+pub fn levelExceeded(ev: *Evaluator, s: *Stream) Error!bool {
+    if (!(try variableOf(ev, "*PRINT-READABLY*")).equalsRaw(value.NIL)) return false;
+    const level = try variableOf(ev, "*PRINT-LEVEL*");
+    if (!level.isFixnum()) return false;
+    return s.block_depth >= level.toFixnum();
+}
+
+/// `(%pprint-close stream suffix fresh)` ends the block, and lays a
+/// fresh pretty stream out onto the stream it was made for.
+fn pprintCloseFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 3) return Error.WrongArgCount;
+    const s = try expectPretty(args[0]);
+    _ = try blockEndFn(p, args[0..2]);
+    if (!args[2].equalsRaw(value.NIL)) _ = try finish(ev, s);
+    return value.NIL;
+}
+
+/// Whether `*print-circle*` labels OBJECT in the block STREAM is laying
+/// out, which makes a tail a back-reference.
+fn pprintSharedFn(p: *anyopaque, args: []const Value) Error!Value {
+    _ = p;
+    if (args.len != 2) return Error.WrongArgCount;
+    if (!heap.isStream(args[0])) return value.NIL;
+    const state = heap.asStream(args[0]).circle orelse return value.NIL;
+    return if (state.get(args[1]) != null) value.T else value.NIL;
 }
 
 // --- printing a list ---
 
 const ListStyle = enum { linear, fill };
 
-fn listPrinter(comptime style: ListStyle) function.NativeFn {
-    return struct {
-        fn f(p: *anyopaque, args: []const Value) Error!Value {
-            const ev = evaluator(p);
-            if (args.len < 2) return Error.WrongArgCount;
-            // CLHS 22.2.1: the parentheses go on unless the caller said
-            // otherwise, and an object that is not a list is written as
-            // it stands.
-            const parens = if (args.len >= 3) !args[2].equalsRaw(value.NIL) else true;
-            const object = args[1];
-            if (!object.isCons() and !object.equalsRaw(value.NIL)) {
-                try writeValue(ev, object, args[0], .escape);
-                return value.NIL;
-            }
-            // Writing onto a stream that is already pretty joins its
-            // layout; any other stream gets one of its own.
-            if (try prettyTargetOf(ev, args[0])) |s| {
-                try printList(ev, s, object, style, parens);
-                return value.NIL;
-            }
-            const wrapper = try openPretty(ev, args[0]);
-            try attachCircle(ev, heap.asStream(wrapper), object);
-            try printList(ev, heap.asStream(wrapper), object, style, parens);
-            return finishFn(p, &.{wrapper});
-        }
-    }.f;
-}
-
 /// A pretty stream that lays itself out onto `target` when it finishes.
-fn openPretty(ev: *Evaluator, target: Value) Error!Value {
+pub fn openPretty(ev: *Evaluator, target: Value) Error!Value {
     var stream = streams.emptyStream(.pretty, .output);
     stream.target = target;
+    // Where the layout starts, which the first line's room is counted
+    // from.
+    stream.write_position = try columnOf(ev, try streams.streamOf(ev, target, .output));
     return ev.heap.allocStream(stream);
+}
+
+/// The column a stream's output has reached.
+pub fn columnOf(ev: *Evaluator, s: *Stream) Error!usize {
+    if (s.kind == .console) return ev.output_column;
+    if (s.kind == .pretty) return 0;
+    const written = s.output.items[0..@min(s.write_position, s.output.items.len)];
+    const line = if (std.mem.lastIndexOfScalar(u8, written, '\n')) |at| written[at + 1 ..] else written;
+    var n: usize = 0;
+    for (line) |b| {
+        if (b & 0xC0 != 0x80) n += 1;
+    }
+    return n;
 }
 
 fn printList(
@@ -365,7 +472,7 @@ fn recordValue(ev: *Evaluator, s: *Stream, v: Value) Error!void {
 fn attachCircle(ev: *Evaluator, s: *Stream, v: Value) Error!void {
     if (!format.circleWanted(ev)) return;
     const state = try ev.heap.storage.create(circle_mod.State);
-    state.* = try circle_mod.scan(ev.heap.storage, v);
+    state.* = try circle_mod.scanLimited(ev.heap.storage, v, format.circleLimits(ev));
     s.circle = state;
 }
 
@@ -375,34 +482,43 @@ fn dispatchFor(ev: *Evaluator, v: Value) Error!?Value {
     return lookupDispatch(ev, v, try variableOf(ev, "*PRINT-PPRINT-DISPATCH*"));
 }
 
+/// The function of the matching entry with the highest priority, the
+/// most recently set among equals, resolved from a symbol when it names
+/// one.
 fn lookupDispatch(ev: *Evaluator, v: Value, table: Value) Error!?Value {
     const types = @import("types.zig");
+    var best: ?Value = null;
+    var best_priority: f64 = 0;
     var rest = table;
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
         const entry = heap.car(rest);
         if (!entry.isCons() or !heap.cdr(entry).isCons()) continue;
         const spec = heap.car(entry);
         const handler = heap.car(heap.cdr(entry));
+        const tail = heap.cdr(heap.cdr(entry));
+        const priority = if (tail.isCons()) equality.toF64(heap.car(tail)) else 0;
+        if (best != null and priority <= best_priority) continue;
         if (!(types.typep(ev, v, spec) catch false)) continue;
-        if (handler.equalsRaw(value.NIL)) return null;
-        return handler;
+        best = handler;
+        best_priority = priority;
     }
-    return null;
+    const handler = best orelse return null;
+    if (handler.isSymbol()) return ev.env.lookupFunction(handler);
+    return handler;
 }
 
 fn pprintFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
-    const target = try streams.streamOf(ev, if (args.len == 2) args[1] else null, .output);
-
-    _ = target;
-    const pretty_value = try openPretty(ev, if (args.len == 2) args[1] else value.NIL);
-    const s = heap.asStream(pretty_value);
-    try attachCircle(ev, s, args[0]);
-    // `pprint` starts on a line of its own.
-    try recordText(ev, s, "\n");
-    try recordValue(ev, s, args[0]);
-    return finishFn(p, &.{pretty_value});
+    const stream = if (args.len == 2) args[1] else value.NIL;
+    // `pprint` is `write` with escaping and pretty printing on, after a
+    // newline that puts the object on a line of its own.
+    try streams.emitBytes(ev, try streams.streamOf(ev, stream, .output), "\n");
+    const mark = ev.dynamicMark();
+    defer ev.unwindSpecials(mark);
+    try ev.bindSpecial(try ev.interner.intern("*PRINT-PRETTY*"), value.T);
+    try writeValue(ev, args[0], stream, .escape);
+    return ev.setValues(&.{});
 }
 
 // --- the dispatch table ---
@@ -411,21 +527,58 @@ fn pprintFn(p: *anyopaque, args: []const Value) Error!Value {
 /// can be changed in place, followed by `(type-specifier function
 /// priority)` entries, most recently set first. A lookup passes over the
 /// head, which is not an entry.
+fn isReal(v: Value) bool {
+    if (v.isFixnum() or v.isSingleFloat()) return true;
+    if (v.tag() != .heap) return false;
+    return switch (heap.heapType(v)) {
+        .bignum, .ratio, .double_float => true,
+        else => false,
+    };
+}
+
 fn emptyTable(ev: *Evaluator) Error!Value {
     return ev.heap.list(&.{try ev.interner.intern("%PPRINT-DISPATCH-TABLE")});
 }
 
+fn isTable(ev: *Evaluator, v: Value) Error!bool {
+    return v.isCons() and heap.car(v).equalsRaw(try ev.interner.intern("%PPRINT-DISPATCH-TABLE"));
+}
+
 fn expectTable(ev: *Evaluator, v: Value) Error!Value {
-    if (v.isCons() and heap.car(v).equalsRaw(try ev.interner.intern("%PPRINT-DISPATCH-TABLE"))) return v;
-    return ev.typeMismatch(v, "LIST");
+    if (try isTable(ev, v)) return v;
+    var held = ev.heap.protect();
+    defer held.close();
+    try held.push(v);
+    ev.error_expected = try ev.heap.list(&.{ try ev.interner.intern("SATISFIES"), try ev.interner.intern("%PPRINT-DISPATCH-TABLE-P") });
+    ev.error_datum = held.items()[0];
+    return Error.TypeError;
+}
+
+fn tablePFn(p: *anyopaque, args: []const Value) Error!Value {
+    const ev = evaluator(p);
+    if (args.len != 1) return Error.WrongArgCount;
+    return if (try isTable(ev, args[0])) value.T else value.NIL;
 }
 
 fn setPprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
     const ev = evaluator(p);
     if (args.len < 2 or args.len > 4) return Error.WrongArgCount;
     const priority = if (args.len >= 3) args[2] else Value.fromFixnum(0);
+    if (!isReal(priority)) return ev.typeMismatch(priority, "REAL");
+    if (!(args[1].isSymbol() or function.isFunction(args[1]))) return ev.typeMismatch(args[1], "FUNCTION");
     const table = try expectTable(ev, if (args.len == 4) args[3] else try variableOf(ev, "*PRINT-PPRINT-DISPATCH*"));
 
+    // An entry for the same type is replaced, and a NIL function removes it.
+    var previous = table;
+    while (heap.cdr(previous).isCons()) {
+        const entry = heap.car(heap.cdr(previous));
+        if (equality.equal(heap.car(entry), args[0])) {
+            heap.setCdr(ev.heap, previous, heap.cdr(heap.cdr(previous)));
+        } else {
+            previous = heap.cdr(previous);
+        }
+    }
+    if (args[1].equalsRaw(value.NIL)) return value.NIL;
     var held = ev.heap.protect();
     defer held.close();
     try held.push(table);
@@ -473,10 +626,16 @@ fn pprintDispatchFn(p: *anyopaque, args: []const Value) Error!Value {
 /// `*print-escape*` says.
 pub const WriteStyle = enum { escape, plain, current };
 
-/// Call a dispatch function for `v` with the printer variables `style`
-/// says bound, as `princ` binds `*print-escape*` and `*print-readably*`
-/// off and `prin1` binds `*print-escape*` on.
-fn callDispatch(ev: *Evaluator, handler: Value, stream: Value, v: Value, comptime style: WriteStyle) Error!void {
+/// Whether printing should lay a list out rather than run it flat.
+fn prettyWanted(ev: *Evaluator) Error!bool {
+    return !(try variableOf(ev, "*PRINT-PRETTY*")).equalsRaw(value.NIL);
+}
+
+/// Print `v` to `stream` the way `style` says: `princ` binds
+/// `*print-escape*` and `*print-readably*` off and `prin1` binds
+/// `*print-escape*` on, so everything printed inside, a dispatch
+/// function or a pretty layout included, sees the same settings.
+pub fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyle) Error!void {
     const mark = ev.dynamicMark();
     defer ev.unwindSpecials(mark);
     switch (style) {
@@ -487,63 +646,34 @@ fn callDispatch(ev: *Evaluator, handler: Value, stream: Value, v: Value, comptim
         .escape => try ev.bindSpecial(try ev.interner.intern("*PRINT-ESCAPE*"), value.T),
         .current => {},
     }
-    _ = try ev.callFunction(handler, &.{ stream, v });
-}
-
-/// The text a dispatch function prints for `v` when printing is pretty
-/// and the dispatch table has an entry for an object that is not a list,
-/// or null when the printer prints it as it is.
-pub fn dispatchedText(ev: *Evaluator, v: Value, comptime style: WriteStyle) Error!?Value {
-    if (v.isCons() or !try prettyWanted(ev)) return null;
-    const handler = try dispatchFor(ev, v) orelse return null;
-    var held = ev.heap.protect();
-    defer held.close();
-    try held.push(handler);
-    try held.push(v);
-    try held.push(try ev.heap.allocStream(streams.emptyStream(.string, .output)));
-    try callDispatch(ev, held.items()[0], held.items()[2], held.items()[1], style);
-    return try ev.heap.allocString(heap.asStream(held.items()[2]).output.items);
-}
-
-/// Whether printing should lay a list out rather than run it flat.
-fn prettyWanted(ev: *Evaluator) Error!bool {
-    return !(try variableOf(ev, "*PRINT-PRETTY*")).equalsRaw(value.NIL);
-}
-
-fn writeValue(ev: *Evaluator, v: Value, stream: Value, comptime style: WriteStyle) Error!void {
     const target = try streams.streamOf(ev, stream, .output);
-    if (!v.isCons() and try prettyWanted(ev)) {
-        if (try dispatchFor(ev, v)) |handler| {
-            return callDispatch(ev, handler, Value.fromHeapAddr(@intFromPtr(target)), v, style);
-        }
-    }
-    if (style != .plain and v.isCons() and try prettyWanted(ev)) {
-        if (target.kind == .pretty) {
-            try recordValue(ev, target, v);
+    if (try prettyWanted(ev)) {
+        if (!v.isCons()) {
+            if (try dispatchFor(ev, v)) |handler| {
+                _ = try ev.callFunction(handler, &.{ Value.fromHeapAddr(@intFromPtr(target)), v });
+                return;
+            }
+        } else {
+            if (target.kind == .pretty) return recordValue(ev, target, v);
+            const wrapper = try openPretty(ev, stream);
+            try attachCircle(ev, heap.asStream(wrapper), v);
+            try recordValue(ev, heap.asStream(wrapper), v);
+            _ = try finish(ev, heap.asStream(wrapper));
             return;
         }
-        const wrapper = try openPretty(ev, stream);
-        try attachCircle(ev, heap.asStream(wrapper), v);
-        try recordValue(ev, heap.asStream(wrapper), v);
-        _ = try finish(ev, heap.asStream(wrapper));
-        return;
     }
-    if (style == .plain) {
+    var settings = format.writeSettings(ev);
+    if (!settings.escape) {
         var arena = std.heap.ArenaAllocator.init(ev.allocator);
         defer arena.deinit();
         if (try format.reportText(ev, arena.allocator(), v)) |text| {
             return streams.emitBytes(ev, target, text);
         }
     }
-    var settings = switch (style) {
-        .escape => format.prin1Settings(ev),
-        .plain => format.princSettings(ev),
-        .current => format.writeSettings(ev),
-    };
     var state: ?circle_mod.State = null;
     defer if (state) |*owned| owned.deinit(ev.allocator);
     if (format.circleWanted(ev)) {
-        state = try circle_mod.scan(ev.allocator, v);
+        state = try circle_mod.scanLimited(ev.allocator, v, format.circleLimits(ev));
         settings.circle = &state.?;
     }
     const text = printer.writeToOwnedSlice(ev.allocator, v, settings) catch |e| return ev.printFailure(e);
@@ -555,7 +685,7 @@ fn writerFn(comptime style: WriteStyle) function.NativeFn {
     return struct {
         fn f(p: *anyopaque, args: []const Value) Error!Value {
             const ev = evaluator(p);
-            if (args.len < 1) return Error.WrongArgCount;
+            if (args.len < 1 or args.len > 2) return Error.WrongArgCount;
             const stream = if (args.len >= 2) args[1] else value.NIL;
             try writeValue(ev, args[0], stream, style);
             return args[0];

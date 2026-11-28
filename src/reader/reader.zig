@@ -96,6 +96,9 @@ const TokenChar = struct { code: u21, escaped: bool };
 const Token = struct {
     chars: std.ArrayListUnmanaged(TokenChar) = .empty,
     escaped: bool = false,
+    /// How many characters the token held when its last `|...|` closed,
+    /// so `pkg::||` names the empty symbol rather than ending at a colon.
+    escape_end: ?usize = null,
 
     fn deinit(self: *Token, allocator: std.mem.Allocator) void {
         self.chars.deinit(allocator);
@@ -449,7 +452,10 @@ pub const Reader = struct {
                     token.escaped = true;
                     const y = try self.nextCharOrEnd();
                     switch (self.syntaxOf(y)) {
-                        .multiple_escape => break,
+                        .multiple_escape => {
+                            token.escape_end = token.chars.items.len;
+                            break;
+                        },
                         .single_escape => try token.append(gpa, try self.nextCharOrEnd(), true),
                         else => try token.append(gpa, y, true),
                     }
@@ -484,7 +490,7 @@ pub const Reader = struct {
             }
             if (try self.numberFromToken(chars, start)) |n| return .{ .value = n };
         }
-        return .{ .value = try self.symbolFromToken(chars, start) };
+        return .{ .value = try self.symbolFromToken(chars, token.escape_end, start) };
     }
 
     fn allDots(chars: []const TokenChar) bool {
@@ -604,7 +610,7 @@ pub const Reader = struct {
         return out.toOwnedSlice(self.allocator());
     }
 
-    fn symbolFromToken(self: *Reader, chars: []const TokenChar, start: Position) Error!Value {
+    fn symbolFromToken(self: *Reader, chars: []const TokenChar, escape_end: ?usize, start: Position) Error!Value {
         const case = self.effectiveCase(chars);
         var colons: [3]usize = undefined;
         var count: usize = 0;
@@ -624,7 +630,8 @@ pub const Reader = struct {
         const double = count == 2 and colons[1] == first + 1;
         if (count > 2 or (count == 2 and !double)) return self.failAt(start, Error.BadToken);
         const name_start = first + count;
-        if (name_start >= chars.len and first != 0) return self.failAt(start, Error.BadToken);
+        const escaped_name = if (escape_end) |at| at >= name_start else false;
+        if (name_start >= chars.len and first != 0 and !escaped_name) return self.failAt(start, Error.BadToken);
         const name = try self.foldName(chars[name_start..], case);
         defer self.allocator().free(name);
         if (first == 0) return self.interner.internKeyword(name);

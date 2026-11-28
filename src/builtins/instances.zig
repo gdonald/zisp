@@ -418,7 +418,7 @@ fn printObject(ev: *Evaluator, writer: *std.Io.Writer, v: Value, settings: print
     const print_object = ev.env.lookupFunction(try ev.interner.intern("PRINT-OBJECT")) orelse {
         var unhooked = settings;
         unhooked.unhooked = v;
-        return printer.write(ev.allocator, writer, v, unhooked);
+        return printer.write(ev.allocator, writer, v, unhooked) catch |e| ev.printFailure(e);
     };
     var held = ev.heap.protect();
     defer held.close();

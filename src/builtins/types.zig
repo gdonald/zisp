@@ -650,8 +650,9 @@ fn coerceFn(p: *anyopaque, args: []const Value) Error!Value {
 
     // What `concatenate` builds one of, given the same specifier.
     const sequence_types = [_][]const u8{
-        "LIST",          "VECTOR",      "STRING",             "SIMPLE-VECTOR",
-        "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "ARRAY",
+        "LIST",          "VECTOR",            "STRING",             "SIMPLE-VECTOR",
+        "SIMPLE-STRING", "BASE-STRING",       "SIMPLE-BASE-STRING", "ARRAY",
+        "BIT-VECTOR",    "SIMPLE-BIT-VECTOR",
     };
     for (sequence_types) |candidate| {
         if (std.mem.eql(u8, name, candidate)) {

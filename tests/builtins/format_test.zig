@@ -197,7 +197,12 @@ test "tilde T past its column steps forward by colinc" {
     const fx = try newFx();
     defer fx.deinit(testing.allocator);
     try fx.expectFormat("(format nil \"abcde~2,4Tx\")", "abcde x");
-    try fx.expectFormat("(format nil \"abc~2,0Tx\")", "abc x");
+}
+
+test "tilde T past its column with a colinc of zero stays where it is" {
+    const fx = try newFx();
+    defer fx.deinit(testing.allocator);
+    try fx.expectFormat("(format nil \"abc~2,0Tx\")", "abcx");
 }
 
 // --- parameters ---

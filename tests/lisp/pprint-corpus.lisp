@@ -16,8 +16,11 @@
   (defun laid-out (form margin)
     (let ((*print-right-margin* margin))
       (with-output-to-string (s) (pprint form s))))
+  ;; pprint-fill breaks lines only with *print-pretty* on, which SBCL
+  ;; has on by default.
   (defun laid-out-fill (form margin)
-    (let ((*print-right-margin* margin))
+    (let ((*print-right-margin* margin)
+          (*print-pretty* t))
       (with-output-to-string (s) (pprint-fill s form))))
   t)
 
@@ -123,7 +126,7 @@
 
 ;; 19. The same block breaks when it does not fit, and the break takes the
 ;;     separating blank with it.
-(string= (let ((*print-right-margin* 4))
+(string= (let ((*print-right-margin* 4) (*print-pretty* t))
            (with-output-to-string (s)
              (pprint-logical-block (s nil :prefix "(" :suffix ")")
                (write-string "aaa" s)
@@ -134,7 +137,7 @@
  bbb)")
 
 ;; 20. A mandatory newline breaks however much room is left.
-(string= (let ((*print-right-margin* 80))
+(string= (let ((*print-right-margin* 80) (*print-pretty* t))
            (with-output-to-string (s)
              (pprint-logical-block (s nil :prefix "(" :suffix ")")
                (write-string "a" s)
@@ -144,7 +147,7 @@
  b)")
 
 ;; 21. pprint-indent moves where later breaks land.
-(string= (let ((*print-right-margin* 4))
+(string= (let ((*print-right-margin* 4) (*print-pretty* t))
            (with-output-to-string (s)
              (pprint-logical-block (s nil :prefix "(" :suffix ")")
                (pprint-indent :block 3 s)
@@ -156,7 +159,7 @@
 
 ;; 22. A per-line prefix goes on every line the block wraps onto. CLHS
 ;;     forbids giving both a prefix and a per-line prefix.
-(string= (let ((*print-right-margin* 4))
+(string= (let ((*print-right-margin* 4) (*print-pretty* t))
            (with-output-to-string (s)
              (pprint-logical-block (s nil :per-line-prefix ";" :suffix ")")
                (write-string "aaa" s)
@@ -170,7 +173,7 @@
 ;; 23. A block with no more room left than the miser width lays out in
 ;;     miser style, where a fill newline behaves as a linear one and every
 ;;     part lands on its own line.
-(string= (let ((*print-right-margin* 30) (*print-miser-width* 30))
+(string= (let ((*print-right-margin* 30) (*print-miser-width* 30) (*print-pretty* t))
            (with-output-to-string (s)
              (pprint-fill s '(aaaa bbbb cccc dddd eeee ffff gggg))))
          "(AAAA
@@ -182,7 +185,7 @@
  GGGG)")
 
 ;; 24. Without the miser width the same form fills.
-(string= (let ((*print-right-margin* 30) (*print-miser-width* nil))
+(string= (let ((*print-right-margin* 30) (*print-miser-width* nil) (*print-pretty* t))
            (with-output-to-string (s)
              (pprint-fill s '(aaaa bbbb cccc dddd eeee ffff gggg))))
          "(AAAA BBBB CCCC DDDD EEEE

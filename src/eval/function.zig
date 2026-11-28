@@ -38,6 +38,7 @@ pub const NativeError = error{
     FileError,
     EndOfFile,
     ReaderError,
+    PrintNotReadable,
     NoOutputStream,
     Quit,
     NoSuchPackage,

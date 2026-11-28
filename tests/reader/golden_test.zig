@@ -39,7 +39,7 @@ const cases = [_]Case{
     .{ .name = "vector literal", .input = "#(1 2 3)", .expected = "#(1 2 3)" },
     .{ .name = "string with escapes", .input = "\"a\\\"b\"", .expected = "\"a\\\"b\"" },
     .{ .name = "character literal A", .input = "#\\A", .expected = "#\\A" },
-    .{ .name = "character literal Space", .input = "#\\Space", .expected = "#\\Space" },
+    .{ .name = "character literal Space", .input = "#\\Space", .expected = "#\\ " },
     .{ .name = "ratio", .input = "3/4", .expected = "3/4" },
     .{ .name = "binary integer", .input = "#b1010", .expected = "10" },
     .{ .name = "hex integer", .input = "#xFF", .expected = "255" },

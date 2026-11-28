@@ -75,3 +75,39 @@
 (check (string= "-100000000000000000000000000000000"
                 (let ((*print-base* 16)) (prin1-to-string (- (expt 2 128))))))
 (check (string= "7B6A43A7EF901FD29F05F9E837D8" (let ((*print-base* 16)) (prin1-to-string (1- (expt 3 70))))))
+
+;; A symbol is cased by *print-case* and the readtable's case together.
+(check (string= "xYZ" (let ((*readtable* (copy-readtable nil)))
+                        (setf (readtable-case *readtable*) :downcase)
+                        (let ((*print-case* :downcase)) (princ-to-string '|xYZ|)))))
+(check (string= "foo" (let ((*readtable* (copy-readtable nil)))
+                        (setf (readtable-case *readtable*) :invert)
+                        (princ-to-string 'foo))))
+(check (string= "|foo|" (prin1-to-string '|foo|)))
+(check (string= "|FF|" (let ((*print-base* 16)) (prin1-to-string 'ff))))
+
+;; Printing that must read back is for the standard readtable, and what
+;; cannot read back signals print-not-readable.
+(check (string= ":|foo|" (let ((*readtable* (copy-readtable nil)))
+                           (setf (readtable-case *readtable*) :preserve)
+                           (write-to-string :|foo| :readably t))))
+(check (handler-case (progn (write-to-string #'car :readably t) nil)
+         (print-not-readable (c) (eq (print-not-readable-object c) #'car))))
+(check (handler-case (progn (write-to-string (make-array 2 :element-type 'bit :initial-element 1 :adjustable t :fill-pointer 2) :readably t) t)
+         (print-not-readable () nil)))
+(check (handler-case (progn (write-to-string (make-array '(0 3)) :readably t) nil)
+         (print-not-readable () t)))
+(check (let* ((state (make-random-state))
+              (copy (read-from-string (write-to-string state :readably t))))
+         (= (random 1000000 state) (random 1000000 copy))))
+
+;; *print-array* off prints an array as #<...>, and a space prints as
+;; itself.
+(check (string= "#<" (subseq (write-to-string #(1 2) :array nil) 0 2)))
+(check (string= "#\\ " (prin1-to-string #\Space)))
+
+;; Each list of a multidimensional array's contents is a level, and a
+;; string or bit vector is never abbreviated.
+(check (string= "#2A((a ...) ...)" (write-to-string #2a((a b) (c d)) :length 1 :case :downcase)))
+(check (string= "#2A(#)" (write-to-string #2a((a)) :level 1)))
+(check (string= "(# #*1101 \"abc\")" (write-to-string '(#(a) #*1101 "abc") :level 1)))

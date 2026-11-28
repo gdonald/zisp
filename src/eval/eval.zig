@@ -2,6 +2,7 @@ const std = @import("std");
 const value = @import("../runtime/value.zig");
 const heap_mod = @import("../runtime/heap.zig");
 const symbol_mod = @import("../runtime/symbol.zig");
+const printer_mod = @import("../runtime/printer.zig");
 const env_mod = @import("env.zig");
 const stack_mod = @import("../runtime/stack.zig");
 const collect_mod = @import("collect.zig");
@@ -171,6 +172,8 @@ pub const Evaluator = struct {
     // The stream a native `EndOfFile` or `ReaderError` was reading, for
     // the condition built from it. Fixnum zero when there was none.
     error_stream: Value = .{ .raw = 0 },
+    // The object a native `PrintNotReadable` could not print readably.
+    error_object: Value = .{ .raw = 0 },
     // Set while the condition standing for a native failure is being
     // built, so a failure in building it is not offered in turn.
     building_failure_condition: bool = false,
@@ -372,6 +375,10 @@ pub const Evaluator = struct {
         }
         return switch (err) {
             error.OutOfMemory => Error.OutOfMemory,
+            error.NotReadable => {
+                self.error_object = printer_mod.unreadable_object;
+                return Error.PrintNotReadable;
+            },
             else => Error.WriteFailed,
         };
     }

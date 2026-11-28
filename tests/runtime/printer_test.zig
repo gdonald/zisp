@@ -130,9 +130,16 @@ test "print character ascii" {
 
 test "print character named" {
     const a = std.testing.allocator;
+    const s = try fmtValue(a, Value.fromChar(0x7F));
+    defer a.free(s);
+    try std.testing.expectEqualStrings("#\\Rubout", s);
+}
+
+test "a space prints as itself, being graphic" {
+    const a = std.testing.allocator;
     const s = try fmtValue(a, Value.fromChar(' '));
     defer a.free(s);
-    try std.testing.expectEqualStrings("#\\Space", s);
+    try std.testing.expectEqualStrings("#\\ ", s);
 }
 
 test "print character newline" {

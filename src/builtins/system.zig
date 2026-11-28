@@ -117,12 +117,14 @@ fn formatFn(p: *anyopaque, args: []const Value) Error!Value {
         return value.NIL;
     }
 
-    // Any other stream takes the rendered text as bytes.
+    // Any other stream takes the rendered text as bytes, and a pretty
+    // stream records what format writes, its layout directives included.
     var aw = std.Io.Writer.Allocating.init(ev.allocator);
     defer aw.deinit();
-    var column: usize = 0;
-    _ = try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, fmt_args);
-    try streams.emitBytes(ev, stream, aw.written());
+    var column: usize = try pprint.columnOf(ev, stream);
+    const pretty_stream: ?*heap.HeapStream = if (stream.kind == .pretty) stream else null;
+    _ = try format.run(ev, .{ .writer = &aw.writer, .column = &column, .pretty = pretty_stream, .ev = ev }, ctrl, fmt_args);
+    if (pretty_stream == null) try streams.emitBytes(ev, stream, aw.written());
     return value.NIL;
 }
 
@@ -159,7 +161,7 @@ fn formatThroughFunction(ev: *Evaluator, dest: Value, control: Value, rest: []co
 /// What `*standard-output*` names, which is where a destination of `t`
 /// sends its output.
 fn standardOutput(ev: *Evaluator) Error!Value {
-    const sym = ev.interner.lookup("*STANDARD-OUTPUT*") orelse return Error.NoOutputStream;
+    const sym = (ev.interner.cl.findPresent("*STANDARD-OUTPUT*") orelse return Error.NoOutputStream).sym;
     return ev.env.lookupValue(sym) orelse Error.NoOutputStream;
 }
 
@@ -185,9 +187,10 @@ fn formatTailFn(p: *anyopaque, args: []const Value) Error!Value {
     } else {
         var aw = std.Io.Writer.Allocating.init(ev.allocator);
         defer aw.deinit();
-        var column: usize = 0;
-        consumed = try format.run(ev, .{ .writer = &aw.writer, .column = &column }, ctrl, rest);
-        try streams.emitBytes(ev, stream, aw.written());
+        var column: usize = try pprint.columnOf(ev, stream);
+        const pretty_stream: ?*heap.HeapStream = if (stream.kind == .pretty) stream else null;
+        consumed = try format.run(ev, .{ .writer = &aw.writer, .column = &column, .pretty = pretty_stream, .ev = ev }, ctrl, rest);
+        if (pretty_stream == null) try streams.emitBytes(ev, stream, aw.written());
     }
 
     var builder = ev.heap.listBuilder();
@@ -211,23 +214,11 @@ fn toStringFn(comptime escaping: Escaping) function.NativeFn {
                 .plain => .plain,
                 .current => .current,
             };
-            if (try pprint.dispatchedText(ev, args[0], style)) |text| return text;
-            var aw = std.Io.Writer.Allocating.init(ev.allocator);
-            defer aw.deinit();
-            const settings = switch (escaping) {
-                .escape => format.prin1Settings(ev),
-                .plain => format.princSettings(ev),
-                .current => format.writeSettings(ev),
-            };
-            if (!settings.escape) {
-                var arena = std.heap.ArenaAllocator.init(ev.allocator);
-                defer arena.deinit();
-                if (try format.reportText(ev, arena.allocator(), args[0])) |text| {
-                    return ev.heap.allocString(text);
-                }
-            }
-            printer.write(ev.allocator, &aw.writer, args[0], settings) catch |e| return ev.printFailure(e);
-            return ev.heap.allocString(aw.written());
+            var held = ev.heap.protect();
+            defer held.close();
+            try held.push(try ev.heap.allocStream(streams.emptyStream(.string, .output)));
+            try pprint.writeValue(ev, args[0], held.items()[0], style);
+            return ev.heap.allocString(heap.asStream(held.items()[0]).output.items);
         }
     }.f;
 }

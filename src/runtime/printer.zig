@@ -32,6 +32,14 @@ const MAX_DEPTH: u32 = 1024;
 /// `*print-case*` names.
 pub const Case = enum { upcase, downcase, capitalize };
 
+/// The current readtable's case, which decides which characters of a
+/// symbol's name need escaping and which `*print-case*` applies to
+/// (CLHS 22.1.3.3.2).
+pub const ReadCase = enum(u64) { upcase = 0, downcase = 1, preserve = 2, invert = 3 };
+
+/// The object the last `NotReadable` failure could not print.
+pub var unreadable_object: Value = .{ .raw = 0 };
+
 /// Mirrors the CL `*print-...*` variables. `format.printerSettings`
 /// reads them out of the dynamic environment; the defaults here are what
 /// a caller with no evaluator to hand gets.
@@ -65,6 +73,11 @@ pub const Settings = struct {
     length: ?u32 = null,
     /// `*print-gensym*` — mark an uninterned symbol with `#:`.
     gensym: bool = true,
+    /// `*print-array*` — print the elements of an array other than a
+    /// string, rather than `#<...>`.
+    array: bool = true,
+    /// The case of the readtable a printed symbol will be read with.
+    read_case: ReadCase = .upcase,
     /// Value of `*package*`. Symbols accessible in it print unqualified;
     /// everything else gets a `pkg:` or `pkg::` prefix. When null there is
     /// no package context and no symbol is qualified.
@@ -102,7 +115,20 @@ const PrintCtx = struct {
     }
 };
 
-pub const PrintError = std.Io.Writer.Error || std.mem.Allocator.Error;
+/// `NotReadable` is printing with `*print-readably*` on an object that
+/// cannot be read back, which is `unreadable_object`.
+pub const PrintError = std.Io.Writer.Error || std.mem.Allocator.Error || error{NotReadable};
+
+fn notReadable(v: Value) PrintError {
+    unreadable_object = v;
+    return error.NotReadable;
+}
+
+/// Write `#<text>`, which no reader reads back.
+fn writeUnreadable(ctx: *PrintCtx, v: Value, text: []const u8) PrintError!void {
+    if (ctx.settings.readably) return notReadable(v);
+    try ctx.writer.writeAll(text);
+}
 
 /// Write `v` to `writer` using the supplied settings. The other entry
 /// points are thin wrappers around this one.
@@ -147,10 +173,8 @@ fn printValue(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         try ctx.writer.writeAll("#<deep>");
         return;
     }
-    if (v.equalsRaw(value.NIL)) {
-        // `nil` is a symbol, so its name is cased like any other.
-        return writeCased(ctx, "NIL");
-    }
+    // `nil` is a symbol, so it is cased and escaped like any other.
+    if (v.equalsRaw(value.NIL)) return printSymbol(ctx, v);
     // A shared object announces its label the first time and refers back
     // to it after, which is what lets a cycle terminate on paper.
     if (ctx.settings.circle) |state| {
@@ -246,10 +270,7 @@ fn digitChar(d: u8) u8 {
 
 fn printSymbol(ctx: *PrintCtx, v: Value) PrintError!void {
     const name = symbol.name(v);
-    if (!ctx.effectiveEscape()) {
-        try writeCased(ctx, name);
-        return;
-    }
+    if (!ctx.effectiveEscape()) return writeCased(ctx, name);
     try printSymbolPrefix(ctx, v, name);
     try printNamePart(ctx, name);
 }
@@ -258,7 +279,7 @@ fn printSymbol(ctx: *PrintCtx, v: Value) PrintError!void {
 /// from `ctx.settings.current_package`.
 fn printSymbolPrefix(ctx: *PrintCtx, v: Value, name: []const u8) PrintError!void {
     const home = symbol.homePackage(v) orelse {
-        if (ctx.settings.gensym) try ctx.writer.writeAll("#:");
+        if (ctx.settings.gensym or ctx.settings.readably) try ctx.writer.writeAll("#:");
         return;
     };
     if (std.mem.eql(u8, home.name, symbol.KEYWORD_PACKAGE_NAME)) {
@@ -274,11 +295,10 @@ fn printSymbolPrefix(ctx: *PrintCtx, v: Value, name: []const u8) PrintError!void
     try ctx.writer.writeAll(if (home.external.contains(name)) ":" else "::");
 }
 
+/// A name as it reads back: within `|...|` when the reader would not
+/// read it as written, and cased as `*print-case*` and the readtable say.
 fn printNamePart(ctx: *PrintCtx, part: []const u8) PrintError!void {
-    if (!needsSymbolEscape(part)) {
-        try writeCased(ctx, part);
-        return;
-    }
+    if (!needsSymbolEscape(ctx, part)) return writeCased(ctx, part);
     try ctx.writer.writeByte('|');
     for (part) |c| {
         if (c == '|' or c == '\\') try ctx.writer.writeByte('\\');
@@ -287,44 +307,78 @@ fn printNamePart(ctx: *PrintCtx, part: []const u8) PrintError!void {
     try ctx.writer.writeByte('|');
 }
 
-/// A name the reader would upcase again, written the way
-/// `*print-case*` asks for. A lower case character in the name is left
-/// as it is: only what the reader would have folded is recased.
+/// The characters of a name, decoded from its UTF-8.
+fn codesOf(part: []const u8) std.unicode.Utf8Iterator {
+    return (std.unicode.Utf8View.init(part) catch std.unicode.Utf8View.initUnchecked(part)).iterator();
+}
+
+/// A name written the way CLHS 22.1.3.3.2 says: `*print-case*` applies to
+/// the characters the readtable folds to, under `:upcase` and
+/// `:downcase`; `:preserve` writes the name as it is, and `:invert`
+/// inverts a name whose letters are all one case.
 fn writeCased(ctx: *PrintCtx, part: []const u8) PrintError!void {
-    switch (ctx.settings.case) {
-        .upcase => try ctx.writer.writeAll(part),
-        .downcase => for (part) |c| try ctx.writer.writeByte(std.ascii.toLower(c)),
-        .capitalize => {
-            var starting = true;
-            for (part) |c| {
-                const alphanumeric = std.ascii.isAlphanumeric(c);
-                const out = if (starting and alphanumeric) c else std.ascii.toLower(c);
-                try ctx.writer.writeByte(out);
-                starting = !alphanumeric;
-            }
-        },
+    var upper = false;
+    var lower = false;
+    var scan = codesOf(part);
+    while (scan.nextCodepoint()) |c| {
+        if (character.isUpper(c)) upper = true;
+        if (character.isLower(c)) lower = true;
+    }
+    var it = codesOf(part);
+    var starting = true;
+    while (it.nextCodepoint()) |c| {
+        const alphanumeric = character.isAlphanumeric(c);
+        const out: u21 = switch (ctx.settings.read_case) {
+            .preserve => c,
+            .invert => if (upper and lower) c else if (character.isUpper(c)) character.downcase(c) else character.upcase(c),
+            .upcase => if (!character.isUpper(c)) c else switch (ctx.settings.case) {
+                .upcase => c,
+                .downcase => character.downcase(c),
+                .capitalize => if (starting) c else character.downcase(c),
+            },
+            .downcase => if (!character.isLower(c)) c else switch (ctx.settings.case) {
+                .downcase => c,
+                .upcase => character.upcase(c),
+                .capitalize => if (starting) character.upcase(c) else c,
+            },
+        };
+        try writeRawChar(ctx.writer, out);
+        starting = !alphanumeric;
     }
 }
 
-/// True if `name` needs `|...|` escaping to round-trip through the
-/// reader. Empty names, names that would lex as numbers, or names that
-/// contain characters outside CL's reader-safe set all need escaping.
-fn needsSymbolEscape(name: []const u8) bool {
+/// True if `name` needs `|...|` to read back as itself: an empty name,
+/// one that would read as a number or a dot token, one holding a
+/// character that is not a plain constituent, and one holding a letter
+/// the readtable would fold to the other case.
+fn needsSymbolEscape(ctx: *const PrintCtx, name: []const u8) bool {
     if (name.len == 0) return true;
-    if (looksLikeNumber(name)) return true;
-    for (name) |c| {
-        if (!isSafeSymbolChar(c)) return true;
+    if (looksLikeNumber(name, ctx.settings.base)) return true;
+    if (std.mem.indexOfNone(u8, name, ".") == null) return true;
+    var it = codesOf(name);
+    while (it.nextCodepoint()) |c| {
+        if (c < 0x80 and !isSafeSymbolChar(@intCast(c))) return true;
+        if (c >= 0x80 and !character.isGraphic(c)) return true;
+        switch (ctx.settings.read_case) {
+            .upcase => if (character.isLower(c)) return true,
+            .downcase => if (character.isUpper(c)) return true,
+            .preserve, .invert => {},
+        }
     }
     return false;
 }
 
-fn looksLikeNumber(name: []const u8) bool {
+/// Whether a token spelled `name` would read as a number, in decimal or
+/// in `base`, which is a potential number of CLHS 2.3.1.1 that the
+/// reader takes as one.
+fn looksLikeNumber(name: []const u8, base: u8) bool {
     // A potential number never ends in a sign (CLHS 2.3.1.1), which is what
     // keeps `1+` and `1-` printing without escapes.
     if (name.len != 0 and (name[name.len - 1] == '+' or name[name.len - 1] == '-')) return false;
     var i: usize = 0;
     if (i < name.len and (name[i] == '+' or name[i] == '-')) i += 1;
     if (i >= name.len) return false;
+    if (allDigits(name[i..], base)) return true;
     if (name[i] == '.') {
         // `.` alone, or `.foo` — not a number unless followed by a digit.
         if (i + 1 < name.len and std.ascii.isDigit(name[i + 1])) return true;
@@ -333,10 +387,24 @@ fn looksLikeNumber(name: []const u8) bool {
     return std.ascii.isDigit(name[i]);
 }
 
+fn allDigits(text: []const u8, base: u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        const d: u8 = switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'z' => c - 'a' + 10,
+            'A'...'Z' => c - 'A' + 10,
+            else => return false,
+        };
+        if (d >= base) return false;
+    }
+    return true;
+}
+
 fn isSafeSymbolChar(c: u8) bool {
     return switch (c) {
-        'A'...'Z', '0'...'9' => true,
-        '!', '$', '%', '&', '*', '+', '-', '.', '/', '<', '=', '>', '?', '@', '^', '_', '~' => true,
+        'A'...'Z', 'a'...'z', '0'...'9' => true,
+        '!', '$', '%', '&', '*', '+', '-', '.', '/', '<', '=', '>', '?', '@', '^', '_', '~', '[', ']', '{', '}' => true,
         else => false,
     };
 }
@@ -356,20 +424,52 @@ fn printHeap(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
             try printValue(ctx, z.imagpart, depth + 1);
             try ctx.writer.writeByte(')');
         },
-        .random_state => try ctx.writer.writeAll("#<random-state>"),
-        .readtable => try ctx.writer.writeAll("#<readtable>"),
-        .stream => try ctx.writer.writeAll("#<stream>"),
+        .random_state => {
+            if (!ctx.settings.readably) return ctx.writer.writeAll("#<random-state>");
+            // Read back by evaluating, with decimal words whatever the
+            // read base is.
+            const words = heap.asRandomState(v).state;
+            try ctx.writer.print("#.(EXT:%RANDOM-STATE-FROM-WORDS {d}. {d}. {d}. {d}.)", .{ words[0], words[1], words[2], words[3] });
+        },
+        .readtable => try writeUnreadable(ctx, v, "#<readtable>"),
+        .stream => try writeUnreadable(ctx, v, "#<stream>"),
         .structure => try printStructure(ctx, v, depth),
         .pathname => {
+            if (ctx.settings.readably and !namestringReadsBack(heap.asPathname(v))) return notReadable(v);
             if (ctx.effectiveEscape()) try ctx.writer.writeAll("#P");
             const text = pathname.namestringOf(ctx.allocator, v) catch return error.WriteFailed;
             defer ctx.allocator.free(text);
             try printQuotedUtf8(ctx, text);
         },
-        .package => try ctx.writer.print("#<PACKAGE \"{s}\">", .{package.asPackage(v).name}),
-        .function, .closure => try printFunction(ctx, v),
-        else => try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()}),
+        .package => {
+            if (ctx.settings.readably) return notReadable(v);
+            try ctx.writer.print("#<PACKAGE \"{s}\">", .{package.asPackage(v).name});
+        },
+        .function, .closure => {
+            if (ctx.settings.readably) return notReadable(v);
+            try printFunction(ctx, v);
+        },
+        else => {
+            if (ctx.settings.readably) return notReadable(v);
+            try ctx.writer.print("#<heap-object {x}>", .{v.toHeapAddr()});
+        },
     }
+}
+
+/// Whether a pathname's namestring parses back into the same pathname.
+/// A type with no name, or a name holding a dot with no type, does not:
+/// `.txt` parses as a name.
+fn namestringReadsBack(p: *const heap.HeapPathname) bool {
+    // A logical namestring reads back as one only where its host is
+    // defined, which the printer cannot know.
+    if (p.is_logical) return false;
+    const has_type = !p.type_.equalsRaw(value.NIL);
+    if (p.name.equalsRaw(value.NIL)) return !has_type;
+    if (!heap.isString(p.name)) return true;
+    const name = heap.asString(p.name).constSlice();
+    if (name.len == 0) return !has_type;
+    if (!has_type) return std.mem.indexOfScalar(u32, name, '.') == null;
+    return true;
 }
 
 fn printFunction(ctx: *PrintCtx, v: Value) PrintError!void {
@@ -599,10 +699,13 @@ fn printCons(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
 }
 
 /// A vector prints as `#(...)`; a higher-rank array as `#nA` followed by
-/// its elements nested one list per dimension.
+/// its elements nested one list per dimension. With `*print-array*` off
+/// an array other than a string prints as `#<...>`. A string or bit
+/// vector is never abbreviated by `*print-level*`.
 fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
-    if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     const a = heap.asArray(v);
+    if (!ctx.settings.array and !ctx.settings.readably) return printArrayUnreadably(ctx, a);
+    if (ctx.settings.readably and !readsBack(a)) return notReadable(v);
     const elements = heap.arrayActive(v);
     if (a.rank == 1 and a.element_type == .bit) {
         try ctx.writer.writeAll("#*");
@@ -611,6 +714,7 @@ fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
         }
         return;
     }
+    if (tooDeep(ctx, depth)) return ctx.writer.writeByte('#');
     if (a.rank == 1) {
         try ctx.writer.writeAll("#(");
         for (elements, 0..) |elem, i| {
@@ -626,28 +730,58 @@ fn printArray(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     }
     try ctx.writer.print("#{d}A", .{a.rank});
     if (a.rank == 0) return printValue(ctx, elements[0], depth + 1);
-    var consumed: usize = 0;
-    try printArrayAxis(ctx, a.dimensions(), heap.arrayElements(v), &consumed, depth);
+    try printArrayAxis(ctx, a.dimensions(), heap.arrayElements(v), 0, depth);
 }
 
-/// One axis of a higher-rank array: a list of the slices below it, or the
-/// elements themselves at the innermost axis.
+/// Whether an array printed as `#(...)` or `#nA` reads back as one like
+/// it: one whose elements can be of any type, with a shape the contents
+/// spell. A dimension of zero ahead of a nonzero one leaves the later
+/// dimensions nothing to be read from.
+fn readsBack(a: *const heap.HeapArray) bool {
+    if (a.rank == 1 and a.element_type == .bit) return true;
+    if (a.element_type != .t) return false;
+    const dims = a.dimensions();
+    for (dims, 0..) |d, i| {
+        if (d != 0) continue;
+        for (dims[i..]) |later| if (later != 0) return false;
+    }
+    return true;
+}
+
+fn printArrayUnreadably(ctx: *PrintCtx, a: *const heap.HeapArray) PrintError!void {
+    try ctx.writer.writeAll("#<");
+    try writeCased(ctx, if (a.rank == 1) (if (a.element_type == .bit) "BIT-VECTOR" else "VECTOR") else "ARRAY");
+    for (a.dimensions()) |d| try ctx.writer.print(" {d}", .{d});
+    try ctx.writer.writeByte('>');
+}
+
+/// One axis of a higher-rank array, starting at element `offset`: a list
+/// of the slices below it, or the elements themselves at the innermost
+/// axis. Each list is a level, and holds as many elements as
+/// `*print-length*` allows.
 fn printArrayAxis(
     ctx: *PrintCtx,
     dims: []const u64,
     elements: []const Value,
-    consumed: *usize,
+    offset: usize,
     depth: u32,
 ) PrintError!void {
+    var stride: usize = 1;
+    for (dims[1..]) |d| stride *= @intCast(d);
     try ctx.writer.writeByte('(');
     var i: usize = 0;
     while (i < dims[0]) : (i += 1) {
         if (i != 0) try ctx.writer.writeByte(' ');
+        if (tooLong(ctx, i)) {
+            try ctx.writer.writeAll("...");
+            break;
+        }
         if (dims.len == 1) {
-            try printValue(ctx, elements[consumed.*], depth + 1);
-            consumed.* += 1;
+            try printValue(ctx, elements[offset + i], depth + 1);
+        } else if (tooDeep(ctx, depth + 1)) {
+            try ctx.writer.writeByte('#');
         } else {
-            try printArrayAxis(ctx, dims[1..], elements, consumed, depth + 1);
+            try printArrayAxis(ctx, dims[1..], elements, offset + i * stride, depth + 1);
         }
     }
     try ctx.writer.writeByte(')');
@@ -712,12 +846,15 @@ fn printConsLabelled(ctx: *PrintCtx, v: Value, depth: u32) PrintError!void {
     try ctx.writer.writeByte(')');
 }
 
+/// `#\` and the character when it is graphic, which a space is, and
+/// `#\` and its name otherwise.
 fn printChar(ctx: *PrintCtx, c: u21) PrintError!void {
     if (!ctx.effectiveEscape()) {
         try writeRawChar(ctx.writer, c);
         return;
     }
     try ctx.writer.writeAll("#\\");
+    if (c == ' ' or character.isGraphic(c)) return writeRawChar(ctx.writer, c);
     var buf: [character.NAME_BUFFER]u8 = undefined;
     if (character.nameForCodeInto(c, &buf)) |name| return ctx.writer.writeAll(name);
     try writeRawChar(ctx.writer, c);
@@ -725,7 +862,7 @@ fn printChar(ctx: *PrintCtx, c: u21) PrintError!void {
 
 /// Encode one character to UTF-8. Used for string elements and for the
 /// literal text of a format control string, both of which hold characters.
-pub fn writeRawChar(writer: *std.Io.Writer, c: u21) PrintError!void {
+pub fn writeRawChar(writer: *std.Io.Writer, c: u21) std.Io.Writer.Error!void {
     if (c < 0x80) {
         try writer.writeByte(@intCast(c));
         return;

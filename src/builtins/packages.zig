@@ -163,6 +163,14 @@ fn deletePackageFn(p: *anyopaque, args: []const Value) Error!Value {
     }
     const pkg = try special_forms.resolvePackage(ev, args[0]);
     if (pkg.deleted) return value.NIL;
+    // A symbol the package was home to has no home package from here on
+    // (CLHS `delete-package`).
+    for ([_]*std.StringHashMapUnmanaged(Value){ &pkg.internal, &pkg.external }) |table| {
+        var symbols = table.valueIterator();
+        while (symbols.next()) |sym| {
+            if (symbol_mod.symbol(sym.*).home == pkg) symbol_mod.symbol(sym.*).home = null;
+        }
+    }
     ev.interner.registry.delete(pkg);
     return value.T;
 }

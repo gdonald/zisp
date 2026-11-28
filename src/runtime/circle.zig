@@ -52,43 +52,94 @@ fn addressOf(v: Value) ?u64 {
     };
 }
 
+/// How much of an object printing will show, which is all a label can
+/// be needed for: `*print-length*` elements of each list or vector, and
+/// `*print-level*` levels down.
+pub const Limits = struct {
+    length: ?usize = null,
+    level: ?usize = null,
+};
+
 /// Walk `v`, recording every object reached more than once. The walk
 /// stops descending into an object it has already seen, so a cycle
 /// terminates.
 pub fn scan(allocator: std.mem.Allocator, v: Value) !State {
+    return scanLimited(allocator, v, .{});
+}
+
+/// `scan` over only the part of `v` that printing within `limits` shows.
+pub fn scanLimited(allocator: std.mem.Allocator, v: Value, limits: Limits) std.mem.Allocator.Error!State {
     var state = State{};
     var seen: std.AutoHashMapUnmanaged(u64, void) = .empty;
     defer seen.deinit(allocator);
-    try visit(allocator, v, &state, &seen);
+    var walk: Walk = .{ .allocator = allocator, .state = &state, .seen = &seen, .limits = limits };
+    try walk.visit(v, 0);
     return state;
 }
 
-fn visit(
+const Walk = struct {
     allocator: std.mem.Allocator,
-    v: Value,
     state: *State,
     seen: *std.AutoHashMapUnmanaged(u64, void),
-) !void {
-    const address = addressOf(v) orelse return;
-    if (seen.contains(address)) {
-        try state.labels.put(allocator, address, .{});
-        return;
-    }
-    try seen.put(allocator, address, {});
-    if (v.isSymbol()) return;
+    limits: Limits,
 
-    if (v.isCons()) {
-        try visit(allocator, heap.car(v), state, seen);
-        try visit(allocator, heap.cdr(v), state, seen);
-        return;
+    /// Record `v`, and say whether it was new.
+    fn record(self: *Walk, v: Value) std.mem.Allocator.Error!bool {
+        const address = addressOf(v) orelse return false;
+        if (self.seen.contains(address)) {
+            try self.state.labels.put(self.allocator, address, .{});
+            return false;
+        }
+        try self.seen.put(self.allocator, address, {});
+        return true;
     }
-    switch (heap.heapType(v)) {
-        .vector => for (heap.arrayActive(v)) |element| {
-            try visit(allocator, element, state, seen);
-        },
-        .structure => for (heap.asStructure(v).slice()) |slot| {
-            try visit(allocator, slot, state, seen);
-        },
-        else => {},
+
+    fn pastLevel(self: *const Walk, depth: usize) bool {
+        const level = self.limits.level orelse return false;
+        return depth >= level;
     }
-}
+
+    fn pastLength(self: *const Walk, index: usize) bool {
+        const length = self.limits.length orelse return false;
+        return index >= length;
+    }
+
+    fn visit(self: *Walk, v: Value, depth: usize) std.mem.Allocator.Error!void {
+        if (addressOf(v) == null) return;
+        if (v.isSymbol()) {
+            _ = try self.record(v);
+            return;
+        }
+        if (self.pastLevel(depth)) return;
+        if (!try self.record(v)) return;
+        if (v.isCons()) return self.visitList(v, depth);
+        switch (heap.heapType(v)) {
+            .vector => for (heap.arrayActive(v), 0..) |element, index| {
+                if (self.pastLength(index)) break;
+                try self.visit(element, depth + 1);
+            },
+            .structure => for (heap.asStructure(v).slice(), 0..) |slot, index| {
+                if (self.pastLength(index)) break;
+                try self.visit(slot, depth + 1);
+            },
+            else => {},
+        }
+    }
+
+    /// A list's elements, as far as the length shows, and a tail that is
+    /// not a list or is shared, which prints after a dot.
+    fn visitList(self: *Walk, list: Value, depth: usize) std.mem.Allocator.Error!void {
+        var cell = list;
+        var index: usize = 0;
+        while (true) {
+            if (self.pastLength(index)) return;
+            try self.visit(heap.car(cell), depth + 1);
+            index += 1;
+            const tail = heap.cdr(cell);
+            if (!tail.isCons()) return self.visit(tail, depth + 1);
+            if (self.pastLength(index)) return;
+            if (!try self.record(tail)) return;
+            cell = tail;
+        }
+    }
+};

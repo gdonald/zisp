@@ -172,8 +172,8 @@ test "an unterminated string ends the input inside an object" {
 }
 
 test "characters read by themselves and by name" {
-    try expectReads("#\\A #\\Space #\\Newline #\\U+03BB", "#\\A #\\Space #\\Newline #\\λ");
-    try expectReads("#\\( #\\\\ #\\  #\\3", "#\\( #\\\\ #\\Space #\\3");
+    try expectReads("#\\A #\\Space #\\Newline #\\U+03BB", "#\\A #\\  #\\Newline #\\λ");
+    try expectReads("#\\( #\\\\ #\\  #\\3", "#\\( #\\\\ #\\  #\\3");
 }
 
 test "a character at the end of the input ends it inside an object" {

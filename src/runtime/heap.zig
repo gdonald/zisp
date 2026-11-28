@@ -218,6 +218,7 @@ pub const PrettyToken = union(enum) {
     text: struct { start: u32, len: u32 },
     newline: pretty.NewlineKind,
     indent: struct { kind: pretty.IndentKind, amount: i64 },
+    tab: struct { kind: pretty.TabKind, colnum: u32, colinc: u32 },
     block_start: struct { prefix: Span, per_line: Span, suffix: Span },
     block_end: Span,
 };

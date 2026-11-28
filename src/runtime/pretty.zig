@@ -1,19 +1,23 @@
 //! The pretty printer's layout engine.
 //!
 //! Output is recorded as a token stream rather than written straight out,
-//! because whether a conditional newline breaks depends on how wide the
-//! block it sits in turns out to be. Once the outermost block closes, the
-//! tokens are laid out against the right margin.
+//! because whether a conditional newline breaks depends on what follows
+//! it. Once the outermost block closes, the tokens are laid out against
+//! the right margin following CLHS 22.2.1.1: each conditional newline
+//! sits in sections delimited by the newlines around it, and its kind
+//! says which of them has to fit for it to stay unbroken.
 
 const std = @import("std");
 
 pub const NewlineKind = enum { linear, fill, miser, mandatory };
 pub const IndentKind = enum { block, current };
+pub const TabKind = enum { line, section, line_relative, section_relative };
 
 pub const Token = union(enum) {
     text: []const u8,
     newline: NewlineKind,
     indent: struct { kind: IndentKind, amount: i64 },
+    tab: struct { kind: TabKind, colnum: usize, colinc: usize },
     block_start: Block,
     block_end,
 };
@@ -27,179 +31,356 @@ pub const Block = struct {
 pub const Options = struct {
     /// Column the output must not run past.
     right_margin: usize = 80,
-    /// A block with no more than this much room left lays out in miser
-    /// style, where a fill newline behaves as a linear one.
+    /// A block that starts within this many columns of the margin lays
+    /// out in miser style.
     miser_width: ?usize = null,
+    /// `*print-lines*`: how many lines to print before ending with ` ..`.
+    lines: ?usize = null,
     /// Column the underlying stream is already sitting at.
     start_column: usize = 0,
 };
 
-pub const State = struct {
-    tokens: std.ArrayListUnmanaged(Token) = .empty,
-    /// How many blocks are open, so the outermost one knows when to lay
-    /// itself out.
-    depth: usize = 0,
-
-    pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
-        self.tokens.deinit(allocator);
-    }
-};
-
 /// One open block during layout.
 const Frame = struct {
-    /// Column the block began at, before its prefix went out.
+    /// Column the block began at, before its prefix.
     origin: usize,
-    /// Where a broken line in this block starts by default, which is also
-    /// what a `:block` indent is measured from.
-    base: usize,
+    /// Column after the prefix, which `:block` indentation counts from.
+    start: usize,
     /// Column a broken line inside this block starts at.
     indent: usize,
     per_line: []const u8,
+    suffix: []const u8,
     miser: bool,
-    /// Set once a linear newline in this block has broken. The rest then
-    /// break with it, so a block that does not fit puts every part on its
-    /// own line rather than wrapping only where it has to.
-    broken: bool = false,
+    /// Index of the token that opened the block.
+    opened_at: usize,
 };
 
-/// Lay the tokens out and return the text. The caller owns it.
-pub fn layout(
+const Layout = struct {
     allocator: std.mem.Allocator,
     tokens: []const Token,
     options: Options,
-) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    var column = options.start_column;
-    var frames: std.ArrayListUnmanaged(Frame) = .empty;
-    defer frames.deinit(allocator);
-    try frames.append(allocator, .{
-        .origin = column,
-        .base = column,
-        .indent = column,
-        .per_line = "",
-        .miser = false,
-    });
-
-    var i: usize = 0;
-    while (i < tokens.len) : (i += 1) {
-        switch (tokens[i]) {
-            .text => |text| {
-                try out.appendSlice(allocator, text);
-                column = advance(column, text);
-            },
-            .block_start => |block| {
-                const origin = column;
-                try out.appendSlice(allocator, block.prefix);
-                column = advance(column, block.prefix);
-                // Miser style applies when the room left for the block is
-                // no wider than the miser width.
-                const available = options.right_margin -| origin;
-                const miser = if (options.miser_width) |width| available <= width else false;
-                // A per-line prefix is written again after every break, so
-                // the indent stops short of it rather than counting its
-                // width twice.
-                const base = if (block.per_line.len == 0) column else origin;
-                try frames.append(allocator, .{
-                    .origin = origin,
-                    .base = base,
-                    .indent = base,
-                    .per_line = block.per_line,
-                    .miser = miser,
-                });
-            },
-            .block_end => {
-                if (frames.items.len > 1) _ = frames.pop();
-            },
-            .indent => |request| {
-                const frame = &frames.items[frames.items.len - 1];
-                const from: i64 = @intCast(switch (request.kind) {
-                    .block => frame.base,
-                    .current => column,
-                });
-                frame.indent = @intCast(@max(from + request.amount, 0));
-            },
-            .newline => |kind| {
-                const frame = &frames.items[frames.items.len - 1];
-                if (!breaks(kind, frame, tokens[i + 1 ..], column, options)) continue;
-                // A break discards the blanks that were about to end the
-                // line, so a separator space never trails a wrapped line.
-                while (out.items.len > 0 and out.items[out.items.len - 1] == ' ') {
-                    _ = out.pop();
-                }
-                try out.append(allocator, '\n');
-                column = frame.indent;
-                try out.appendNTimes(allocator, ' ', frame.indent);
-                try out.appendSlice(allocator, frame.per_line);
-                column += textWidth(frame.per_line);
-            },
-        }
-    }
-    return out.toOwnedSlice(allocator);
-}
-
-/// Whether a conditional newline of this kind breaks here.
-fn breaks(
-    kind: NewlineKind,
-    frame: *Frame,
-    rest: []const Token,
+    out: std.ArrayListUnmanaged(u8) = .empty,
     column: usize,
-    options: Options,
-) bool {
-    if (kind == .mandatory) return true;
-    // In miser style a fill newline behaves as a linear one, so a block
-    // that does not fit puts each part on its own line rather than
-    // wrapping only where it must.
-    const effective: NewlineKind = if (frame.miser and kind == .fill) .linear else kind;
-    if (effective == .fill) return column + nextChunkWidth(rest) > options.right_margin;
-    if (effective == .miser and !frame.miser) return false;
+    /// Where in `out` the current line begins, so trailing blanks are
+    /// trimmed only from it.
+    line_start: usize = 0,
+    lines: usize = 1,
+    frames: std.ArrayListUnmanaged(Frame) = .empty,
+    /// How many blocks are open at each token.
+    level: []usize,
+    /// The column each token started at.
+    column_at: []usize,
+    /// Index of the last newline that broke, if any did.
+    last_break: ?usize = null,
+    /// Column of the start of the section the current position is in,
+    /// which `:section` tabs count from.
+    section_column: usize,
 
-    // Linear newlines in one block break together, so the first break
-    // settles the rest.
-    if (frame.broken) return true;
-    if (fitsRemainingBlock(rest, column, options.right_margin)) return false;
-    frame.broken = true;
-    return true;
-}
+    fn deinit(self: *Layout) void {
+        self.frames.deinit(self.allocator);
+        self.allocator.free(self.level);
+        self.allocator.free(self.column_at);
+    }
 
-/// Whether what is left of this line fits before the margin.
-///
-/// The measure runs past the end of the block the newline sits in and
-/// through the suffixes of the blocks around it, because those land on
-/// the same line. Only a mandatory newline stops it.
-fn fitsRemainingBlock(rest: []const Token, column: usize, margin: usize) bool {
-    var width: usize = 0;
-    for (rest) |token| {
-        switch (token) {
-            .text => |text| width += textWidth(text),
-            .block_start => |block| width += textWidth(block.prefix),
-            .block_end => {},
-            // Conditional newlines are passed over: the ones in this
-            // block break together with this one, and the ones in a
-            // nested block would only break if that block did not fit.
-            // A mandatory newline really does end the line.
-            .newline => |kind| {
-                if (kind == .mandatory) return column + width <= margin;
+    fn margin(self: *const Layout) usize {
+        return self.options.right_margin;
+    }
+
+    fn write(self: *Layout, text: []const u8) !void {
+        try self.out.appendSlice(self.allocator, text);
+        self.column = advance(self.column, text);
+    }
+
+    fn spaces(self: *Layout, n: usize) !void {
+        try self.out.appendNTimes(self.allocator, ' ', n);
+        self.column += n;
+    }
+
+    fn frame(self: *const Layout) *Frame {
+        return &self.frames.items[self.frames.items.len - 1];
+    }
+
+    // --- measuring --------------------------------------------------
+
+    /// The column `tokens[from..to]` ends at when printed with no breaks
+    /// from `column`, or null when a mandatory newline among them means
+    /// they cannot share one line.
+    fn flatEnd(self: *const Layout, from: usize, to: usize, column: usize) ?usize {
+        var col = column;
+        var section = column;
+        for (self.tokens[from..to]) |token| {
+            switch (token) {
+                .text => |text| {
+                    if (std.mem.indexOfScalar(u8, text, '\n') != null) return null;
+                    col += textWidth(text);
+                },
+                .block_start => |block| col += textWidth(block.prefix),
+                .newline => |kind| {
+                    if (kind == .mandatory) return null;
+                    section = col;
+                },
+                .tab => |tab| col += tabWidth(tab.kind, tab.colnum, tab.colinc, col, section),
+                .block_end, .indent => {},
+            }
+        }
+        return col;
+    }
+
+    fn fits(self: *const Layout, from: usize, to: usize, column: usize) bool {
+        const end = self.flatEnd(from, to, column) orelse return false;
+        return end <= self.margin();
+    }
+
+    /// The token after the newline that ends the section following
+    /// newline `i`: the next newline in the same block or an outer one.
+    fn sectionEnd(self: *const Layout, i: usize) usize {
+        const level = self.level[i];
+        var j = i + 1;
+        while (j < self.tokens.len) : (j += 1) {
+            if (self.tokens[j] == .newline and self.level[j] <= level) return j;
+        }
+        return self.tokens.len;
+    }
+
+    /// The section immediately containing newline `i`, as token bounds:
+    /// from just after the previous newline of an outer block to the next
+    /// one.
+    fn containingSection(self: *const Layout, i: usize) struct { from: usize, to: usize } {
+        const level = self.level[i];
+        var from: usize = 0;
+        var k = i;
+        while (k > 0) {
+            k -= 1;
+            if (self.tokens[k] == .newline and self.level[k] < level) {
+                from = k + 1;
+                break;
+            }
+        }
+        var to = self.tokens.len;
+        var j = i + 1;
+        while (j < self.tokens.len) : (j += 1) {
+            if (self.tokens[j] == .newline and self.level[j] < level) {
+                to = j;
+                break;
+            }
+        }
+        return .{ .from = from, .to = to };
+    }
+
+    /// Whether the section from token `from` to `to` goes out on one
+    /// line: nothing in it broke, and printed flat it fits.
+    fn onOneLine(self: *const Layout, from: usize, to: usize) bool {
+        if (self.last_break) |at| {
+            if (at >= from and at < to) return false;
+        }
+        const start = if (from < self.column_at.len) self.column_at[from] else self.column;
+        return self.fits(from, to, start);
+    }
+
+    /// Where the section before newline `i` starts: after the previous
+    /// newline of the same block, or at the block's own start.
+    fn sectionBefore(self: *const Layout, i: usize) usize {
+        const level = self.level[i];
+        const block_start = if (self.frames.items.len > 0) self.frame().opened_at + 1 else 0;
+        var k = i;
+        while (k > block_start) {
+            k -= 1;
+            if (self.tokens[k] == .newline and self.level[k] <= level) return k + 1;
+        }
+        return block_start;
+    }
+
+    fn breaks(self: *Layout, i: usize, kind: NewlineKind) bool {
+        const miser = self.frames.items.len > 1 and self.frame().miser;
+        switch (kind) {
+            .mandatory => return true,
+            .linear => {
+                const section = self.containingSection(i);
+                return !self.onOneLine(section.from, section.to);
             },
-            .indent => {},
+            .miser => {
+                if (!miser) return false;
+                const section = self.containingSection(i);
+                return !self.onOneLine(section.from, section.to);
+            },
+            .fill => {
+                if (!self.fits(i + 1, self.sectionEnd(i), self.column)) return true;
+                if (self.last_break) |at| {
+                    if (at >= self.sectionBefore(i) and at < i) return true;
+                }
+                if (miser) {
+                    const section = self.containingSection(i);
+                    return !self.onOneLine(section.from, section.to);
+                }
+                return false;
+            },
         }
-        if (column + width > margin) return false;
     }
-    return column + width <= margin;
+
+    // --- writing ----------------------------------------------------
+
+    /// End the line and start the next one inside the open blocks: their
+    /// per-line prefixes, each where it stood on the first line, then
+    /// blanks out to the innermost block's indentation. False once
+    /// `*print-lines*` lines are out, which ends the output.
+    fn newLine(self: *Layout) !bool {
+        if (self.options.lines) |most| {
+            if (self.lines >= most) {
+                try self.write(" ..");
+                var n = self.frames.items.len;
+                while (n > 1) {
+                    n -= 1;
+                    try self.write(self.frames.items[n].suffix);
+                }
+                return false;
+            }
+        }
+        // A break drops the blanks that were about to end the line.
+        while (self.out.items.len > self.line_start and self.out.items[self.out.items.len - 1] == ' ') {
+            _ = self.out.pop();
+        }
+        try self.out.append(self.allocator, '\n');
+        self.lines += 1;
+        self.line_start = self.out.items.len;
+        self.column = 0;
+        for (self.frames.items) |f| {
+            if (f.per_line.len == 0) continue;
+            if (f.origin > self.column) try self.spaces(f.origin - self.column);
+            try self.write(f.per_line);
+        }
+        const indent = self.frame().indent;
+        if (indent > self.column) try self.spaces(indent - self.column);
+        return true;
+    }
+
+    /// A newline written as text: a new line holding the per-line
+    /// prefixes but none of the blocks' indentation.
+    fn newLineUnindented(self: *Layout) !bool {
+        const f = self.frame();
+        const indent = f.indent;
+        f.indent = 0;
+        defer f.indent = indent;
+        return self.newLine();
+    }
+
+    fn run(self: *Layout) !void {
+        var i: usize = 0;
+        while (i < self.tokens.len) : (i += 1) {
+            self.column_at[i] = self.column;
+            switch (self.tokens[i]) {
+                .text => |text| {
+                    var rest = text;
+                    while (std.mem.indexOfScalar(u8, rest, '\n')) |at| {
+                        try self.write(rest[0..at]);
+                        self.last_break = i;
+                        if (!try self.newLineUnindented()) return;
+                        self.section_column = self.column;
+                        rest = rest[at + 1 ..];
+                    }
+                    try self.write(rest);
+                },
+                .block_start => |block| {
+                    const origin = self.column;
+                    try self.write(block.prefix);
+                    // Miser style is measured from where the block's own
+                    // text starts, after its prefix.
+                    const room = self.margin() -| self.column;
+                    const miser = if (self.options.miser_width) |width| room <= width else false;
+                    try self.frames.append(self.allocator, .{
+                        .origin = origin,
+                        .start = self.column,
+                        .indent = self.column,
+                        .per_line = block.per_line,
+                        .suffix = block.suffix,
+                        .miser = miser,
+                        .opened_at = i,
+                    });
+                    self.section_column = self.column;
+                },
+                .block_end => {
+                    if (self.frames.items.len > 1) _ = self.frames.pop();
+                },
+                .indent => |request| {
+                    const f = self.frame();
+                    if (f.miser) continue;
+                    const from: i64 = @intCast(switch (request.kind) {
+                        .block => f.start,
+                        .current => self.column,
+                    });
+                    f.indent = @intCast(@max(from + request.amount, 0));
+                },
+                .tab => |tab| try self.spaces(tabWidth(tab.kind, tab.colnum, tab.colinc, self.column, self.section_column)),
+                .newline => |kind| {
+                    if (!self.breaks(i, kind)) {
+                        self.section_column = self.column;
+                        continue;
+                    }
+                    self.last_break = i;
+                    if (!try self.newLine()) return;
+                    self.section_column = self.column;
+                },
+            }
+        }
+    }
+};
+
+/// Lay the tokens out and return the text. The caller owns it.
+pub fn layout(allocator: std.mem.Allocator, tokens: []const Token, options: Options) ![]u8 {
+    const level = try allocator.alloc(usize, tokens.len);
+    const column_at = try allocator.alloc(usize, tokens.len);
+    var depth: usize = 0;
+    for (tokens, level) |token, *l| {
+        if (token == .block_end and depth > 0) depth -= 1;
+        l.* = depth;
+        if (token == .block_start) depth += 1;
+    }
+    var state: Layout = .{
+        .allocator = allocator,
+        .tokens = tokens,
+        .options = options,
+        .column = options.start_column,
+        .level = level,
+        .column_at = column_at,
+        .section_column = options.start_column,
+    };
+    defer state.deinit();
+    errdefer state.out.deinit(allocator);
+    try state.frames.append(allocator, .{
+        .origin = options.start_column,
+        .start = options.start_column,
+        .indent = options.start_column,
+        .per_line = "",
+        .suffix = "",
+        .miser = false,
+        .opened_at = 0,
+    });
+    try state.run();
+    return state.out.toOwnedSlice(allocator);
 }
 
-/// Width of the text up to the next place a break could happen.
-fn nextChunkWidth(rest: []const Token) usize {
-    var width: usize = 0;
-    for (rest) |token| {
-        switch (token) {
-            .text => |text| width += textWidth(text),
-            .block_start => |block| width += textWidth(block.prefix),
-            .newline => return width,
-            .block_end => return width,
-            .indent => {},
-        }
+/// How many blanks a tab writes at `column`, CLHS 22.3.6.1 and
+/// `pprint-tab`: an absolute tab goes to `colnum`, or past it by a
+/// multiple of `colinc`; a relative one moves `colnum` and then on to a
+/// multiple of `colinc`. A section tab counts from `section`.
+pub fn tabWidth(kind: TabKind, colnum: usize, colinc: usize, column: usize, section: usize) usize {
+    const origin: usize = switch (kind) {
+        .line, .line_relative => 0,
+        .section, .section_relative => section,
+    };
+    const at = column -| origin;
+    switch (kind) {
+        .line, .section => {
+            if (at < colnum) return colnum - at;
+            if (colinc == 0) return 0;
+            return colinc - ((at - colnum) % colinc);
+        },
+        .line_relative, .section_relative => {
+            const moved = at + colnum;
+            if (colinc <= 1) return colnum;
+            const over = moved % colinc;
+            return colnum + if (over == 0) 0 else colinc - over;
+        },
     }
-    return width;
 }
 
 /// The column after writing `text`, which a newline inside it resets.

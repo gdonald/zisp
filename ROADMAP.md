@@ -747,9 +747,9 @@ Every test the suite's own driver runs passes, interpreted and compiled. The per
 - [x] 11.2. Implementation-dependent tests
   - [x] 11.2.1. Every note zisp disables (such as `:nil-vectors-are-strings`) is listed in `docs/ansi-test.md` with the CLHS section that permits zisp's behavior. A note is not disabled to hide a failure the standard does not permit. Acceptance: the notes `tests/lisp/ansi-rt.lisp` disables and the notes in the doc are the same list
   - [x] 11.2.2. Tests whose result depends on an implementation limit (fixnum width, `array-dimension-limit`, `char-code-limit`, float formats) pass against zisp's limits, not skipped
-- [ ] 11.3. Syntax
+- [x] 11.3. Syntax
   - [x] 11.3.1. `reader/`: 0 failures
-  - [ ] 11.3.2. `printer/`: 0 failures, including `print-unreadable-object`, `*print-pretty*` layout and every `format` directive
+  - [x] 11.3.2. `printer/`: 0 failures, including `print-unreadable-object`, `*print-pretty*` layout and every `format` directive
 - [ ] 11.4. Evaluation
   - [ ] 11.4.1. `symbols/`: 0 failures
   - [ ] 11.4.2. `packages/`: 0 failures

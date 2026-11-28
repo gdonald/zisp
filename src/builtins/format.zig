@@ -13,6 +13,9 @@ const printer = @import("../runtime/printer.zig");
 const circle_mod = @import("../runtime/circle.zig");
 const equality = @import("../runtime/equality.zig");
 const instances = @import("instances.zig");
+const pprint = @import("pprint.zig");
+const streams = @import("streams.zig");
+const pretty = @import("../runtime/pretty.zig");
 const package = @import("../runtime/package.zig");
 const character = @import("../runtime/character.zig");
 const eval_mod = @import("../eval/eval.zig");
@@ -50,9 +53,10 @@ fn defineVariable(ev: *Evaluator, name: []const u8, initial: Value) !void {
 }
 
 /// What a printer variable holds now, or null where the name has no
-/// value.
+/// value. The variables are the `COMMON-LISP` symbols, whatever package
+/// is current.
 fn variable(ev: *Evaluator, name: []const u8) ?Value {
-    const sym = ev.interner.lookup(name) orelse return null;
+    const sym = (ev.interner.cl.findPresent(name) orelse return null).sym;
     const held = ev.env.lookupValue(sym) orelse return null;
     if (held.equalsRaw(value.SPECIAL_UNBOUND)) return null;
     return held;
@@ -111,6 +115,9 @@ fn settingsReadably(ev: *Evaluator, escaping: bool, readably: bool) printer.Sett
         .level = abbreviation(ev, "*PRINT-LEVEL*", readably),
         .length = abbreviation(ev, "*PRINT-LENGTH*", readably),
         .gensym = flag(ev, "*PRINT-GENSYM*", true),
+        .array = flag(ev, "*PRINT-ARRAY*", true),
+        // What must read back is printed for the standard readtable.
+        .read_case = if (readably) .upcase else if (@import("readtables.zig").active(ev)) |rt| @fromBackingInt(@intCast(rt.case)) else .upcase,
         .current_package = ev.interner.currentPackage(),
         .hook = instances.objectHook(ev),
     };
@@ -140,9 +147,19 @@ pub fn princSettings(ev: *Evaluator) printer.Settings {
 
 /// True when `*print-circle*` asks for shared structure to be labeled.
 pub fn circleWanted(ev: *Evaluator) bool {
-    const sym = ev.interner.lookup("*PRINT-CIRCLE*") orelse return false;
+    const sym = (ev.interner.cl.findPresent("*PRINT-CIRCLE*") orelse return false).sym;
     const v = ev.env.lookupValue(sym) orelse return false;
     return !v.equalsRaw(value.NIL);
+}
+
+/// What printing shows of an object under `*print-length*` and
+/// `*print-level*`, which bounds what `*print-circle*` labels.
+pub fn circleLimits(ev: *Evaluator) circle_mod.Limits {
+    const readably = flag(ev, "*PRINT-READABLY*", false);
+    return .{
+        .length = if (abbreviation(ev, "*PRINT-LENGTH*", readably)) |n| n else null,
+        .level = if (abbreviation(ev, "*PRINT-LEVEL*", readably)) |n| n else null,
+    };
 }
 
 /// A writer plus the column it is sitting at, which `~&` and `~T` need.
@@ -151,17 +168,26 @@ pub fn circleWanted(ev: *Evaluator) bool {
 pub const Output = struct {
     writer: *std.Io.Writer,
     column: *usize,
+    /// A pretty stream the text is recorded in rather than written, so a
+    /// logical block can lay it out.
+    pretty: ?*heap.HeapStream = null,
+    ev: ?*Evaluator = null,
 
     pub fn writeChar(self: Output, c: u21) Error!void {
-        try printer.writeRawChar(self.writer, c);
-        self.column.* = if (c == '\n') 0 else self.column.* + 1;
+        var buf: [4]u8 = undefined;
+        const n = std.unicode.utf8Encode(c, &buf) catch return Error.TypeError;
+        return self.writeText(buf[0..n]);
     }
 
     /// Text that is already UTF-8, such as a rendered value. The bytes go
     /// straight through; only the column has to count characters, which is
     /// the non-continuation bytes.
     fn writeText(self: Output, text: []const u8) Error!void {
-        try self.writer.writeAll(text);
+        if (self.pretty) |s| {
+            try pprint.recordText(self.ev.?, s, text);
+        } else {
+            try self.writer.writeAll(text);
+        }
         for (text) |b| {
             if (b == '\n') {
                 self.column.* = 0;
@@ -185,12 +211,12 @@ pub const Output = struct {
 
 /// A directive parameter as written. `next_arg` is `v` and `arg_count` is
 /// `#`; both resolve against the argument list at execution time.
-const Param = union(enum) { absent, number: i64, next_arg, arg_count };
+const Param = union(enum) { absent, number: i64, char: u21, next_arg, arg_count };
 
-const MAX_PARAMS = 7;
+const MAX_PARAMS = 10;
 
 const Directive = struct {
-    params: [MAX_PARAMS]Param = .{ .absent, .absent, .absent, .absent, .absent, .absent, .absent },
+    params: [MAX_PARAMS]Param = @splat(.absent),
     colon: bool = false,
     at: bool = false,
     char: u8 = 0,
@@ -239,15 +265,27 @@ const Justification = struct {
     segments: []const []const Node,
     /// Whether the first segment was introduced as the overflow prefix.
     has_overflow: bool,
+    /// The `~n,m:;` that ended it: spare columns, then the line width.
+    overflow: Directive = .{},
     /// Whether `~:>` closed it, which makes it a logical block rather
     /// than a field to justify in.
     logical: bool = false,
+    /// Whether `~@;` ended the prefix, which makes it a per-line prefix.
+    per_line_prefix: bool = false,
+    /// Whether `~:@>` closed it, which puts a fill newline after each
+    /// run of blanks in the body's text.
+    fill: bool = false,
 };
 
 const Parser = struct {
     allocator: std.mem.Allocator,
     ctrl: []const u32,
     pos: usize = 0,
+    /// How many pretty printing directives have been parsed: `~W`, `~_`,
+    /// `~I`, `~:T` and logical blocks.
+    pretty_directives: usize = 0,
+    /// Whether a justification with a `~:;` has been parsed.
+    overflow_justification: bool = false,
 };
 
 /// Nodes up to a terminating directive, plus that directive. A `char` of 0
@@ -320,7 +358,11 @@ fn parseNode(p: *Parser, directive: Directive) Error!Node {
             .body = (try parseBlock(p, ")")).nodes,
         } },
         '<' => .{ .justification = try parseJustification(p, directive) },
-        'A', 'S', 'D', 'B', 'O', 'X', 'R', 'C', 'F', 'E', 'G', '$', '%', '&', '~', '|', '*', 'T', '?', '^', 'P', '_', 'I', 'W' => .{ .simple = directive },
+        'A', 'S', 'D', 'B', 'O', 'X', 'R', 'C', 'F', 'E', 'G', '$', '%', '&', '~', '|', '*', 'T', '?', '^', 'P', '_', 'I', 'W' => blk: {
+            if (directive.char == '_' or directive.char == 'I' or directive.char == 'W' or
+                (directive.char == 'T' and directive.colon)) p.pretty_directives += 1;
+            break :blk .{ .simple = directive };
+        },
         // `~<newline>` continues a control string across source lines: the
         // newline goes unless `@` keeps it, and the indentation after it
         // goes unless `:` keeps that.
@@ -354,6 +396,10 @@ fn parseJustification(p: *Parser, directive: Directive) Error!Justification {
     var segments: std.ArrayList([]const Node) = .empty;
     var has_overflow = false;
     var logical = false;
+    var fill = false;
+    var per_line_prefix = false;
+    var overflow: Directive = .{};
+    const pretty_before = p.pretty_directives;
     while (true) {
         const block = try parseBlock(p, ">;");
         try segments.append(p.allocator, block.nodes);
@@ -361,15 +407,32 @@ fn parseJustification(p: *Parser, directive: Directive) Error!Justification {
             // `~:>` closes a logical block, where `~<` closes a field to
             // justify text in.
             logical = block.stop.colon;
+            fill = block.stop.colon and block.stop.at;
             break;
         }
-        if (block.stop.colon and segments.items.len == 1) has_overflow = true;
+        if (segments.items.len == 1) {
+            if (block.stop.colon) {
+                has_overflow = true;
+                overflow = block.stop;
+            }
+            if (block.stop.at) per_line_prefix = true;
+        }
+    }
+    // A field to justify may hold no pretty printing (CLHS 22.3.6.2).
+    if (logical) {
+        p.pretty_directives += 1;
+    } else {
+        if (p.pretty_directives != pretty_before) return Error.ProgramError;
+        if (has_overflow) p.overflow_justification = true;
     }
     return .{
         .directive = directive,
         .segments = try segments.toOwnedSlice(p.allocator),
         .has_overflow = has_overflow,
         .logical = logical,
+        .fill = fill,
+        .per_line_prefix = per_line_prefix,
+        .overflow = overflow,
     };
 }
 
@@ -444,7 +507,7 @@ fn parseParam(p: *Parser) Error!?Param {
         if (p.pos >= p.ctrl.len) return Error.ProgramError;
         const quoted = p.ctrl[p.pos];
         p.pos += 1;
-        return .{ .number = @intCast(quoted) };
+        return .{ .char = @intCast(quoted) };
     }
     if (c == 'v' or c == 'V') {
         p.pos += 1;
@@ -516,6 +579,9 @@ const Runner = struct {
     /// The list a `~:{` is walking, which is what `~:^` tests rather
     /// than the sublist the body is reading.
     outer: ?*Args = null,
+    /// Whether the body of a `~:@>` block is running, whose literal
+    /// blanks are each followed by a fill newline.
+    fill_blanks: bool = false,
 
     /// The parameter in `slot`, resolved against the argument list. An
     /// absent parameter, or an explicit nil `v`, yields `default`.
@@ -524,6 +590,7 @@ const Runner = struct {
         return switch (directive.params[slot]) {
             .absent => default,
             .number => |n| n,
+            .char => |c| c,
             .arg_count => @intCast(args.remaining()),
             .next_arg => blk: {
                 const v = try args.next();
@@ -558,6 +625,8 @@ pub fn run(ev: *Evaluator, out: Output, ctrl: []const u32, args: []const Value) 
 
     var parser = Parser{ .allocator = arena.allocator(), .ctrl = ctrl };
     const block = try parseBlock(&parser, "");
+    // `~:;` cannot share a control string with pretty printing.
+    if (parser.overflow_justification and parser.pretty_directives > 0) return Error.ProgramError;
 
     var runner = Runner{ .ev = ev, .out = out, .allocator = arena.allocator() };
     var cursor = Args{ .items = args };
@@ -569,7 +638,11 @@ fn runNodes(r: *Runner, nodes: []const Node, args: *Args) Error!Flow {
     for (nodes) |node| {
         const flow = switch (node) {
             .literal => |text| blk: {
-                try r.out.writeChars(text);
+                if (r.fill_blanks and r.out.pretty != null) {
+                    try writeFilled(r, text);
+                } else {
+                    try r.out.writeChars(text);
+                }
                 break :blk Flow.normal;
             },
             .simple => |directive| try runSimple(r, directive, args),
@@ -606,12 +679,48 @@ fn runSimple(r: *Runner, directive: Directive, args: *Args) Error!Flow {
         '&' => try freshLine(r, directive, args),
         '~' => try r.out.repeat('~', try r.count(directive, 0, args, 1)),
         '*' => try skipArgs(r, directive, args),
-        'T' => try columnTab(r, directive, args),
+        'T' => {
+            if (directive.colon and !try prettyOn(r.ev)) {
+                // A section tab is the pretty printer's, and with it off
+                // does nothing.
+                _ = try r.count(directive, 0, args, 1);
+                _ = try r.count(directive, 1, args, 1);
+            } else if (r.out.pretty) |s| {
+                // Inside a logical block a tab is the pretty printer's,
+                // laid out where the line ends up rather than where it is
+                // now.
+                const colnum = try r.count(directive, 0, args, 1);
+                const colinc = try r.count(directive, 1, args, 1);
+                const kind: pretty.TabKind = if (directive.colon)
+                    (if (directive.at) .section_relative else .section)
+                else
+                    (if (directive.at) .line_relative else .line);
+                try pprint.recordTab(r.ev, s, kind, @intCast(@min(colnum, std.math.maxInt(u32))), @intCast(@min(colinc, std.math.maxInt(u32))));
+            } else if (!directive.colon) {
+                try columnTab(r, directive, args);
+            }
+        },
         '?' => try recursiveFormat(r, directive, args),
         'P' => try printPlural(r, directive, args),
         // Conditional newline and indentation only matter under the pretty
         // printer, which does its own line breaking.
-        '_', 'I' => {},
+        '_' => if (r.out.pretty) |s| {
+            const kind: pretty.NewlineKind = if (directive.colon and directive.at)
+                .mandatory
+            else if (directive.colon)
+                .fill
+            else if (directive.at)
+                .miser
+            else
+                .linear;
+            if (try prettyOn(r.ev)) try pprint.recordNewline(r.ev, s, kind);
+        },
+        'I' => if (r.out.pretty) |s| {
+            const amount = try r.param(directive, 0, args, 0);
+            if (try prettyOn(r.ev)) try pprint.recordIndent(r.ev, s, if (directive.colon) .current else .block, amount);
+        } else {
+            _ = try r.param(directive, 0, args, 0);
+        },
         'W' => try printPadded(r, directive, args, writeSettings(r.ev)),
         '^' => return try escape(r, directive, args),
         else => return Error.ProgramError,
@@ -688,12 +797,12 @@ fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
     const minpad = try r.count(directive, 2, args, 0);
     const padchar: u21 = @intCast(try r.param(directive, 3, args, ' '));
 
-    // The segment before a `~:;` is what a line break would print, and
-    // nothing here breaks lines.
-    const segments = if (j.has_overflow and j.segments.len > 1) j.segments[1..] else j.segments;
+    // The segment before a `~:;` is printed ahead of the rest only when
+    // the rest would run past the line width.
+    var overflow_text: ?[]const u8 = null;
 
     var texts: std.ArrayList([]const u8) = .empty;
-    for (segments) |segment| {
+    for (j.segments, 0..) |segment, segment_index| {
         var captured = std.Io.Writer.Allocating.init(r.allocator);
         var column: usize = 0;
         var inner = Runner{
@@ -703,9 +812,12 @@ fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
             .outer = r.outer,
         };
         if (try runNodes(&inner, segment, args) != .normal) break;
-        try texts.append(r.allocator, captured.written());
+        if (j.has_overflow and segment_index == 0 and j.segments.len > 1) {
+            overflow_text = captured.written();
+        } else {
+            try texts.append(r.allocator, captured.written());
+        }
     }
-
     var written: usize = 0;
     for (texts.items) |text| written += utf8Count(text);
 
@@ -715,10 +827,19 @@ fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
         if (gap) points += 1;
     }
 
+    // A lone segment padded on its left for want of a modifier has no
+    // gap for `minpad` to widen.
+    const minpad_points = if (texts.items.len == 1 and !directive.colon and !directive.at) 0 else points;
     var width = mincol;
-    const needed = written + minpad * points;
+    const needed = written + minpad * minpad_points;
     while (width < needed) width += colinc;
     const spread = width - written;
+
+    if (overflow_text) |text| {
+        const spare = try r.count(j.overflow, 0, args, 0);
+        const line_width = try r.count(j.overflow, 1, args, lineWidth(r.ev));
+        if (r.out.column.* + width + spare > line_width) try r.out.writeText(text);
+    }
 
     var given: usize = 0;
     var index: usize = 0;
@@ -740,56 +861,106 @@ fn runJustification(r: *Runner, j: Justification, args: *Args) Error!Flow {
 /// so what this settles is the argument list the body reads and the text
 /// that goes around it.
 fn runLogicalBlock(r: *Runner, j: Justification, args: *Args) Error!Flow {
+    // A prefix and a suffix are text alone, around at most one body.
+    if (j.segments.len > 3) return Error.ProgramError;
+    const has_prefix = j.segments.len > 1;
+    const has_suffix = j.segments.len > 2;
+    const prefix = if (has_prefix) try literalText(r, j.segments[0]) else if (j.directive.colon) "(" else "";
+    const suffix = if (has_suffix) try literalText(r, j.segments[2]) else if (j.directive.colon) ")" else "";
+    const body = j.segments[if (has_prefix) 1 else 0];
+
     var items: std.ArrayList(Value) = .empty;
     var tail: ?BlockTail = null;
     const saved_circle = r.circle;
     defer r.circle = saved_circle;
+    var object: ?Value = null;
     if (j.directive.at) {
         // `~@<` hands the block what is left of the argument list.
         try items.appendSlice(r.allocator, args.items[args.index..]);
         args.index = args.items.len;
     } else {
-        const object = try args.next();
-        if (!object.isCons() and !object.equalsRaw(value.NIL)) {
-            try r.out.writeText(try render(r, object, prin1Settings(r.ev)));
+        const given = try args.next();
+        if (!given.isCons() and !given.equalsRaw(value.NIL)) {
+            try r.out.writeText(try render(r, given, writeSettings(r.ev)));
             return .normal;
         }
         if (r.circle == null and circleWanted(r.ev)) {
             const state = try r.allocator.create(circle_mod.State);
-            state.* = try circle_mod.scan(r.allocator, object);
+            state.* = try circle_mod.scanLimited(r.allocator, given, circleLimits(r.ev));
             r.circle = state;
         }
-        try writeCircleLabel(r, object);
-        tail = try collectBlockItems(r, object, &items);
+        object = given;
+        tail = try collectBlockItems(r, given, &items);
     }
     var cursor = Args{ .items = items.items, .tail = if (tail) |*t| t else null };
 
-    const body_at = if (j.segments.len > 1) @as(usize, 1) else 0;
-    const has_suffix = j.segments.len > 2;
-    if (body_at == 1) {
-        _ = try runNodes(r, j.segments[0], &cursor);
-    } else if (j.directive.colon) {
-        try r.out.writeChar('(');
+    // The block lays out in a pretty stream: the one being written to, or
+    // one of its own whose layout is written out when the block ends.
+    const outer = r.out;
+    defer r.out = outer;
+    var held = r.ev.heap.protect();
+    defer held.close();
+    const fresh = outer.pretty == null;
+    if (fresh) {
+        try held.push(try r.ev.heap.allocStream(streams.emptyStream(.string, .output)));
+        try held.push(try pprint.openPretty(r.ev, held.items()[0]));
+        heap.asStream(held.items()[1]).write_position = outer.column.*;
     }
+    const s = outer.pretty orelse heap.asStream(held.items()[1]);
+    r.out = .{ .writer = outer.writer, .column = outer.column, .pretty = s, .ev = r.ev };
 
-    const flow = runNodes(r, j.segments[body_at], &cursor) catch |err| blk: {
-        const reached = if (tail) |*t| t.reached else false;
-        if (err != Error.ProgramError or !reached) return err;
-        if (tail.?.rest) |rest| {
-            try r.out.writeText(". ");
-            try r.out.writeText(try render(r, rest, prin1Settings(r.ev)));
-        } else {
-            try r.out.writeText("...");
+    if (try pprint.levelExceeded(r.ev, s)) {
+        try r.out.writeText("#");
+    } else {
+        if (object) |o| try writeCircleLabel(r, o);
+        try pprint.blockStart(r.ev, s, prefix, if (j.per_line_prefix) prefix else "", suffix);
+        const saved_fill = r.fill_blanks;
+        r.fill_blanks = j.fill;
+        defer r.fill_blanks = saved_fill;
+        const flow = runNodes(r, body, &cursor) catch |err| blk: {
+            const reached = if (tail) |*t| t.reached else false;
+            if (err != Error.ProgramError or !reached) return err;
+            if (tail.?.rest) |rest| {
+                try r.out.writeText(". ");
+                try r.out.writeText(try render(r, rest, writeSettings(r.ev)));
+            } else {
+                try r.out.writeText("...");
+            }
+            break :blk .normal;
+        };
+        try pprint.blockEnd(r.ev, s, suffix);
+        if (flow == .escape_all) {
+            if (fresh) try flushBlock(r, outer, held.items()[1], held.items()[0]);
+            return .escape_all;
         }
-        break :blk .normal;
-    };
-
-    if (has_suffix) {
-        _ = try runNodes(r, j.segments[2], &cursor);
-    } else if (body_at == 0 and j.directive.colon) {
-        try r.out.writeChar(')');
     }
-    return if (flow == .escape_all) .escape_all else .normal;
+    if (fresh) try flushBlock(r, outer, held.items()[1], held.items()[0]);
+    return .normal;
+}
+
+/// Lay out the pretty stream a block made for itself and write the text
+/// where the block was.
+fn flushBlock(r: *Runner, outer: Output, pretty_stream: Value, string_stream: Value) Error!void {
+    _ = try pprint.finish(r.ev, heap.asStream(pretty_stream));
+    r.out = outer;
+    try outer.writeText(heap.asStream(string_stream).output.items);
+}
+
+/// The text of a prefix or suffix segment, which may hold no directives.
+fn literalText(r: *Runner, nodes: []const Node) Error![]const u8 {
+    var text: std.ArrayList(u8) = .empty;
+    for (nodes) |node| {
+        const chars = switch (node) {
+            .literal => |chars| chars,
+            else => return Error.ProgramError,
+        };
+        for (chars) |c| {
+            var buf: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(@intCast(c), &buf) catch return Error.TypeError;
+            try text.appendSlice(r.allocator, buf[0..n]);
+        }
+    }
+    return text.items;
 }
 
 /// Write `#n=` ahead of an object the block's labels say is shared.
@@ -841,12 +1012,20 @@ fn paddingPoints(r: *Runner, directive: Directive, segments: usize) Error![]bool
 }
 
 /// The `given`th of `points` padding points, sharing `spread` between
-/// them with what does not divide going to the leftmost.
+/// them with what does not divide going to the rightmost.
 fn gapWidth(spread: usize, points: usize, given: usize) usize {
     if (points == 0) return 0;
     const each = spread / points;
     const extra = spread % points;
-    return each + @intFromBool(given <= extra);
+    return each + @intFromBool(given > points - extra);
+}
+
+/// The width a `~:;` line is checked against when it gives none:
+/// `*print-right-margin*`, or 72.
+fn lineWidth(ev: *Evaluator) i64 {
+    const v = variable(ev, "*PRINT-RIGHT-MARGIN*") orelse return 72;
+    if (v.isFixnum() and v.toFixnum() > 0) return v.toFixnum();
+    return 72;
 }
 
 /// `~A` / `~S`: print the argument, then pad to `mincol` in `colinc` steps.
@@ -1032,13 +1211,30 @@ fn skipArgs(r: *Runner, directive: Directive, args: *Args) Error!void {
 /// `~colnum,colincT` pads to `colnum`, then in `colinc` steps past it.
 fn columnTab(r: *Runner, directive: Directive, args: *Args) Error!void {
     const colnum = try r.count(directive, 0, args, 1);
-    const colinc = @max(try r.count(directive, 1, args, 1), 1);
-    const column = r.out.column.*;
-    if (column < colnum) {
-        try r.out.repeat(' ', colnum - column);
-        return;
+    const colinc = try r.count(directive, 1, args, 1);
+    const kind: pretty.TabKind = if (directive.at) .line_relative else .line;
+    try r.out.repeat(' ', pretty.tabWidth(kind, colnum, colinc, r.out.column.*, 0));
+}
+
+/// Whether `*print-pretty*` is on, without which the pretty printer's
+/// directives do nothing.
+fn prettyOn(ev: *Evaluator) Error!bool {
+    const v = variable(ev, "*PRINT-PRETTY*") orelse return false;
+    return !v.equalsRaw(value.NIL);
+}
+
+/// Literal text in a `~:@>` body: a fill newline after each run of
+/// blanks.
+fn writeFilled(r: *Runner, text: []const u32) Error!void {
+    var i: usize = 0;
+    while (i < text.len) {
+        try r.out.writeChar(@intCast(text[i]));
+        const blank = text[i] == ' ';
+        i += 1;
+        if (blank and (i == text.len or text[i] != ' ')) {
+            if (try prettyOn(r.ev)) try pprint.recordNewline(r.ev, r.out.pretty.?, .fill);
+        }
     }
-    try r.out.repeat(' ', colinc - ((column - colnum) % colinc));
 }
 
 /// `~?` takes a control string and an argument list; `~@?` draws the
@@ -1063,7 +1259,8 @@ fn collectList(r: *Runner, list_v: Value, out: *std.ArrayList(Value)) Error!void
     while (rest.isCons()) : (rest = heap.cdr(rest)) {
         try out.append(r.allocator, heap.car(rest));
     }
-    if (!rest.equalsRaw(value.NIL)) return r.ev.typeMismatch(list_v, "LIST");
+    // A dotted list's tail is what is not a list.
+    if (!rest.equalsRaw(value.NIL)) return r.ev.typeMismatch(rest, "LIST");
 }
 
 /// `~^` leaves the enclosing clause when the arguments run out. With
@@ -1079,12 +1276,17 @@ fn escape(r: *Runner, directive: Directive, args: *Args) Error!Flow {
         const cursor = if (directive.colon) r.outer orelse args else args;
         return if (cursor.remaining() == 0) level else .normal;
     }
-    const first = try r.param(resolved, 0, args, 0);
-    if (given == 1) return if (first == 0) level else .normal;
-    const second = try r.param(resolved, 1, args, 0);
-    if (given == 2) return if (first == second) level else .normal;
-    const third = try r.param(resolved, 2, args, 0);
-    return if (first <= second and second <= third) level else .normal;
+    // The parameters given count in order, whichever slots they are in.
+    var present: [3]i64 = undefined;
+    var n: usize = 0;
+    for (resolved.params[0..3], 0..) |param, slot| {
+        if (param == .absent) continue;
+        present[n] = try r.param(resolved, slot, args, 0);
+        n += 1;
+    }
+    if (given == 1) return if (present[0] == 0) level else .normal;
+    if (given == 2) return if (present[0] == present[1]) level else .normal;
+    return if (present[0] <= present[1] and present[1] <= present[2]) level else .normal;
 }
 
 fn countParams(directive: Directive) usize {
@@ -1115,14 +1317,17 @@ fn runConditional(r: *Runner, conditional: Conditional, args: *Args) Error!Flow 
         return runNodes(r, conditional.clauses[chosen], args);
     }
 
-    const selector = switch (directive.params[0]) {
+    // A `v` parameter whose argument is NIL is no parameter, and the
+    // selector is then the next argument.
+    const resolved = try resolveParams(r, directive, args);
+    const selector = switch (resolved.params[0]) {
         .absent => blk: {
             const v = try args.next();
             if (heap.isBignum(v)) break :blk -1;
             if (!v.isFixnum()) return Error.TypeError;
             break :blk v.toFixnum();
         },
-        else => try r.param(directive, 0, args, 0),
+        else => try r.param(resolved, 0, args, 0),
     };
     if (selector >= 0 and selector < conditional.clauses.len) {
         return runNodes(r, conditional.clauses[@intCast(selector)], args);
@@ -1233,26 +1438,46 @@ fn runSublistPass(r: *Runner, body: Body, cursor: *Args) Error!Flow {
 /// `~/name/` calls a user function with the stream, the argument, the two
 /// modifier flags, and any parameters. Its output is captured so it lands
 /// in this format's destination and keeps the column count honest.
+/// `~/name/`: call NAME with a stream, the next argument, whether `:`
+/// and `@` were given, and the parameters, which are read ahead of the
+/// argument. A parameter `v` left NIL counts as not given, a parameter
+/// missing ahead of a given one is passed as NIL, and a character
+/// parameter is passed as the character.
 fn runCall(r: *Runner, call: Call, args: *Args) Error!void {
     const fn_v = try resolveCallName(r, call.name);
+    var params: std.ArrayList(Value) = .empty;
+    var given: usize = 0;
+    for (call.directive.params) |p| {
+        const v: ?Value = switch (p) {
+            .absent => null,
+            .number => |n| Value.fromFixnum(n),
+            .char => |c| Value.fromChar(c),
+            .next_arg => blk: {
+                const next = try args.next();
+                break :blk if (next.equalsRaw(value.NIL)) null else next;
+            },
+            .arg_count => Value.fromFixnum(@intCast(args.remaining())),
+        };
+        try params.append(r.allocator, v orelse value.NIL);
+        if (v != null) given = params.items.len;
+    }
     const arg = try args.next();
 
+    var held = r.ev.heap.protect();
+    defer held.close();
+    const stream = if (r.out.pretty) |s|
+        Value.fromHeapAddr(@intFromPtr(s))
+    else
+        try r.ev.heap.allocStream(streams.emptyStream(.string, .output));
+    try held.push(stream);
     var call_args: std.ArrayList(Value) = .empty;
-    try call_args.append(r.allocator, value.T);
+    try call_args.append(r.allocator, stream);
     try call_args.append(r.allocator, arg);
     try call_args.append(r.allocator, if (call.directive.colon) value.T else value.NIL);
     try call_args.append(r.allocator, if (call.directive.at) value.T else value.NIL);
-    for (call.directive.params, 0..) |p, slot| {
-        if (p == .absent) continue;
-        try call_args.append(r.allocator, Value.fromFixnum(try r.param(call.directive, slot, args, 0)));
-    }
-
-    var captured = std.Io.Writer.Allocating.init(r.allocator);
-    const saved_out = r.ev.out;
-    r.ev.out = &captured.writer;
-    defer r.ev.out = saved_out;
+    try call_args.appendSlice(r.allocator, params.items[0..given]);
     _ = try r.ev.callFunction(fn_v, call_args.items);
-    try r.out.writeText(captured.written());
+    if (r.out.pretty == null) try r.out.writeText(heap.asStream(stream).output.items);
 }
 
 /// The name between the slashes, upcased. CLHS 22.3.5.4: the first colon
@@ -1872,7 +2097,7 @@ fn resolveParams(r: *Runner, directive: Directive, args: *Args) Error!Directive 
     var resolved = directive;
     for (&resolved.params, 0..) |*p, slot| {
         switch (p.*) {
-            .absent, .number => {},
+            .absent, .number, .char => {},
             .next_arg => {
                 if (args.remaining() != 0 and args.items[args.index].equalsRaw(value.NIL)) {
                     _ = try args.next();
